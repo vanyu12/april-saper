@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0e1016">
+  <title>Апрельский сапёр</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">💣</div>
+      <div class="brand-text">
+        <div class="brand-title">Апрельский сапёр</div>
+        <div class="brand-sub">поле 5×5 · честная раскладка</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button class="daily-btn" id="dailyBtn" title="Ежедневный бонус">
+        🎁<span class="badge" id="dailyBadge"></span>
+      </button>
+      <div class="balance-chip" id="balanceChip">
+        <span class="coin">◈</span><span id="balanceValue">—</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="views">
+
+    <section class="view active" id="view-game">
+      <div class="panel setup" id="setupPanel">
+        <div class="field-row">
+          <label class="field-label" for="betInput">Ставка</label>
+          <div class="bet-controls">
+            <button class="chip-btn" data-bet="half">½</button>
+            <button class="chip-btn" data-bet="double">2×</button>
+            <button class="chip-btn" data-bet="max">MAX</button>
+          </div>
+        </div>
+        <div class="bet-input-wrap">
+          <span class="coin">◈</span>
+          <input id="betInput" type="number" inputmode="numeric" min="10" max="100000" step="10" value="50">
+          <span class="bet-unit">сапов</span>
+        </div>
+
+        <div class="field-row mines-row">
+          <label class="field-label">Мин на поле</label>
+          <span class="mines-value" id="minesValue">3</span>
+        </div>
+        <div class="chips" id="minesChips">
+          <button class="chip" data-mines="1">1</button>
+          <button class="chip active" data-mines="3">3</button>
+          <button class="chip" data-mines="5">5</button>
+          <button class="chip" data-mines="10">10</button>
+          <button class="chip" data-mines="24">24</button>
+        </div>
+        <input class="slider" id="minesSlider" type="range" min="1" max="24" value="3">
+        <div class="risk-line">
+          <span id="riskLabel">Риск: низкий</span>
+          <span id="maxMultLabel">макс ×24,75</span>
+        </div>
+      </div>
+
+      <div class="hud">
+        <div class="hud-item">
+          <span class="hud-label">Множитель</span>
+          <span class="hud-value" id="hudMult">×1,00</span>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">Выплата</span>
+          <span class="hud-value" id="hudPayout">0</span>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">Следующая</span>
+          <span class="hud-value" id="hudChance">88%</span>
+        </div>
+      </div>
+
+      <div class="grid" id="grid" aria-label="Игровое поле"></div>
+
+      <div class="action-bar">
+        <button class="cta" id="ctaBtn">Начать игру</button>
+        <div class="hint" id="hint">Открой первую клетку и реши, когда забрать.</div>
+      </div>
+    </section>
+
+    <section class="view" id="view-profile">
+      <div class="profile-card">
+        <div class="avatar" id="avatar">?</div>
+        <div>
+          <div class="profile-name" id="profileName">Игрок</div>
+          <div class="profile-id" id="profileId">id —</div>
+        </div>
+        <div class="profile-rank" id="profileRank">#—</div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat"><span class="stat-value" id="statBalance">0</span><span class="stat-label">сапов</span></div>
+        <div class="stat"><span class="stat-value" id="statGames">0</span><span class="stat-label">партий</span></div>
+        <div class="stat"><span class="stat-value" id="statWins">0</span><span class="stat-label">побед</span></div>
+        <div class="stat"><span class="stat-value" id="statBest">×1,00</span><span class="stat-label">лучший</span></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Достижения</div>
+        <div class="achievements" id="achievements"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Друзья</div>
+        <p class="muted">Приглашено: <b id="refTotal">0</b> · активных: <b id="refActive">0</b></p>
+        <div class="ref-link"><code id="refLink">—</code></div>
+        <button class="secondary" id="copyRef">Скопировать ссылку</button>
+      </div>
+    </section>
+
+    <section class="view" id="view-history">
+      <div class="card-title page-title">История игр</div>
+      <div class="list" id="historyList"></div>
+    </section>
+
+    <section class="view" id="view-top">
+      <div class="card-title page-title">Топ игроков</div>
+      <div class="tabs">
+        <button class="tab active" data-tab="balance">По балансу</button>
+        <button class="tab" data-tab="mult">По множителю</button>
+      </div>
+      <div class="list" id="topList"></div>
+    </section>
+
+    <section class="view" id="view-fair">
+      <div class="card-title page-title">Честность игры</div>
+      <div class="card">
+        <p class="muted">Позиции мин фиксируются до первого клика и выводятся из серверного seed, клиентского seed и номера раунда. Хеш серверного seed публикуется заранее — после смены seed вы увидите его целиком и сможете пересчитать раскладку.</p>
+        <div class="kv"><span>Хеш серверного seed</span><code id="fairHash">—</code></div>
+        <div class="kv"><span>Nonce</span><span id="fairNonce">0</span></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Клиентский seed</div>
+        <input class="text-input" id="clientSeed" maxlength="64" placeholder="например, moy-seed-42">
+        <button class="secondary" id="saveSeed">Сменить seed и раскрыть предыдущий</button>
+        <div class="revealed" id="revealedSeed"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Формула</div>
+        <p class="muted">Шанс открыть k клеток подряд при m минах: P(k) = C(25−m, k) / C(25, k).<br>Множитель: M(k) = 0,99 / P(k), округление вниз до сотых.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="nav">
+    <button class="nav-btn active" data-view="game"><span>💣</span>Игра</button>
+    <button class="nav-btn" data-view="profile"><span>👤</span>Профиль</button>
+    <button class="nav-btn" data-view="history"><span>📜</span>История</button>
+    <button class="nav-btn" data-view="top"><span>🏆</span>Топ</button>
+    <button class="nav-btn" data-view="fair"><span>🔐</span>Честность</button>
+  </nav>
+
+  <div class="toast" id="toast"></div>
+
+  <div class="modal" id="modal">
+    <div class="modal-card">
+      <div class="modal-emoji" id="modalEmoji">💥</div>
+      <div class="modal-title" id="modalTitle">Мина!</div>
+      <div class="modal-text" id="modalText">Ставка сгорела.</div>
+      <button class="cta" id="modalBtn">Ещё раз</button>
+    </div>
+  </div>
+
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
