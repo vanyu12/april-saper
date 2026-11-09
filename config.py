@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
@@ -11,6 +11,22 @@ def _int(name: str, default: int) -> int:
         return int(os.getenv(name, default))
     except (TypeError, ValueError):
         return default
+
+
+def _id_list(name: str) -> list[int]:
+    raw = os.getenv(name, "")
+    ids: list[int] = []
+    for chunk in raw.replace(";", ",").split(","):
+        chunk = chunk.strip()
+        if chunk.isdigit():
+            ids.append(int(chunk))
+    return ids
+
+
+def _name_list(name: str) -> list[str]:
+    raw = os.getenv(name, "")
+    return [chunk.strip().lstrip("@").lower() for chunk in raw.replace(";", ",").split(",")
+            if chunk.strip()]
 
 
 def _default_db_path() -> str:
@@ -32,6 +48,10 @@ class Config:
     dev_mode: bool = os.getenv("DEV_MODE", "0") == "1"
     dev_user_id: int = _int("DEV_USER_ID", 0)
     webapp_short_name: str = os.getenv("WEBAPP_SHORT_NAME", "play").strip()
+    admin_ids: list[int] = field(default_factory=lambda: _id_list("ADMIN_IDS"))
+    admin_usernames: list[str] = field(
+        default_factory=lambda: _name_list("ADMIN_USERNAMES"))
+    renewal_remind_hours: int = _int("RENEWAL_REMIND_HOURS", 96)
     bot_username: str = ""
 
 

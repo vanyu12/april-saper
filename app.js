@@ -5,6 +5,10 @@ const state = {
   round: null,
   mines: 3,
   bet: 50,
+  lastBet: 50,
+  settings: { min_bet: 10, max_bet: 100000, min_mines: 1, max_mines: 24, daily_bonus: 500, maintenance: 0 },
+  isAdmin: false,
+  sound: true,
   leaderboard: { by_balance: [], by_multiplier: [], me: 0 },
   history: [],
   referrals: { total: 0, active: 0 },
@@ -24,6 +28,39 @@ function haptic(type) {
     else tg.HapticFeedback.impactOccurred("light");
   } catch (e) {}
 }
+
+let audioCtx = null;
+
+function tone(freq, duration, type, gain) {
+  if (!state.sound) return;
+  try {
+    if (!audioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      audioCtx = new Ctx();
+    }
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const vol = audioCtx.createGain();
+    osc.type = type || "sine";
+    osc.frequency.value = freq;
+    vol.gain.value = gain == null ? 0.05 : gain;
+    osc.connect(vol);
+    vol.connect(audioCtx.destination);
+    const now = audioCtx.currentTime;
+    vol.gain.setValueAtTime(vol.gain.value, now);
+    vol.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    osc.start(now);
+    osc.stop(now + duration);
+  } catch (e) {}
+}
+
+const sfx = {
+  open() { tone(520, 0.09, "triangle", 0.05); },
+  coin() { tone(700, 0.09, "sine", 0.05); setTimeout(() => tone(980, 0.1, "sine", 0.04), 70); },
+  boom() { tone(110, 0.42, "sawtooth", 0.09); setTimeout(() => tone(70, 0.5, "sawtooth", 0.07), 90); },
+  cash() { [660, 880, 1180].forEach((f, i) => setTimeout(() => tone(f, 0.12, "sine", 0.05), i * 80)); },
+};
 
 function toast(text) {
   const el = $("toast");
@@ -99,23 +136,24 @@ function renderGrid() {
     if (opened.includes(i)) {
       if (mineSet && mineSet.has(i)) {
         cell.classList.add("mine");
-        cell.textContent = "💥";
+        cell.innerHTML = '<span class="bomb"></span>';
       } else {
         cell.classList.add("safe");
-        cell.textContent = "💎";
+        cell.innerHTML = '<span class="gem"></span>';
       }
+      cell.style.animationDelay = ((i % 5) * 22) + "ms";
       cell.classList.add("locked");
     } else if (mineSet) {
       if (mineSet.has(i)) {
         cell.classList.add("mine");
-        cell.textContent = "💥";
+        cell.innerHTML = '<span class="bomb"></span>';
       } else if (round.status !== "active") {
         cell.classList.add("dim");
-        cell.textContent = "💎";
+        cell.innerHTML = '<span class="gem"></span>';
       }
       cell.classList.add("locked");
     } else if (!round) {
-      cell.textContent = "";
+      cell.innerHTML = "";
     }
 
     if (round && round.status === "active" && !opened.includes(i)) {
@@ -123,6 +161,41 @@ function renderGrid() {
     }
     grid.appendChild(cell);
   }
+}
+
+function previewLadder(mines, steps) {
+  const safe = 25 - mines;
+  const out = [];
+  for (let k = 1; k <= Math.min(steps, safe); k++) {
+    let p = 1;
+    for (let i = 0; i < k; i++) p *= (safe - i) / (25 - i);
+    const mult = Math.max(1, Math.floor((0.99 / p) * 100) / 100);
+    const chance = (safe - k + 1) / (25 - k + 1);
+    out.push({ opened: k, multiplier: mult, chance });
+  }
+  return out;
+}
+
+function renderLadder() {
+  const box = $("ladder");
+  if (!box) return;
+  const round = state.round;
+  const steps = round && round.ladder && round.ladder.length
+    ? round.ladder
+    : previewLadder(state.mines, 5);
+  if (!steps.length) {
+    box.innerHTML = '<div class="ladder-empty">Поле почти вскрыто</div>';
+    return;
+  }
+  box.innerHTML = steps
+    .map((step, i) => {
+      const chance = Math.round((step.chance || 0) * 100);
+      return `<div class="ladder-step${i === 0 ? " next" : ""}">
+        <span class="ladder-mult">${fmtMult(step.multiplier)}</span>
+        <span class="ladder-chance">${chance}%</span>
+      </div>`;
+    })
+    .join("");
 }
 
 function renderHud() {
@@ -286,12 +359,158 @@ function renderFair() {
   }
 }
 
+/* ---------- admin ---------- */
+
+function renderAdminStats() {
+  const stats = state.admin && state.admin.stats;
+  if (!stats) return;
+  const cards = [
+    ["Игроки", fmt(stats.users)],
+    ["Бан", fmt(stats.banned)],
+    ["Партий", fmt(stats.rounds)],
+    ["Активных", fmt(stats.active_rounds)],
+    ["Оборот", fmt(stats.wagered)],
+    ["Выплаты", fmt(stats.paid)],
+    ["Профит", fmt(stats.profit)],
+    ["RTP", (stats.rtp || 0) + "%"],
+  ];
+  $("adminStats").innerHTML = cards
+    .map(([label, value]) =>
+      `<div class="stat"><span class="stat-value">${value}</span><span class="stat-label">${label}</span></div>`)
+    .join("");
+}
+
+function playerName(row) {
+  if (row.username) return "@" + row.username;
+  return row.first_name || "id" + row.user_id;
+}
+
+function renderAdminRecent() {
+  const box = $("adminRecent");
+  const items = (state.admin && state.admin.recent) || [];
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">Ставок пока нет</div>';
+    return;
+  }
+  box.innerHTML = items
+    .map((r) => {
+      const win = r.payout > 0;
+      return `<div class="row">
+        <div class="row-icon ${win ? "win" : "lose"}">${win ? "💎" : "💥"}</div>
+        <div class="row-main">
+          <div class="row-title">${escapeHtml(playerName(r))} · ${fmt(r.bet)}</div>
+          <div class="row-sub">${r.mines} мин · ${fmtMult(r.multiplier)} · ${r.status}</div>
+        </div>
+        <div class="row-value ${win ? "plus" : "minus"}">${win ? "+" + fmt(r.payout) : "−" + fmt(r.bet)}</div>
+      </div>`;
+    })
+    .join("");
+}
+
+function renderAdminUsers() {
+  const box = $("adminUsers");
+  const items = state.adminUsers || [];
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">Никого не нашли</div>';
+    return;
+  }
+  box.innerHTML = items
+    .map((u) => `<div class="row admin-row" data-id="${u.user_id}">
+      <div class="row-main">
+        <div class="row-title">${escapeHtml(playerName(u))}${u.is_banned ? '<span class="ban-mark">БАН</span>' : ""}</div>
+        <div class="row-sub">id ${u.user_id} · партий ${u.games_played} · лучший ${fmtMult(u.best_multiplier)}</div>
+      </div>
+      <div class="row-value">${fmt(u.balance)}</div>
+      <div class="admin-actions">
+        <input class="mini-input" type="number" value="500" min="1">
+        <button class="chip-btn" data-act="grant">Начислить</button>
+        <button class="chip-btn" data-act="take">Списать</button>
+        <button class="chip-btn" data-act="${u.is_banned ? "unban" : "ban"}">${u.is_banned ? "Разбан" : "Бан"}</button>
+      </div>
+    </div>`)
+    .join("");
+}
+
+function fillSettingsForm(settings) {
+  if (!settings) return;
+  $("setMinBet").value = settings.min_bet;
+  $("setMaxBet").value = settings.max_bet;
+  $("setMinMines").value = settings.min_mines;
+  $("setMaxMines").value = settings.max_mines;
+  $("setDaily").value = settings.daily_bonus;
+  $("setMaintenance").checked = !!settings.maintenance;
+}
+
+async function loadAdmin() {
+  try {
+    const data = await api("/api/admin/overview");
+    state.admin = data;
+    renderAdminStats();
+    renderAdminRecent();
+    fillSettingsForm(data.settings);
+    if (!state.adminUsers) await adminSearch("");
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function adminSearch(query) {
+  try {
+    const data = await api("/api/admin/users", { query: query || "", limit: 20 });
+    state.adminUsers = data.items;
+    renderAdminUsers();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function adminBalance(userId, delta) {
+  try {
+    const data = await api("/api/admin/balance",
+      { user_id: userId, value: delta, mode: "grant" });
+    toast("Баланс: " + fmt(data.balance));
+    await adminSearch($("adminSearch").value.trim());
+    await loadAdmin();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function adminBan(userId, banned) {
+  try {
+    await api("/api/admin/ban", { user_id: userId, banned });
+    await adminSearch($("adminSearch").value.trim());
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function saveAdminSettings() {
+  try {
+    const payload = {
+      min_bet: Number($("setMinBet").value),
+      max_bet: Number($("setMaxBet").value),
+      min_mines: Number($("setMinMines").value),
+      max_mines: Number($("setMaxMines").value),
+      daily_bonus: Number($("setDaily").value),
+      maintenance: $("setMaintenance").checked ? 1 : 0,
+    };
+    const data = await api("/api/admin/settings", payload);
+    state.settings = data.settings;
+    fillSettingsForm(data.settings);
+    toast("Настройки сохранены");
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
 function renderAll() {
   renderBalance();
   renderDaily();
   renderMines();
   renderControls();
   renderGrid();
+  renderLadder();
   renderProfile();
   renderHistory();
   renderTop(document.querySelector(".tab.active").dataset.tab);
@@ -304,6 +523,10 @@ async function loadState() {
   const data = await api("/api/state");
   state.user = data.user;
   state.botUsername = data.bot_username || "";
+  state.settings = data.settings || state.settings;
+  state.isAdmin = !!data.is_admin;
+  const adminNav = $("adminNav");
+  if (adminNav) adminNav.hidden = !state.isAdmin;
   state.referrals = data.referrals;
   state.leaderboard = {
     by_balance: data.leaderboard || [],
@@ -338,6 +561,7 @@ async function openCell(index) {
       const grid = $("grid");
       grid.classList.add("shake");
       setTimeout(() => grid.classList.remove("shake"), 420);
+      sfx.boom();
       haptic("error");
       modal("💥", "Мина!", `Ставка ${fmt(state.round.bet)} сапов сгорела. Попробуешь ещё?`, "Ещё раз");
       await refreshMeta();
@@ -353,6 +577,7 @@ async function openCell(index) {
       mine_positions: data.mine_positions || state.round.mine_positions,
     };
     state.user.balance = data.balance;
+    if (data.finished) sfx.cash(); else sfx.open();
     renderAll();
     if (data.finished) {
       haptic("success");
@@ -365,8 +590,11 @@ async function openCell(index) {
 }
 
 async function startGame() {
-  const bet = Math.max(10, Math.min(100000, parseInt($("betInput").value || "0", 10) || 0));
+  const minBet = state.settings.min_bet || 10;
+  const maxBet = state.settings.max_bet || 100000;
+  const bet = Math.max(minBet, Math.min(maxBet, parseInt($("betInput").value || "0", 10) || 0));
   state.bet = bet;
+  state.lastBet = bet;
   try {
     const data = await api("/api/game/start", { bet, mines: state.mines });
     state.round = data.round;
@@ -391,6 +619,7 @@ async function cashout() {
       payout: data.payout,
       mine_positions: data.mine_positions,
     };
+    sfx.cash();
     haptic("success");
     renderAll();
     modal("💰", "Забрано!", `${fmt(data.payout)} сапов на множителе ${fmtMult(data.multiplier)}.`, "Продолжить");
@@ -427,6 +656,7 @@ function switchView(name) {
   document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   if (name === "top") loadTop();
   if (name === "history") loadHistory();
+  if (name === "admin") loadAdmin();
 }
 
 async function loadTop() {
@@ -491,7 +721,9 @@ function bind() {
       if (mode === "half") v = Math.floor(v / 2);
       if (mode === "double") v = v * 2;
       if (mode === "max") v = Math.max(state.user ? state.user.balance : 1000, 10);
-      v = Math.max(10, Math.min(100000, v));
+      if (mode === "repeat") v = state.lastBet || v;
+      v = Math.max(state.settings.min_bet || 10,
+                   Math.min(state.settings.max_bet || 100000, v));
       input.value = v;
       state.bet = v;
       haptic();
@@ -507,6 +739,16 @@ function bind() {
   $("dailyBtn").addEventListener("click", () => {
     if (state.user && state.user.daily_ready) claimDaily();
     else toast("Бонус уже получен. Возвращайся позже!");
+  });
+
+  $("soundBtn").addEventListener("click", () => {
+    state.sound = !state.sound;
+    try {
+      localStorage.setItem("saper_sound", state.sound ? "1" : "0");
+    } catch (e) {}
+    $("soundBtn").textContent = state.sound ? "🔊" : "🔇";
+    if (state.sound) sfx.open();
+    toast(state.sound ? "Звук включён" : "Звук выключен");
   });
 
   $("modalBtn").addEventListener("click", () => {
@@ -536,6 +778,38 @@ function bind() {
       toast(e.message);
     }
   });
+
+  document.querySelectorAll("#adminTabs .tab").forEach((tab) =>
+    tab.addEventListener("click", () => {
+      document.querySelectorAll("#adminTabs .tab").forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      document.querySelectorAll(".admin-pane").forEach((pane) => {
+        pane.classList.toggle("active", pane.id === "pane-" + tab.dataset.atab);
+      });
+    })
+  );
+
+  $("adminSearch").addEventListener("input", (e) => {
+    clearTimeout(e.target._t);
+    e.target._t = setTimeout(() => adminSearch(e.target.value.trim()), 350);
+  });
+
+  $("adminUsers").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn) return;
+    const row = btn.closest(".admin-row");
+    if (!row) return;
+    const userId = Number(row.dataset.id);
+    const input = row.querySelector(".mini-input");
+    const amount = Math.max(1, Number(input ? input.value : 0) || 0);
+    const act = btn.dataset.act;
+    if (act === "grant") adminBalance(userId, amount);
+    else if (act === "take") adminBalance(userId, -amount);
+    else if (act === "ban") adminBan(userId, true);
+    else if (act === "unban") adminBan(userId, false);
+  });
+
+  $("saveSettings").addEventListener("click", saveAdminSettings);
 }
 
 async function init() {
@@ -547,6 +821,13 @@ async function init() {
       tg.setBackgroundColor("#0e1016");
     } catch (e) {}
   }
+  try {
+    const saved = localStorage.getItem("saper_sound");
+    if (saved !== null) state.sound = saved === "1";
+  } catch (e) {}
+  const soundBtn = $("soundBtn");
+  if (soundBtn) soundBtn.textContent = state.sound ? "🔊" : "🔇";
+
   bind();
   renderControls();
   try {

@@ -109,6 +109,23 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "Реальные деньги не принимаются и не выводятся."
         )
 
+    @dp.message(Command("admin"))
+    async def admin_cmd(message: Message) -> None:
+        if message.from_user.id not in config.admin_ids:
+            await message.answer("Команда доступна только администратору.")
+            return
+        url = f"{config.public_url}/?admin=1" if config.public_url else "https://example.com/"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🛠 Открыть админку", web_app=WebAppInfo(url=url))],
+        ])
+        await message.answer(
+            "<b>Админ-панель</b>\n\n"
+            "• Игроки — поиск, начисление и списание сапов, бан\n"
+            "• Сводка — оборот, выплаты, RTP, последние ставки\n"
+            "• Настройки — лимиты ставки, число мин, бонус, техработы",
+            reply_markup=keyboard,
+        )
+
     @dp.callback_query(F.data == "top")
     async def top(callback) -> None:
         rows = db.leaderboard(10)

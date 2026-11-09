@@ -20,6 +20,7 @@
       </div>
     </div>
     <div class="topbar-right">
+      <button class="icon-btn" id="soundBtn" title="Звук">🔊</button>
       <button class="daily-btn" id="dailyBtn" title="Ежедневный бонус">
         🎁<span class="badge" id="dailyBadge"></span>
       </button>
@@ -36,6 +37,7 @@
         <div class="field-row">
           <label class="field-label" for="betInput">Ставка</label>
           <div class="bet-controls">
+            <button class="chip-btn" data-bet="repeat">⟲</button>
             <button class="chip-btn" data-bet="half">½</button>
             <button class="chip-btn" data-bet="double">2×</button>
             <button class="chip-btn" data-bet="max">MAX</button>
@@ -81,6 +83,8 @@
       </div>
 
       <div class="grid" id="grid" aria-label="Игровое поле"></div>
+
+      <div class="ladder" id="ladder" aria-label="Следующие множители"></div>
 
       <div class="action-bar">
         <button class="cta" id="ctaBtn">Начать игру</button>
@@ -151,6 +155,43 @@
       </div>
     </section>
 
+  <section class="view" id="view-admin">
+    <div class="card-title page-title">Админ-панель</div>
+
+    <div class="tabs" id="adminTabs">
+      <button class="tab active" data-atab="overview">Сводка</button>
+      <button class="tab" data-atab="users">Игроки</button>
+      <button class="tab" data-atab="settings">Настройки</button>
+    </div>
+
+    <div class="admin-pane active" id="pane-overview">
+      <div class="stats-grid" id="adminStats"></div>
+      <div class="card">
+        <div class="card-title">Последние ставки</div>
+        <div class="list" id="adminRecent"></div>
+      </div>
+    </div>
+
+    <div class="admin-pane" id="pane-users">
+      <div class="card">
+        <input class="text-input" id="adminSearch" placeholder="Поиск: username или ID">
+        <div class="list" id="adminUsers"></div>
+      </div>
+    </div>
+
+    <div class="admin-pane" id="pane-settings">
+      <div class="card">
+        <div class="admin-field"><span>Мин. ставка</span><input class="mini-input" id="setMinBet" type="number" min="1"></div>
+        <div class="admin-field"><span>Макс. ставка</span><input class="mini-input" id="setMaxBet" type="number" min="1"></div>
+        <div class="admin-field"><span>Мин. мин</span><input class="mini-input" id="setMinMines" type="number" min="1" max="24"></div>
+        <div class="admin-field"><span>Макс. мин</span><input class="mini-input" id="setMaxMines" type="number" min="1" max="24"></div>
+        <div class="admin-field"><span>Бонус за день</span><input class="mini-input" id="setDaily" type="number" min="0"></div>
+        <label class="admin-check"><input type="checkbox" id="setMaintenance"> Технические работы</label>
+        <button class="secondary" id="saveSettings">Сохранить настройки</button>
+      </div>
+    </div>
+  </section>
+
   </main>
 
   <nav class="nav">
@@ -159,6 +200,7 @@
     <button class="nav-btn" data-view="history"><span>📜</span>История</button>
     <button class="nav-btn" data-view="top"><span>🏆</span>Топ</button>
     <button class="nav-btn" data-view="fair"><span>🔐</span>Честность</button>
+    <button class="nav-btn" id="adminNav" data-view="admin" hidden><span>🛠</span>Админ</button>
   </nav>
 
   <div class="toast" id="toast"></div>

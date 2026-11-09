@@ -12,6 +12,28 @@ from bot import build_dispatcher, setup_bot
 from config import config
 from db import Database
 
+RENEWAL_URL = "https://bot-hosting.net/a/d/00fbd02f-8933-48ef-8a68-4fa65fcdd56f"
+
+
+async def renewal_loop(bot: Bot) -> None:
+    log = logging.getLogger("saper.renewal")
+    hours = max(6, config.renewal_remind_hours)
+    while True:
+        await asyncio.sleep(hours * 3600)
+        if not config.admin_ids:
+            continue
+        text = (
+            "⏰ <b>Продление хостинга</b>\n\n"
+            "Бесплатный тариф Bot-Hosting требует ручного продления каждые 4 дня, "
+            "иначе бот останавливается.\n\n"
+            f"Продлить: {RENEWAL_URL}"
+        )
+        for admin_id in config.admin_ids:
+            try:
+                await bot.send_message(admin_id, text, disable_web_page_preview=True)
+            except Exception as exc:
+                log.warning("Напоминание не доставлено %s: %s", admin_id, exc)
+
 
 async def main() -> None:
     logging.basicConfig(
@@ -47,9 +69,11 @@ async def main() -> None:
     else:
         log.warning("PUBLIC_URL не задан — кнопка WebApp будет вести на заглушку.")
 
+    reminder = asyncio.create_task(renewal_loop(bot))
     try:
         await dp.start_polling(bot)
     finally:
+        reminder.cancel()
         await bot.session.close()
         await runner.cleanup()
 

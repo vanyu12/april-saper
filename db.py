@@ -24,7 +24,8 @@ SCHEMA_STATEMENTS = [
         client_seed      TEXT,
         nonce            INTEGER NOT NULL DEFAULT 0,
         referred_by      INTEGER,
-        ref_paid         INTEGER NOT NULL DEFAULT 0
+        ref_paid         INTEGER NOT NULL DEFAULT 0,
+        is_banned        INTEGER NOT NULL DEFAULT 0
     )
     """,
     """
@@ -47,7 +48,22 @@ SCHEMA_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_rounds_user ON rounds(user_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_rounds_status ON rounds(status)",
+    """
+    CREATE TABLE IF NOT EXISTS settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )
+    """,
 ]
+
+DEFAULT_SETTINGS = {
+    "min_bet": "10",
+    "max_bet": "100000",
+    "min_mines": "1",
+    "max_mines": "24",
+    "daily_bonus": "500",
+    "maintenance": "0",
+}
 
 
 class Database:
@@ -66,6 +82,7 @@ class Database:
             self._ph = "%s"
             for statement in SCHEMA_STATEMENTS:
                 self._conn.execute(statement)
+            self._migrate()
         else:
             os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
             self._conn = sqlite3.connect(path, check_same_thread=False)
@@ -73,8 +90,9 @@ class Database:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(";".join(SCHEMA_STATEMENTS))
-            self._conn.commit()
             self._ph = "?"
+            self._migrate()
+            self._conn.commit()
 
     # --- low level -------------------------------------------------------
     def _sql(self, sql: str) -> str:
@@ -121,6 +139,26 @@ class Database:
 
     def _exec(self, sql: str, params=()) -> int:
         return self._query(sql, params, "exec")
+
+    def _table_columns(self, table: str) -> set[str]:
+        if self.backend == "postgres":
+            rows = self._rows(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+                (table,))
+            return {row["column_name"] for row in rows}
+        rows = self._rows(f"PRAGMA table_info({table})")
+        return {row["name"] for row in rows}
+
+    def _migrate(self) -> None:
+        if "is_banned" not in self._table_columns("users"):
+            self._exec(
+                "ALTER TABLE users ADD COLUMN is_banned INTEGER NOT NULL DEFAULT 0")
+        for key, value in DEFAULT_SETTINGS.items():
+            self._exec(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT (key) DO NOTHING",
+                (key, value),
+            )
 
     # --- users -----------------------------------------------------------
     def ensure_user(self, user_id: int, username: str | None, first_name: str | None,
@@ -290,3 +328,120 @@ class Database:
             self._exec("UPDATE users SET ref_paid = 1 WHERE user_id = ?", (user_id,))
             self.add_balance(me["referred_by"], 500)
             return me["referred_by"]
+
+    # --- settings --------------------------------------------------------
+    def settings(self) -> dict:
+        values = dict(DEFAULT_SETTINGS)
+        for row in self._rows("SELECT key, value FROM settings"):
+            values[row["key"]] = row["value"]
+        result = {}
+        for key, raw in values.items():
+            try:
+                result[key] = int(raw)
+            except (TypeError, ValueError):
+                result[key] = raw
+        return result
+
+    def set_settings(self, updates: dict) -> dict:
+        with self._lock:
+            for key, value in updates.items():
+                if key not in DEFAULT_SETTINGS:
+                    continue
+                self._exec("UPDATE settings SET value = ? WHERE key = ?", (str(value), key))
+        return self.settings()
+
+    # --- admin -----------------------------------------------------------
+    ADMIN_USER_FIELDS = (
+        "user_id, username, first_name, balance, games_played, games_won, "
+        "total_wagered, total_won, best_multiplier, is_banned, created_at"
+    )
+
+    def admin_users(self, query: str = "", limit: int = 20) -> list[dict]:
+        where: list[str] = []
+        params: list = []
+        q = (query or "").strip()
+        if q:
+            digits = q.lstrip("-")
+            if digits.isdigit():
+                where.append("user_id = ?")
+                params.append(int(q))
+            like = f"%{q}%"
+            where.append("(username LIKE ? OR first_name LIKE ?)")
+            params.extend([like, like])
+        sql = f"SELECT {self.ADMIN_USER_FIELDS} FROM users"
+        if where:
+            sql += " WHERE " + " OR ".join(where)
+        sql += " ORDER BY balance DESC LIMIT ?"
+        params.append(int(limit))
+        return self._rows(sql, tuple(params))
+
+    def admin_set_balance(self, user_id: int, value: int) -> int:
+        with self._lock:
+            self._exec("UPDATE users SET balance = ? WHERE user_id = ?",
+                       (max(0, int(value)), user_id))
+            row = self._row("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+            return row["balance"] if row else 0
+
+    def admin_set_ban(self, user_id: int, banned: bool) -> None:
+        self._exec("UPDATE users SET is_banned = ? WHERE user_id = ?",
+                   (1 if banned else 0, user_id))
+
+    def admin_stats(self) -> dict:
+        now = int(time.time())
+        day_start = now - (now % 86400)
+        users = self._row("SELECT COUNT(*) AS c FROM users")
+        banned = self._row("SELECT COUNT(*) AS c FROM users WHERE is_banned = 1")
+        rounds = self._row("SELECT COUNT(*) AS c FROM rounds WHERE status != 'active'")
+        active = self._row("SELECT COUNT(*) AS c FROM rounds WHERE status = 'active'")
+        totals = self._row(
+            """SELECT COALESCE(SUM(bet), 0) AS wagered,
+                      COALESCE(SUM(payout), 0) AS paid,
+                      COALESCE(SUM(CASE WHEN payout > 0 THEN 1 ELSE 0 END), 0) AS wins
+               FROM rounds WHERE status != 'active'""")
+        today = self._row(
+            """SELECT COALESCE(SUM(bet), 0) AS wagered,
+                      COALESCE(SUM(payout), 0) AS paid,
+                      COUNT(*) AS rounds
+               FROM rounds WHERE status != 'active' AND created_at >= ?""",
+            (day_start,))
+        balances = self._row("SELECT COALESCE(SUM(balance), 0) AS s FROM users")
+        best = self._row(
+            """SELECT r.id, r.user_id, u.username, u.first_name, r.bet, r.payout,
+                      r.multiplier, r.mines
+               FROM rounds r LEFT JOIN users u ON u.user_id = r.user_id
+               WHERE r.status != 'active' ORDER BY r.payout DESC LIMIT 1""")
+        wagered = totals["wagered"] if totals else 0
+        paid = totals["paid"] if totals else 0
+        rtp = round((paid / wagered) * 100, 2) if wagered else 0.0
+        return {
+            "users": users["c"] if users else 0,
+            "banned": banned["c"] if banned else 0,
+            "rounds": rounds["c"] if rounds else 0,
+            "active_rounds": active["c"] if active else 0,
+            "wagered": wagered,
+            "paid": paid,
+            "profit": wagered - paid,
+            "rtp": rtp,
+            "wins": totals["wins"] if totals else 0,
+            "balances": balances["s"] if balances else 0,
+            "today": {
+                "wagered": today["wagered"] if today else 0,
+                "paid": today["paid"] if today else 0,
+                "rounds": today["rounds"] if today else 0,
+            },
+            "best_round": best,
+        }
+
+    def admin_rounds(self, user_id: int | None = None, limit: int = 20) -> list[dict]:
+        sql = (
+            "SELECT r.id, r.user_id, u.username, u.first_name, r.bet, r.mines, r.opened, "
+            "r.multiplier, r.status, r.payout, r.created_at "
+            "FROM rounds r LEFT JOIN users u ON u.user_id = r.user_id"
+        )
+        params: list = []
+        if user_id:
+            sql += " WHERE r.user_id = ?"
+            params.append(user_id)
+        sql += " ORDER BY r.created_at DESC LIMIT ?"
+        params.append(int(limit))
+        return self._rows(sql, tuple(params))

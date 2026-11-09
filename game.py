@@ -48,6 +48,19 @@ def payout_for(bet: int, mult: float) -> int:
     return int(math.floor(bet * mult))
 
 
+def ladder(mines: int, opened: int, steps: int = 5) -> list[dict]:
+    """Следующие шаги: сколько даст каждая открытая клетка и её шанс."""
+    safe = _safe_count(mines)
+    result = []
+    for k in range(opened + 1, min(opened + 1 + steps, safe + 1)):
+        result.append({
+            "opened": k,
+            "multiplier": multiplier(mines, k),
+            "chance": next_chance(mines, k),
+        })
+    return result
+
+
 def _byte_stream(server_seed: str, client_seed: str, nonce: int, cursor: int):
     counter = 0
     key = server_seed.encode()

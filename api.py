@@ -78,6 +78,35 @@ class Api:
     def _fail(self, message: str, status: int = 400) -> web.Response:
         return self._json({"ok": False, "error": message}, status)
 
+    @staticmethod
+    def _is_admin(user: dict) -> bool:
+        if user["user_id"] in config.admin_ids:
+            return True
+        username = (user.get("username") or "").lower()
+        return bool(username) and username in config.admin_usernames
+
+    def _require_admin(self, request: web.Request):
+        user = self._auth(request)
+        if not user:
+            return None, self._fail("unauthorized", 401)
+        if not self._is_admin(user):
+            return None, self._fail("Недостаточно прав", 403)
+        return user, None
+
+    def _settings(self) -> dict:
+        return self.db.settings()
+
+    def _public_settings(self) -> dict:
+        raw = self._settings()
+        return {
+            "min_bet": raw.get("min_bet", 10),
+            "max_bet": raw.get("max_bet", 100000),
+            "min_mines": raw.get("min_mines", 1),
+            "max_mines": raw.get("max_mines", 24),
+            "daily_bonus": raw.get("daily_bonus", 500),
+            "maintenance": raw.get("maintenance", 0),
+        }
+
     def _public_user(self, user: dict) -> dict:
         now = int(time.time())
         cooldown_left = max(0, user["last_daily"] + game.DAILY_COOLDOWN - now)
@@ -106,6 +135,8 @@ class Api:
             "ok": True,
             "user": self._public_user(user),
             "bot_username": config.bot_username,
+            "is_admin": self._is_admin(user),
+            "settings": self._public_settings(),
             "rank": self.db.rank(user["user_id"]),
             "referrals": self.db.referrals(user["user_id"]),
             "leaderboard": self.db.leaderboard(10),
@@ -133,6 +164,7 @@ class Api:
             "payout": rnd["payout"],
             "next_chance": game.next_chance(rnd["mines"], len(rnd["opened"])),
             "max_multiplier": game.max_multiplier(rnd["mines"]),
+            "ladder": game.ladder(rnd["mines"], len(rnd["opened"])),
         }
         if reveal or rnd["status"] != "active":
             data["mine_positions"] = mines
@@ -153,10 +185,22 @@ class Api:
         except (TypeError, ValueError):
             return self._fail("Некорректная ставка")
 
-        if not (game.MIN_BET <= bet <= game.MAX_BET):
-            return self._fail(f"Ставка от {game.MIN_BET} до {game.MAX_BET}")
-        if not (1 <= mines <= 24):
-            return self._fail("Мин от 1 до 24")
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+
+        settings = self._settings()
+        if int(settings.get("maintenance", 0)) and not self._is_admin(user):
+            return self._fail("Идут технические работы — игра скоро вернётся")
+
+        min_bet = int(settings.get("min_bet", game.MIN_BET))
+        max_bet = int(settings.get("max_bet", game.MAX_BET))
+        min_mines = int(settings.get("min_mines", 1))
+        max_mines = int(settings.get("max_mines", 24))
+
+        if not (min_bet <= bet <= max_bet):
+            return self._fail(f"Ставка от {min_bet} до {max_bet}")
+        if not (min_mines <= mines <= max_mines):
+            return self._fail(f"Мин от {min_mines} до {max_mines}")
         if self.db.active_round(user["user_id"]):
             return self._fail("Сначала завершите текущую игру")
         if user["balance"] < bet:
@@ -181,6 +225,7 @@ class Api:
                 "status": "active",
                 "next_chance": game.next_chance(mines, 0),
                 "max_multiplier": game.max_multiplier(mines),
+                "ladder": game.ladder(mines, 0),
             },
             "balance": balance,
         })
@@ -247,6 +292,7 @@ class Api:
             "finished": finished,
             "status": status,
             "next_chance": game.next_chance(rnd["mines"], len(opened)),
+            "ladder": game.ladder(rnd["mines"], len(opened)),
             "mine_positions": rnd["mine_positions"] if finished else None,
             "balance": balance,
         })
@@ -282,14 +328,17 @@ class Api:
         user = self._auth(request)
         if not user:
             return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
         now = int(time.time())
         if now - user["last_daily"] < game.DAILY_COOLDOWN:
             left = user["last_daily"] + game.DAILY_COOLDOWN - now
             return self._fail(f"Бонус будет доступен через {left // 3600} ч")
+        bonus = int(self._settings().get("daily_bonus", game.DAILY_BONUS))
         self.db._exec("UPDATE users SET last_daily = ? WHERE user_id = ?",
                       (now, user["user_id"]))
-        balance = self.db.add_balance(user["user_id"], game.DAILY_BONUS)
-        return self._json({"ok": True, "amount": game.DAILY_BONUS, "balance": balance})
+        balance = self.db.add_balance(user["user_id"], bonus)
+        return self._json({"ok": True, "amount": bonus, "balance": balance})
 
     async def history(self, request: web.Request) -> web.Response:
         user = self._auth(request)
@@ -370,6 +419,126 @@ class Api:
             "mines": rnd["mines"],
         })
 
+    # --- admin -----------------------------------------------------------
+    @staticmethod
+    async def _body(request: web.Request) -> dict:
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return {}
+        return body if isinstance(body, dict) else {}
+
+    async def admin_overview(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err:
+            return err
+        return self._json({
+            "ok": True,
+            "stats": self.db.admin_stats(),
+            "settings": self._public_settings(),
+            "recent": self.db.admin_rounds(None, 12),
+        })
+
+    async def admin_users(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err:
+            return err
+        body = await self._body(request)
+        query = str(body.get("query", ""))[:64]
+        try:
+            limit = int(body.get("limit", 20))
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(50, limit))
+        return self._json({"ok": True, "items": self.db.admin_users(query, limit)})
+
+    async def admin_balance(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err:
+            return err
+        body = await self._body(request)
+        try:
+            target = int(body.get("user_id", 0))
+            value = int(body.get("value", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректные данные")
+        if not self.db.user(target):
+            return self._fail("Игрок не найден", 404)
+        if str(body.get("mode", "set")) == "grant":
+            balance = self.db.add_balance(target, value)
+        else:
+            balance = self.db.admin_set_balance(target, value)
+        return self._json({"ok": True, "user_id": target, "balance": balance})
+
+    async def admin_ban(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err:
+            return err
+        body = await self._body(request)
+        try:
+            target = int(body.get("user_id", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректные данные")
+        if not self.db.user(target):
+            return self._fail("Игрок не найден", 404)
+        if target == admin["user_id"]:
+            return self._fail("Себя блокировать не нужно")
+        banned = bool(body.get("banned", True))
+        self.db.admin_set_ban(target, banned)
+        return self._json({"ok": True, "user_id": target, "is_banned": 1 if banned else 0})
+
+    async def admin_rounds(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err:
+            return err
+        body = await self._body(request)
+        try:
+            user_id = int(body["user_id"]) if body.get("user_id") else None
+        except (TypeError, ValueError):
+            user_id = None
+        try:
+            limit = int(body.get("limit", 20))
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(100, limit))
+        return self._json({"ok": True, "items": self.db.admin_rounds(user_id, limit)})
+
+    async def admin_settings(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err:
+            return err
+        body = await self._body(request)
+        allowed = ("min_bet", "max_bet", "min_mines", "max_mines",
+                   "daily_bonus", "maintenance")
+        updates: dict[str, int] = {}
+        for key in allowed:
+            if key not in body:
+                continue
+            try:
+                updates[key] = int(body[key])
+            except (TypeError, ValueError):
+                return self._fail(f"Некорректное значение: {key}")
+        if not updates:
+            return self._fail("Нет изменений")
+
+        current = self._settings()
+        merged = {**current, **updates}
+        if merged["min_bet"] < 1 or merged["min_bet"] > merged["max_bet"]:
+            return self._fail("Проверьте границы ставки")
+        if merged["max_bet"] > 10_000_000:
+            return self._fail("Слишком большой максимум ставки")
+        if merged["min_mines"] < 1 or merged["min_mines"] > merged["max_mines"]:
+            return self._fail("Проверьте число мин")
+        if merged["max_mines"] > 24:
+            return self._fail("Мин не больше 24")
+        if merged["daily_bonus"] < 0 or merged["daily_bonus"] > 1_000_000:
+            return self._fail("Некорректный ежедневный бонус")
+        if merged["maintenance"] not in (0, 1):
+            return self._fail("Техработы: 0 или 1")
+
+        saved = self.db.set_settings(updates)
+        return self._json({"ok": True, "settings": saved})
+
 
 def build_app(db: Database) -> web.Application:
     api = Api(db)
@@ -386,6 +555,12 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/fairness", api.fairness)
     app.router.add_post("/api/fairness/rotate", api.fairness_rotate)
     app.router.add_post("/api/fairness/verify", api.verify_round)
+    app.router.add_post("/api/admin/overview", api.admin_overview)
+    app.router.add_post("/api/admin/users", api.admin_users)
+    app.router.add_post("/api/admin/balance", api.admin_balance)
+    app.router.add_post("/api/admin/ban", api.admin_ban)
+    app.router.add_post("/api/admin/rounds", api.admin_rounds)
+    app.router.add_post("/api/admin/settings", api.admin_settings)
 
     here = __import__("os").path.dirname(__file__)
     web_dir = __import__("os").path.join(here, "web")
