@@ -14,8 +14,10 @@ def _int(name: str, default: int) -> int:
 
 
 def _default_db_path() -> str:
-    if os.name != "nt" and os.path.isdir("/data") and os.access("/data", os.W_OK):
-        return "/data/saper.db"
+    if os.name != "nt":
+        for candidate in ("/app/data", "/data"):
+            if os.path.isdir(candidate) and os.access(candidate, os.W_OK):
+                return os.path.join(candidate, "saper.db")
     return "data/saper.db"
 
 
