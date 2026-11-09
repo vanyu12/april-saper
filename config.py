@@ -26,7 +26,7 @@ class Config:
     bot_token: str = os.getenv("BOT_TOKEN", "").strip()
     public_url: str = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
     host: str = os.getenv("HOST", "0.0.0.0")
-    port: int = _int("PORT", 8080)
+    port: int = _int("PORT", _int("SERVER_PORT", 8080))
     db_path: str = os.getenv("DB_PATH", _default_db_path())
     database_url: str = os.getenv("DATABASE_URL", "").strip()
     dev_mode: bool = os.getenv("DEV_MODE", "0") == "1"
