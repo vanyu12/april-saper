@@ -163,6 +163,13 @@ class Database:
             self._migrate()
             self._conn.commit()
 
+    def close(self) -> None:
+        with self._lock:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+
     # --- low level -------------------------------------------------------
     def _sql(self, sql: str) -> str:
         return sql.replace("?", "%s") if self._ph == "%s" else sql
@@ -427,6 +434,14 @@ class Database:
             self._exec(
                 "UPDATE users SET last_hourly = ?, balance = balance + ? WHERE user_id = ?",
                 (now, amount, user_id))
+            return amount
+
+    def claim_daily(self, user_id: int, now: int, cooldown: int, amount: int) -> int | None:
+        with self._lock:
+            me = self.user(user_id)
+            if not me or now - int(me["last_daily"]) < cooldown:
+                return None
+            self._exec("UPDATE users SET last_daily = ? WHERE user_id = ?", (now, user_id))
             return amount
 
     def mark_spin(self, user_id: int, now: int, spin_day: int) -> None:
