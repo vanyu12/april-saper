@@ -364,6 +364,18 @@ function renderFair() {
 
 /* ---------- admin ---------- */
 
+const ADMIN_ITEMS = [
+  ["insurance", "Страховка"],
+  ["charm", "Талисман"],
+  ["double_daily", "Двойной бонус"],
+  ["relic_mines", "Реликвия сапёра"],
+  ["relic_dice", "Кости судьбы"],
+  ["relic_wheel", "Колесо фортуны"],
+  ["relic_crash", "Краш-модуль"],
+  ["theme_neon", "Неоновая тема"],
+  ["theme_gold", "Золотые клетки"],
+];
+
 function renderAdminStats() {
   const stats = state.admin && state.admin.stats;
   if (!stats) return;
@@ -380,6 +392,24 @@ function renderAdminStats() {
   $("adminStats").innerHTML = cards
     .map(([label, value]) =>
       `<div class="stat"><span class="stat-value">${value}</span><span class="stat-label">${label}</span></div>`)
+    .join("");
+}
+
+function renderAdminGames() {
+  const box = $("adminGames");
+  const items = (state.admin && state.admin.games) || [];
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">Статистики пока нет</div>';
+    return;
+  }
+  box.innerHTML = items
+    .map((g) => `<div class="row">
+      <div class="row-main">
+        <div class="row-title">${escapeHtml(g.title)}</div>
+        <div class="row-sub">партий ${fmt(g.rounds)} · оборот ${fmt(g.wagered)} · выплаты ${fmt(g.paid)}</div>
+      </div>
+      <div class="row-value">${g.rtp || 0}%</div>
+    </div>`)
     .join("");
 }
 
@@ -428,6 +458,8 @@ function renderAdminUsers() {
         <input class="mini-input" type="number" value="500" min="1">
         <button class="chip-btn" data-act="grant">Начислить</button>
         <button class="chip-btn" data-act="take">Списать</button>
+        <select class="mini-select" data-role="item">${ADMIN_ITEMS.map(([k, t]) => `<option value="${k}">${t}</option>`).join("")}</select>
+        <button class="chip-btn" data-act="item">Выдать</button>
         <button class="chip-btn" data-act="${u.is_banned ? "unban" : "ban"}">${u.is_banned ? "Разбан" : "Бан"}</button>
       </div>
     </div>`)
@@ -442,6 +474,11 @@ function fillSettingsForm(settings) {
   $("setMaxMines").value = settings.max_mines;
   $("setDaily").value = settings.daily_bonus;
   $("setMaintenance").checked = !!settings.maintenance;
+  const games = settings.games || {};
+  $("setGameMines").checked = games.mines !== false;
+  $("setGameDice").checked = games.dice !== false;
+  $("setGameWheel").checked = games.wheel !== false;
+  $("setGameCrash").checked = games.crash !== false;
 }
 
 async function loadAdmin() {
@@ -449,6 +486,7 @@ async function loadAdmin() {
     const data = await api("/api/admin/overview");
     state.admin = data;
     renderAdminStats();
+    renderAdminGames();
     renderAdminRecent();
     fillSettingsForm(data.settings);
     if (!state.adminUsers) await adminSearch("");
@@ -488,6 +526,16 @@ async function adminBan(userId, banned) {
   }
 }
 
+async function adminGrant(userId, item) {
+  try {
+    const data = await api("/api/admin/grant", { user_id: userId, item });
+    toast(data.title + " × " + data.qty);
+    await adminSearch($("adminSearch").value.trim());
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
 async function saveAdminSettings() {
   try {
     const payload = {
@@ -497,6 +545,10 @@ async function saveAdminSettings() {
       max_mines: Number($("setMaxMines").value),
       daily_bonus: Number($("setDaily").value),
       maintenance: $("setMaintenance").checked ? 1 : 0,
+      game_mines: $("setGameMines").checked ? 1 : 0,
+      game_dice: $("setGameDice").checked ? 1 : 0,
+      game_wheel: $("setGameWheel").checked ? 1 : 0,
+      game_crash: $("setGameCrash").checked ? 1 : 0,
     };
     const data = await api("/api/admin/settings", payload);
     state.settings = data.settings;
@@ -1127,6 +1179,10 @@ function bind() {
     const act = btn.dataset.act;
     if (act === "grant") adminBalance(userId, amount);
     else if (act === "take") adminBalance(userId, -amount);
+    else if (act === "item") {
+      const select = row.querySelector('select[data-role="item"]');
+      if (select) adminGrant(userId, select.value);
+    }
     else if (act === "ban") adminBan(userId, true);
     else if (act === "unban") adminBan(userId, false);
   });

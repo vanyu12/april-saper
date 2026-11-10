@@ -275,6 +275,10 @@
     <div class="admin-pane active" id="pane-overview">
       <div class="stats-grid" id="adminStats"></div>
       <div class="card">
+        <div class="card-title">По играм</div>
+        <div class="list" id="adminGames"></div>
+      </div>
+      <div class="card">
         <div class="card-title">Последние ставки</div>
         <div class="list" id="adminRecent"></div>
       </div>
@@ -295,6 +299,11 @@
         <div class="admin-field"><span>Макс. мин</span><input class="mini-input" id="setMaxMines" type="number" min="1" max="24"></div>
         <div class="admin-field"><span>Бонус за день</span><input class="mini-input" id="setDaily" type="number" min="0"></div>
         <label class="admin-check"><input type="checkbox" id="setMaintenance"> Технические работы</label>
+        <div class="admin-sub">Игры</div>
+        <label class="admin-check"><input type="checkbox" id="setGameMines"> Сапёр</label>
+        <label class="admin-check"><input type="checkbox" id="setGameDice"> Кости</label>
+        <label class="admin-check"><input type="checkbox" id="setGameWheel"> Колесо</label>
+        <label class="admin-check"><input type="checkbox" id="setGameCrash"> Краш</label>
         <button class="secondary" id="saveSettings">Сохранить настройки</button>
       </div>
     </div>

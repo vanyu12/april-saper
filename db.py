@@ -93,6 +93,10 @@ DEFAULT_SETTINGS = {
     "max_mines": "24",
     "daily_bonus": "300",
     "maintenance": "0",
+    "game_mines": "1",
+    "game_dice": "1",
+    "game_wheel": "1",
+    "game_crash": "1",
 }
 
 
@@ -516,6 +520,39 @@ class Database:
             items.append(item)
         items.sort(key=lambda entry: entry["created_at"], reverse=True)
         return items[: int(limit)]
+
+    GAME_TITLES = {"mines": "Сапёр", "dice": "Кости", "wheel": "Колесо", "crash": "Краш"}
+
+    def admin_game_stats(self) -> list[dict]:
+        rows: list[dict] = []
+        mines = self._row(
+            """SELECT COUNT(*) AS rounds, COALESCE(SUM(bet), 0) AS wagered,
+                      COALESCE(SUM(payout), 0) AS paid,
+                      COALESCE(SUM(CASE WHEN payout > 0 THEN 1 ELSE 0 END), 0) AS wins
+               FROM rounds WHERE status != 'active'""")
+        if mines:
+            rows.append({
+                "game": "mines", "title": "Сапёр",
+                "rounds": mines["rounds"], "wagered": mines["wagered"],
+                "paid": mines["paid"], "wins": mines["wins"],
+            })
+        for row in self._rows(
+                """SELECT game, COUNT(*) AS rounds, COALESCE(SUM(bet), 0) AS wagered,
+                          COALESCE(SUM(payout), 0) AS paid,
+                          COALESCE(SUM(CASE WHEN win = 1 THEN 1 ELSE 0 END), 0) AS wins
+                   FROM plays GROUP BY game"""):
+            rows.append({
+                "game": row["game"],
+                "title": self.GAME_TITLES.get(row["game"], row["game"]),
+                "rounds": row["rounds"], "wagered": row["wagered"],
+                "paid": row["paid"], "wins": row["wins"],
+            })
+        for row in rows:
+            wagered = row["wagered"] or 0
+            row["rtp"] = round((row["paid"] / wagered) * 100, 2) if wagered else 0.0
+        order = ["mines", "dice", "wheel", "crash"]
+        rows.sort(key=lambda item: order.index(item["game"]) if item["game"] in order else 99)
+        return rows
 
     def admin_rounds(self, user_id: int | None = None, limit: int = 20) -> list[dict]:
         sql = (

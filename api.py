@@ -104,9 +104,18 @@ class Api:
             "max_bet": raw.get("max_bet", 100000),
             "min_mines": raw.get("min_mines", 1),
             "max_mines": raw.get("max_mines", 24),
-            "daily_bonus": raw.get("daily_bonus", 500),
+            "daily_bonus": raw.get("daily_bonus", game.DAILY_BONUS),
             "maintenance": raw.get("maintenance", 0),
+            "games": {
+                "mines": int(raw.get("game_mines", 1)) == 1,
+                "dice": int(raw.get("game_dice", 1)) == 1,
+                "wheel": int(raw.get("game_wheel", 1)) == 1,
+                "crash": int(raw.get("game_crash", 1)) == 1,
+            },
         }
+
+    def _game_enabled(self, settings: dict, key: str) -> bool:
+        return int(settings.get("game_" + key, 1)) == 1
 
     def _public_user(self, user: dict) -> dict:
         now = int(time.time())
@@ -192,6 +201,8 @@ class Api:
             return self._fail("Аккаунт заблокирован", 403)
 
         settings = self._settings()
+        if not self._game_enabled(settings, "mines"):
+            return self._fail("«Сапёр» временно отключён")
         if int(settings.get("maintenance", 0)) and not self._is_admin(user):
             return self._fail("Идут технические работы — игра скоро вернётся")
 
@@ -434,10 +445,12 @@ class Api:
         })
 
     # --- другие игры -----------------------------------------------------
-    def _bet_error(self, user: dict, bet: int) -> str | None:
+    def _bet_error(self, user: dict, bet: int, game_key: str | None = None) -> str | None:
         if user.get("is_banned"):
             return "Аккаунт заблокирован"
         settings = self._settings()
+        if game_key and not self._game_enabled(settings, game_key):
+            return "Эта игра временно отключена"
         if int(settings.get("maintenance", 0)) and not self._is_admin(user):
             return "Идут технические работы — игра скоро вернётся"
         min_bet = int(settings.get("min_bet", game.MIN_BET))
@@ -460,7 +473,7 @@ class Api:
         pick = str(body.get("pick", "even")).lower()
         if pick not in ("even", "odd"):
             return self._fail("Выберите «чёт» или «нечёт»")
-        error = self._bet_error(user, bet)
+        error = self._bet_error(user, bet, "dice")
         if error:
             return self._fail(error, 403 if user.get("is_banned") else 400)
 
@@ -504,7 +517,7 @@ class Api:
             bet = int(body.get("bet", 0))
         except (TypeError, ValueError):
             return self._fail("Некорректная ставка")
-        error = self._bet_error(user, bet)
+        error = self._bet_error(user, bet, "wheel")
         if error:
             return self._fail(error, 403 if user.get("is_banned") else 400)
 
@@ -631,7 +644,7 @@ class Api:
             return self._fail("Некорректная ставка")
         if not (game.CRASH_MIN <= target <= game.CRASH_MAX):
             return self._fail(f"Множитель от {game.CRASH_MIN} до {game.CRASH_MAX}")
-        error = self._bet_error(user, bet)
+        error = self._bet_error(user, bet, "crash")
         if error:
             return self._fail(error, 403 if user.get("is_banned") else 400)
 
@@ -740,6 +753,7 @@ class Api:
         return self._json({
             "ok": True,
             "stats": self.db.admin_stats(),
+            "games": self.db.admin_game_stats(),
             "settings": self._public_settings(),
             "recent": self.db.admin_recent(12),
         })
@@ -792,6 +806,37 @@ class Api:
         self.db.admin_set_ban(target, banned)
         return self._json({"ok": True, "user_id": target, "is_banned": 1 if banned else 0})
 
+    async def admin_grant(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err:
+            return err
+        body = await self._body(request)
+        try:
+            target = int(body.get("user_id", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректные данные")
+        if not self.db.user(target):
+            return self._fail("Игрок не найден", 404)
+        key = str(body.get("item", ""))
+        catalog = {item["key"]: item for item in game.SHOP_ITEMS}
+        if key not in catalog:
+            return self._fail("Неизвестный предмет", 404)
+        try:
+            qty = int(body.get("qty", 1))
+        except (TypeError, ValueError):
+            return self._fail("Некорректное количество")
+        qty = max(1, min(50, qty))
+        if key == "charm":
+            qty *= game.CHARM_CHARGES
+        total = self.db.add_item(target, key, qty)
+        return self._json({
+            "ok": True,
+            "user_id": target,
+            "item": key,
+            "title": catalog[key]["title"],
+            "qty": total,
+        })
+
     async def admin_rounds(self, request: web.Request) -> web.Response:
         admin, err = self._require_admin(request)
         if err:
@@ -814,7 +859,8 @@ class Api:
             return err
         body = await self._body(request)
         allowed = ("min_bet", "max_bet", "min_mines", "max_mines",
-                   "daily_bonus", "maintenance")
+                   "daily_bonus", "maintenance",
+                   "game_mines", "game_dice", "game_wheel", "game_crash")
         updates: dict[str, int] = {}
         for key in allowed:
             if key not in body:
@@ -840,6 +886,9 @@ class Api:
             return self._fail("Некорректный ежедневный бонус")
         if merged["maintenance"] not in (0, 1):
             return self._fail("Техработы: 0 или 1")
+        for key in ("game_mines", "game_dice", "game_wheel", "game_crash"):
+            if merged.get(key, 1) not in (0, 1):
+                return self._fail(f"Флаг игры {key}: только 0 или 1")
 
         saved = self.db.set_settings(updates)
         return self._json({"ok": True, "settings": saved})
@@ -871,6 +920,7 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/admin/users", api.admin_users)
     app.router.add_post("/api/admin/balance", api.admin_balance)
     app.router.add_post("/api/admin/ban", api.admin_ban)
+    app.router.add_post("/api/admin/grant", api.admin_grant)
     app.router.add_post("/api/admin/rounds", api.admin_rounds)
     app.router.add_post("/api/admin/settings", api.admin_settings)
 
