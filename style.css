@@ -563,6 +563,7 @@ body::before {
 .nav-btn span { font-size: 18px; filter: grayscale(0.7); opacity: 0.7; }
 .nav-btn.active { color: var(--text); }
 .nav-btn.active span { filter: none; opacity: 1; }
+.nav-btn[hidden] { display: none; }
 
 /* toast */
 .toast {
@@ -725,3 +726,161 @@ body::before {
 .admin-actions .chip-btn { flex: none; }
 
 .ban-mark { color: var(--danger); font-size: 11px; margin-left: 6px; font-weight: 700; }
+
+#view-admin .page-title { margin-top: 12px; }
+#adminTabs { margin-bottom: 10px; }
+#adminStats { grid-template-columns: repeat(2, 1fr); }
+#adminSearch { margin-bottom: 10px; }
+.admin-pane .card { margin-top: 0; }
+
+.admin-row { gap: 6px 8px; row-gap: 8px; }
+.admin-row .row-title { font-size: 13px; }
+.admin-row .row-sub { font-size: 11px; line-height: 1.35; }
+.admin-row .row-value { font-size: 15px; }
+
+.admin-actions { flex-wrap: wrap; gap: 6px; }
+.admin-actions .chip-btn { padding: 6px 9px; font-size: 11px; }
+.admin-actions .mini-input { width: 76px; }
+
+/* переключатель игр */
+.game-switch {
+  display: flex;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 4px;
+  margin-bottom: 12px;
+}
+
+.gs-btn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  border-radius: 9px;
+  padding: 9px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.gs-btn.active { background: var(--panel-2); color: var(--text); }
+
+.game-pane { display: none; }
+.game-pane.active { display: block; animation: fade 0.18s ease; }
+
+/* кости */
+.dice-face {
+  height: 108px;
+  border-radius: 16px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  font-size: 58px;
+  line-height: 1;
+  margin: 6px 0 12px;
+  color: var(--text);
+}
+
+.dice-face.roll { animation: dice-roll 0.45s ease; }
+
+@keyframes dice-roll {
+  0% { transform: rotate(0deg) scale(1); }
+  35% { transform: rotate(-14deg) scale(1.08); }
+  70% { transform: rotate(10deg) scale(0.98); }
+  100% { transform: rotate(0deg) scale(1); }
+}
+
+.pick-row { display: flex; gap: 8px; }
+
+.pick {
+  flex: 1;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 12px 8px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pick span { display: block; font-size: 11px; color: var(--mint); font-weight: 600; margin-top: 2px; }
+.pick:active { transform: scale(0.98); }
+
+/* колесо */
+.wheel {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 6px 0 12px;
+}
+
+.wheel-seg {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 6px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.wheel-seg.zero { color: var(--muted); }
+
+.wheel-seg.hit {
+  border-color: rgba(46, 230, 168, 0.6);
+  background: var(--mint-dim);
+  box-shadow: 0 0 16px rgba(46, 230, 168, 0.25);
+  transform: scale(1.06);
+}
+
+#wheelSpin { margin-top: 2px; }
+
+/* квесты */
+.quests { display: flex; flex-direction: column; gap: 10px; }
+
+.quest {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.quest.ready { border-color: rgba(255, 204, 77, 0.45); }
+.quest.done { opacity: 0.6; }
+
+.quest-main { flex: 1; min-width: 0; }
+.quest-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+
+.quest-bar {
+  height: 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.quest-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--mint), var(--violet));
+}
+
+.quest-claim {
+  flex: none;
+  padding: 7px 10px;
+  font-size: 11px;
+  min-width: 92px;
+}
+
+.quest-claim:disabled { opacity: 0.5; cursor: default; }
+.quest.ready .quest-claim { background: rgba(255, 204, 77, 0.16); border-color: rgba(255, 204, 77, 0.5); color: var(--gold); }

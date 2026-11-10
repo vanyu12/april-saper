@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import math
+import time
 
 CELLS = 25
 SIDE = 5
@@ -99,3 +100,50 @@ def verify(server_seed: str, client_seed: str, nonce: int,
 
 def hash_seed(server_seed: str) -> str:
     return hashlib.sha256(server_seed.encode()).hexdigest()
+
+
+DICE_MULTIPLIER = 1.96
+
+WHEEL_SEGMENTS = (
+    {"multiplier": 0.0, "weight": 35},
+    {"multiplier": 1.1, "weight": 25},
+    {"multiplier": 1.35, "weight": 18},
+    {"multiplier": 1.7, "weight": 12},
+    {"multiplier": 2.3, "weight": 7},
+    {"multiplier": 3.2, "weight": 3},
+)
+
+DAY_OFFSET = 3 * 3600
+
+DAILY_QUESTS = (
+    {"key": "games5", "title": "Сыграть 5 партий", "metric": "games", "target": 5, "reward": 300},
+    {"key": "wins3", "title": "Выиграть 3 раза", "metric": "wins", "target": 3, "reward": 500},
+    {"key": "wager1000", "title": "Поставить 1000 сапов", "metric": "wagered", "target": 1000,
+     "reward": 700},
+)
+
+
+def day_key() -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime(time.time() + DAY_OFFSET))
+
+
+def day_start() -> int:
+    shifted = time.time() + DAY_OFFSET
+    return int(shifted - (shifted % 86400) - DAY_OFFSET)
+
+
+def roll_dice(server_seed: str, client_seed: str, nonce: int) -> int:
+    value = next(_floats(server_seed, client_seed, nonce, 0, 1))
+    return min(6, int(value * 6) + 1)
+
+
+def spin_wheel(server_seed: str, client_seed: str, nonce: int) -> tuple[int, float]:
+    value = next(_floats(server_seed, client_seed, nonce, 0, 1))
+    total = sum(segment["weight"] for segment in WHEEL_SEGMENTS)
+    point = value * total
+    acc = 0.0
+    for index, segment in enumerate(WHEEL_SEGMENTS):
+        acc += segment["weight"]
+        if point < acc:
+            return index, segment["multiplier"]
+    return len(WHEEL_SEGMENTS) - 1, WHEEL_SEGMENTS[-1]["multiplier"]

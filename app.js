@@ -9,6 +9,8 @@ const state = {
   settings: { min_bet: 10, max_bet: 100000, min_mines: 1, max_mines: 24, daily_bonus: 500, maintenance: 0 },
   isAdmin: false,
   sound: true,
+  game: "mines",
+  quests: [],
   leaderboard: { by_balance: [], by_multiplier: [], me: 0 },
   history: [],
   referrals: { total: 0, active: 0 },
@@ -504,6 +506,130 @@ async function saveAdminSettings() {
   }
 }
 
+/* ---------- другие игры и квесты ---------- */
+
+function switchGame(name) {
+  state.game = name;
+  document.querySelectorAll("#gameSwitch .gs-btn").forEach((btn) =>
+    btn.classList.toggle("active", btn.dataset.game === name));
+  document.querySelectorAll(".game-pane").forEach((pane) =>
+    pane.classList.toggle("active", pane.id === "game-pane-" + name));
+  if (name === "wheel") renderWheel();
+}
+
+function clampBet(value) {
+  const min = state.settings.min_bet || 10;
+  const max = state.settings.max_bet || 100000;
+  return Math.max(min, Math.min(max, Math.round(value || 0)));
+}
+
+function renderWheel(highlight) {
+  const box = $("wheelView");
+  if (!box) return;
+  const segments = state.wheelSegments && state.wheelSegments.length
+    ? state.wheelSegments
+    : [{ multiplier: 0 }, { multiplier: 1.1 }, { multiplier: 1.35 },
+       { multiplier: 1.7 }, { multiplier: 2.3 }, { multiplier: 3.2 }];
+  box.innerHTML = segments
+    .map((seg, i) => {
+      const zero = !seg.multiplier;
+      return `<div class="wheel-seg${highlight === i ? " hit" : ""}${zero ? " zero" : ""}">
+        ${zero ? "×0" : fmtMult(seg.multiplier)}
+      </div>`;
+    })
+    .join("");
+}
+
+function renderQuests() {
+  const box = $("questsList");
+  if (!box) return;
+  const items = state.quests || [];
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">Задания появятся после первой партии</div>';
+    return;
+  }
+  box.innerHTML = items
+    .map((q) => {
+      const pct = Math.min(100, Math.round((q.progress / q.target) * 100));
+      const label = q.claimed
+        ? "Получено"
+        : q.ready
+          ? `Забрать +${fmt(q.reward)}`
+          : `${fmt(q.progress)} / ${fmt(q.target)}`;
+      return `<div class="quest${q.ready ? " ready" : ""}${q.claimed ? " done" : ""}">
+        <div class="quest-main">
+          <div class="quest-title">${escapeHtml(q.title)}</div>
+          <div class="quest-bar"><span style="width:${pct}%"></span></div>
+        </div>
+        <button class="chip-btn quest-claim" data-quest="${q.key}"
+          ${q.ready ? "" : "disabled"}>${label}</button>
+      </div>`;
+    })
+    .join("");
+}
+
+async function playDice(pick) {
+  const input = $("diceBet");
+  const bet = clampBet(parseInt(input.value || "0", 10));
+  input.value = bet;
+  try {
+    const data = await api("/api/games/dice", { bet, pick });
+    state.user.balance = data.balance;
+    state.quests = data.quests || state.quests;
+    const face = $("diceFace");
+    face.textContent = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"][data.roll - 1] || "🎲";
+    face.classList.remove("roll");
+    void face.offsetWidth;
+    face.classList.add("roll");
+    if (data.win) {
+      sfx.coin();
+      haptic("success");
+      toast(`+${fmt(data.payout)} сапов`);
+    } else {
+      sfx.boom();
+      haptic("error");
+      toast("Не угадал");
+    }
+    $("diceHint").textContent =
+      `Выпало ${data.roll} — ${data.roll % 2 === 0 ? "чёт" : "нечёт"}`;
+    renderAll();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function spinWheel() {
+  const input = $("wheelBet");
+  const bet = clampBet(parseInt(input.value || "0", 10));
+  input.value = bet;
+  const btn = $("wheelSpin");
+  btn.disabled = true;
+  try {
+    const data = await api("/api/games/wheel", { bet });
+    state.user.balance = data.balance;
+    state.quests = data.quests || state.quests;
+    state.wheelSegments = data.segments || state.wheelSegments;
+    renderWheel(data.segment);
+    if (data.multiplier > 0) {
+      sfx.cash();
+      haptic("success");
+      toast(`+${fmt(data.payout)} сапов`);
+    } else {
+      sfx.boom();
+      haptic("error");
+      toast("Пустой сектор");
+    }
+    $("wheelHint").textContent = data.multiplier > 0
+      ? `Сектор ${fmtMult(data.multiplier)} — выигрыш ${fmt(data.payout)}`
+      : "Пустой сектор — ставка сгорела";
+    renderAll();
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function renderAll() {
   renderBalance();
   renderDaily();
@@ -512,8 +638,10 @@ function renderAll() {
   renderGrid();
   renderLadder();
   renderProfile();
+  renderQuests();
   renderHistory();
-  renderTop(document.querySelector(".tab.active").dataset.tab);
+    const topTab = document.querySelector("#view-top .tab.active");
+    renderTop(topTab ? topTab.dataset.tab : "balance");
   renderFair();
 }
 
@@ -525,6 +653,7 @@ async function loadState() {
   state.botUsername = data.bot_username || "";
   state.settings = data.settings || state.settings;
   state.isAdmin = !!data.is_admin;
+  state.quests = data.quests || state.quests;
   const adminNav = $("adminNav");
   if (adminNav) adminNav.hidden = !state.isAdmin;
   state.referrals = data.referrals;
@@ -665,7 +794,8 @@ async function loadTop() {
     state.leaderboard.by_balance = data.by_balance;
     state.leaderboard.by_multiplier = data.by_multiplier;
     state.leaderboard.me = data.me;
-    renderTop(document.querySelector(".tab.active").dataset.tab);
+  const topTab = document.querySelector("#view-top .tab.active");
+  renderTop(topTab ? topTab.dataset.tab : "balance");
   } catch (e) {}
 }
 
@@ -682,9 +812,9 @@ function bind() {
     btn.addEventListener("click", () => switchView(btn.dataset.view))
   );
 
-  document.querySelectorAll(".tab").forEach((tab) =>
+  document.querySelectorAll("#view-top .tab").forEach((tab) =>
     tab.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+      document.querySelectorAll("#view-top .tab").forEach((t) => t.classList.remove("active"));
       tab.classList.add("active");
       renderTop(tab.dataset.tab);
     })
@@ -810,6 +940,53 @@ function bind() {
   });
 
   $("saveSettings").addEventListener("click", saveAdminSettings);
+
+  document.querySelectorAll("#gameSwitch .gs-btn").forEach((btn) =>
+    btn.addEventListener("click", () => switchGame(btn.dataset.game)));
+
+  document.querySelectorAll("[data-pick]").forEach((btn) =>
+    btn.addEventListener("click", () => playDice(btn.dataset.pick)));
+
+  document.querySelectorAll("[data-dbet]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const input = $("diceBet");
+      let v = parseInt(input.value, 10) || 0;
+      const mode = btn.dataset.dbet;
+      if (mode === "half") v = Math.floor(v / 2);
+      if (mode === "double") v = v * 2;
+      if (mode === "max") v = state.user ? state.user.balance : 1000;
+      input.value = clampBet(v);
+      haptic();
+    }));
+
+  document.querySelectorAll("[data-wbet]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const input = $("wheelBet");
+      let v = parseInt(input.value, 10) || 0;
+      const mode = btn.dataset.wbet;
+      if (mode === "half") v = Math.floor(v / 2);
+      if (mode === "double") v = v * 2;
+      if (mode === "max") v = state.user ? state.user.balance : 1000;
+      input.value = clampBet(v);
+      haptic();
+    }));
+
+  $("wheelSpin").addEventListener("click", spinWheel);
+
+  $("questsList").addEventListener("click", async (e) => {
+    const btn = e.target.closest(".quest-claim");
+    if (!btn || btn.disabled) return;
+    try {
+      const data = await api("/api/quests/claim", { key: btn.dataset.quest });
+      state.quests = data.quests || state.quests;
+      state.user.balance = data.balance;
+      sfx.cash();
+      toast(`Награда +${fmt(data.reward)} сапов`);
+      renderAll();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
 }
 
 async function init() {

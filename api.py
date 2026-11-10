@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import math
 import secrets
 import time
 import uuid
@@ -146,6 +147,7 @@ class Api:
                 "client_seed": user["client_seed"],
                 "nonce": user["nonce"],
             },
+            "quests": self._quests_view(user),
             "active_round": None,
         }
         if active:
@@ -419,6 +421,140 @@ class Api:
             "mines": rnd["mines"],
         })
 
+    # --- другие игры -----------------------------------------------------
+    def _bet_error(self, user: dict, bet: int) -> str | None:
+        if user.get("is_banned"):
+            return "Аккаунт заблокирован"
+        settings = self._settings()
+        if int(settings.get("maintenance", 0)) and not self._is_admin(user):
+            return "Идут технические работы — игра скоро вернётся"
+        min_bet = int(settings.get("min_bet", game.MIN_BET))
+        max_bet = int(settings.get("max_bet", game.MAX_BET))
+        if not (min_bet <= bet <= max_bet):
+            return f"Ставка от {min_bet} до {max_bet}"
+        if user["balance"] < bet:
+            return "Недостаточно средств"
+        return None
+
+    async def dice(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        body = await self._body(request)
+        try:
+            bet = int(body.get("bet", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректная ставка")
+        pick = str(body.get("pick", "even")).lower()
+        if pick not in ("even", "odd"):
+            return self._fail("Выберите «чёт» или «нечёт»")
+        error = self._bet_error(user, bet)
+        if error:
+            return self._fail(error, 403 if user.get("is_banned") else 400)
+
+        nonce = self.db.bump_nonce(user["user_id"])
+        roll = game.roll_dice(user["server_seed"], user["client_seed"], nonce)
+        is_even = roll % 2 == 0
+        win = is_even if pick == "even" else not is_even
+        multiplier = game.DICE_MULTIPLIER if win else 0.0
+        payout = int(math.floor(bet * multiplier)) if win else 0
+
+        self.db.add_balance(user["user_id"], payout - bet)
+        self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "dice", bet, win, payout,
+                         {"roll": roll, "pick": pick, "nonce": nonce})
+        self.db.finish_stats(user["user_id"], bet, payout, multiplier or 1.0)
+        self._settle_referral(user["user_id"])
+
+        return self._json({
+            "ok": True,
+            "roll": roll,
+            "pick": pick,
+            "win": win,
+            "multiplier": multiplier,
+            "payout": payout,
+            "balance": self.db.user(user["user_id"])["balance"],
+            "quests": self._quests_view(user),
+        })
+
+    async def wheel(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        body = await self._body(request)
+        try:
+            bet = int(body.get("bet", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректная ставка")
+        error = self._bet_error(user, bet)
+        if error:
+            return self._fail(error, 403 if user.get("is_banned") else 400)
+
+        nonce = self.db.bump_nonce(user["user_id"])
+        index, multiplier = game.spin_wheel(user["server_seed"], user["client_seed"], nonce)
+        payout = int(math.floor(bet * multiplier)) if multiplier > 0 else 0
+
+        self.db.add_balance(user["user_id"], payout - bet)
+        self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "wheel", bet,
+                         multiplier > 0, payout, {"segment": index, "nonce": nonce})
+        self.db.finish_stats(user["user_id"], bet, payout, multiplier or 1.0)
+        self._settle_referral(user["user_id"])
+
+        return self._json({
+            "ok": True,
+            "segment": index,
+            "multiplier": multiplier,
+            "payout": payout,
+            "balance": self.db.user(user["user_id"])["balance"],
+            "segments": game.WHEEL_SEGMENTS,
+            "quests": self._quests_view(user),
+        })
+
+    # --- квесты ----------------------------------------------------------
+    def _quests_view(self, user: dict) -> list[dict]:
+        day = game.day_key()
+        stats = self.db.day_stats(user["user_id"], game.day_start())
+        claimed = self.db.claimed_quests(user["user_id"], day)
+        items = []
+        for quest in game.DAILY_QUESTS:
+            progress = min(quest["target"], int(stats.get(quest["metric"], 0)))
+            items.append({
+                "key": quest["key"],
+                "title": quest["title"],
+                "target": quest["target"],
+                "reward": quest["reward"],
+                "progress": progress,
+                "ready": progress >= quest["target"] and quest["key"] not in claimed,
+                "claimed": quest["key"] in claimed,
+            })
+        return items
+
+    async def quests(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        return self._json({"ok": True, "day": game.day_key(),
+                           "items": self._quests_view(user)})
+
+    async def quest_claim(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        key = str(body.get("key", ""))
+        quest = next((q for q in game.DAILY_QUESTS if q["key"] == key), None)
+        if not quest:
+            return self._fail("Неизвестное задание", 404)
+        stats = self.db.day_stats(user["user_id"], game.day_start())
+        if int(stats.get(quest["metric"], 0)) < quest["target"]:
+            return self._fail("Задание ещё не выполнено")
+        if not self.db.claim_quest(user["user_id"], game.day_key(), key):
+            return self._fail("Награда уже получена")
+        balance = self.db.add_balance(user["user_id"], quest["reward"])
+        return self._json({"ok": True, "reward": quest["reward"], "balance": balance,
+                           "quests": self._quests_view(user)})
+
     # --- admin -----------------------------------------------------------
     @staticmethod
     async def _body(request: web.Request) -> dict:
@@ -555,6 +691,10 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/fairness", api.fairness)
     app.router.add_post("/api/fairness/rotate", api.fairness_rotate)
     app.router.add_post("/api/fairness/verify", api.verify_round)
+    app.router.add_post("/api/games/dice", api.dice)
+    app.router.add_post("/api/games/wheel", api.wheel)
+    app.router.add_post("/api/quests", api.quests)
+    app.router.add_post("/api/quests/claim", api.quest_claim)
     app.router.add_post("/api/admin/overview", api.admin_overview)
     app.router.add_post("/api/admin/users", api.admin_users)
     app.router.add_post("/api/admin/balance", api.admin_balance)

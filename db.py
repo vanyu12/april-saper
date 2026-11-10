@@ -54,6 +54,28 @@ SCHEMA_STATEMENTS = [
         value TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS plays (
+        id         TEXT PRIMARY KEY,
+        user_id    INTEGER NOT NULL,
+        game       TEXT NOT NULL,
+        bet        INTEGER NOT NULL,
+        win        INTEGER NOT NULL DEFAULT 0,
+        payout     INTEGER NOT NULL DEFAULT 0,
+        detail     TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_plays_user ON plays(user_id, created_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS quest_claims (
+        user_id    INTEGER NOT NULL,
+        day        TEXT NOT NULL,
+        quest      TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, day, quest)
+    )
+    """,
 ]
 
 DEFAULT_SETTINGS = {
@@ -445,3 +467,55 @@ class Database:
         sql += " ORDER BY r.created_at DESC LIMIT ?"
         params.append(int(limit))
         return self._rows(sql, tuple(params))
+
+    # --- other games -----------------------------------------------------
+    def add_play(self, play_id: str, user_id: int, game_name: str, bet: int,
+                 win: bool, payout: int, detail: dict) -> None:
+        self._exec(
+            """INSERT INTO plays (id, user_id, game, bet, win, payout, detail, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (play_id, user_id, game_name, bet, 1 if win else 0, payout,
+             json.dumps(detail, ensure_ascii=False), int(time.time())),
+        )
+
+    def plays(self, user_id: int, limit: int = 20) -> list[dict]:
+        return self._rows(
+            """SELECT id, game, bet, win, payout, detail, created_at FROM plays
+               WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?""",
+            (user_id, int(limit)),
+        )
+
+    def day_stats(self, user_id: int, since: int) -> dict:
+        rounds = self._row(
+            """SELECT COUNT(*) AS games,
+                      COALESCE(SUM(bet), 0) AS wagered,
+                      COALESCE(SUM(payout), 0) AS won,
+                      COALESCE(SUM(CASE WHEN payout > 0 THEN 1 ELSE 0 END), 0) AS wins
+               FROM rounds WHERE user_id = ? AND status != 'active' AND created_at >= ?""",
+            (user_id, since))
+        plays = self._row(
+            """SELECT COUNT(*) AS games,
+                      COALESCE(SUM(bet), 0) AS wagered,
+                      COALESCE(SUM(payout), 0) AS won,
+                      COALESCE(SUM(CASE WHEN win = 1 THEN 1 ELSE 0 END), 0) AS wins
+               FROM plays WHERE user_id = ? AND created_at >= ?""",
+            (user_id, since))
+        return {
+            "games": (rounds["games"] if rounds else 0) + (plays["games"] if plays else 0),
+            "wins": (rounds["wins"] if rounds else 0) + (plays["wins"] if plays else 0),
+            "wagered": (rounds["wagered"] if rounds else 0) + (plays["wagered"] if plays else 0),
+            "won": (rounds["won"] if rounds else 0) + (plays["won"] if plays else 0),
+        }
+
+    def claimed_quests(self, user_id: int, day: str) -> set[str]:
+        rows = self._rows(
+            "SELECT quest FROM quest_claims WHERE user_id = ? AND day = ?", (user_id, day))
+        return {row["quest"] for row in rows}
+
+    def claim_quest(self, user_id: int, day: str, quest: str) -> bool:
+        changed = self._exec(
+            """INSERT INTO quest_claims (user_id, day, quest, created_at)
+               VALUES (?, ?, ?, ?) ON CONFLICT (user_id, day, quest) DO NOTHING""",
+            (user_id, day, quest, int(time.time())),
+        )
+        return bool(changed)
