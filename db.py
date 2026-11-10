@@ -91,7 +91,7 @@ DEFAULT_SETTINGS = {
     "max_bet": "100000",
     "min_mines": "1",
     "max_mines": "24",
-    "daily_bonus": "500",
+    "daily_bonus": "300",
     "maintenance": "0",
 }
 
@@ -189,6 +189,14 @@ class Database:
                 "ON CONFLICT (key) DO NOTHING",
                 (key, value),
             )
+        marker = self._row("SELECT value FROM settings WHERE key = 'economy_version'")
+        if not marker:
+            self._exec(
+                "UPDATE settings SET value = ? WHERE key = 'daily_bonus' AND value = '500'",
+                ("300",))
+            self._exec(
+                "INSERT INTO settings (key, value) VALUES ('economy_version', '1') "
+                "ON CONFLICT (key) DO NOTHING")
 
     # --- users -----------------------------------------------------------
     def ensure_user(self, user_id: int, username: str | None, first_name: str | None,

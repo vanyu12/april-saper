@@ -9,7 +9,7 @@ RTP = 0.99
 MIN_BET = 10
 MAX_BET = 100_000
 START_BALANCE = 1000
-DAILY_BONUS = 500
+DAILY_BONUS = 300
 DAILY_COOLDOWN = 24 * 60 * 60
 REF_BONUS = 500
 REF_GAMES_REQUIRED = 5
@@ -123,26 +123,52 @@ DAILY_QUESTS = (
 )
 
 SHOP_ITEMS = (
-    {"key": "insurance", "title": "Страховка", "price": 400,
-     "desc": "Возвращает 50% ставки при следующем проигрыше"},
-    {"key": "double_daily", "title": "Двойной бонус", "price": 600,
+    {"key": "insurance", "title": "Страховка", "price": 120, "category": "items",
+     "desc": "Возврат 25% ставки при проигрыше, максимум 200 сапов"},
+    {"key": "double_daily", "title": "Двойной бонус", "price": 250, "category": "items",
      "desc": "Следующий ежедневный бонус ×2"},
-    {"key": "charm", "title": "Талисман удачи", "price": 900,
+    {"key": "charm", "title": "Талисман удачи", "price": 350, "category": "items",
      "desc": "+10% к выплате на 5 выигрышей"},
+    {"key": "relic_mines", "title": "Реликвия сапёра", "price": 4000, "category": "relics",
+     "desc": "Навсегда +5% к выплатам в «Сапёре»"},
+    {"key": "relic_dice", "title": "Кости судьбы", "price": 2500, "category": "relics",
+     "desc": "Навсегда +5% к выплатам в «Костях»"},
+    {"key": "relic_wheel", "title": "Колесо фортуны", "price": 3000, "category": "relics",
+     "desc": "Навсегда +5% к выплатам в «Колесе»"},
+    {"key": "relic_crash", "title": "Краш-модуль", "price": 3000, "category": "relics",
+     "desc": "Навсегда +5% к выплатам в «Краше»"},
+    {"key": "theme_neon", "title": "Неоновая тема", "price": 1500, "category": "cosmetics",
+     "desc": "Бирюзовые акценты интерфейса"},
+    {"key": "theme_gold", "title": "Золотые клетки", "price": 2000, "category": "cosmetics",
+     "desc": "Золотая подсветка безопасных клеток"},
 )
 
 SHOP_BUNDLES = (
-    {"key": "starter", "title": "Набор новичка", "price": 1100,
-     "desc": "2 страховки + двойной бонус",
-     "items": {"insurance": 2, "double_daily": 1}},
-    {"key": "pro", "title": "Набор сапёра", "price": 2000,
-     "desc": "Талисман и 3 страховки",
-     "items": {"charm": 1, "insurance": 3}},
+    {"key": "starter", "title": "Набор новичка", "price": 320, "category": "bundles",
+     "desc": "Страховка и двойной бонус", "items": {"insurance": 1, "double_daily": 1}},
+    {"key": "pro", "title": "Набор сапёра", "price": 520, "category": "bundles",
+     "desc": "Талисман и две страховки", "items": {"charm": 1, "insurance": 2}},
+    {"key": "relic_set", "title": "Набор реликвий", "price": 8000, "category": "bundles",
+     "desc": "Реликвия сапёра и краш-модуль со скидкой",
+     "items": {"relic_mines": 1, "relic_crash": 1}},
 )
 
-INSURANCE_REFUND = 0.5
+INSURANCE_REFUND = 0.25
+INSURANCE_CAP = 200
 CHARM_BONUS = 0.1
 CHARM_CHARGES = 5
+
+RELIC_BONUS = 0.05
+GAME_RELICS = {
+    "mines": "relic_mines",
+    "dice": "relic_dice",
+    "wheel": "relic_wheel",
+    "crash": "relic_crash",
+}
+
+CRASH_RTP = 0.99
+CRASH_MIN = 1.2
+CRASH_MAX = 10.0
 
 
 def day_key() -> str:
@@ -169,3 +195,10 @@ def spin_wheel(server_seed: str, client_seed: str, nonce: int) -> tuple[int, flo
         if point < acc:
             return index, segment["multiplier"]
     return len(WHEEL_SEGMENTS) - 1, WHEEL_SEGMENTS[-1]["multiplier"]
+
+
+def crash_point(server_seed: str, client_seed: str, nonce: int) -> float:
+    """Точка краша: P(точка ≥ m) = 0.99 / m, поэтому EV ставки равен 0.99."""
+    value = next(_floats(server_seed, client_seed, nonce, 0, 1))
+    value = min(max(value, 1e-6), 0.999999)
+    return max(1.0, math.floor((CRASH_RTP / value) * 100) / 100)

@@ -516,6 +516,7 @@ function switchGame(name) {
   document.querySelectorAll(".game-pane").forEach((pane) =>
     pane.classList.toggle("active", pane.id === "game-pane-" + name));
   if (name === "wheel") renderWheel();
+  if (name === "crash") renderCrashTarget();
 }
 
 function clampBet(value) {
@@ -673,7 +674,17 @@ async function spinWheel() {
 
 /* ---------- магазин ---------- */
 
-const INV_LABELS = { insurance: "🛡 Страховка", double_daily: "×2 Бонус", charm: "🍀 Талисман" };
+const INV_LABELS = {
+  insurance: "🛡 Страховка",
+  double_daily: "×2 Бонус",
+  charm: "🍀 Талисман",
+  relic_mines: "💣 Реликвия сапёра",
+  relic_dice: "🎲 Кости судьбы",
+  relic_wheel: "🎡 Колесо фортуны",
+  relic_crash: "📈 Краш-модуль",
+  theme_neon: "🎨 Неон",
+  theme_gold: "🏅 Золото",
+};
 
 function renderShopInventory() {
   const box = $("shopInventory");
@@ -687,15 +698,22 @@ function renderShopInventory() {
     : '<span class="muted">Инвентарь пуст — купи предмет ниже.</span>';
 }
 
+const SHOP_SECTIONS = [
+  { key: "items", title: "Расходники" },
+  { key: "relics", title: "Реликвии" },
+  { key: "cosmetics", title: "Косметика" },
+];
+
 function shopCard(entry) {
-  return `<div class="shop-card">
+  const owned = !!entry.owned;
+  return `<div class="shop-card${owned ? " owned" : ""}">
     <div class="shop-meta">
-      <div class="shop-title">${escapeHtml(entry.title)}</div>
+      <div class="shop-title">${escapeHtml(entry.title)}${owned ? ' <span class="owned-mark">✓</span>' : ""}</div>
       <div class="shop-desc">${escapeHtml(entry.desc)}</div>
     </div>
-    <button class="shop-buy" data-key="${entry.key}">
-      <span class="shop-price">◈ ${fmt(entry.price)}</span>
-      Купить
+    <button class="shop-buy" data-key="${entry.key}" ${owned ? "disabled" : ""}>
+      <span class="shop-price">${owned ? "Куплено" : "◈ " + fmt(entry.price)}</span>
+      ${owned ? "Есть" : "Купить"}
     </button>
   </div>`;
 }
@@ -703,10 +721,25 @@ function shopCard(entry) {
 function renderShop() {
   const shop = state.shop || {};
   const items = $("shopItems");
+  if (items) {
+    const groups = [];
+    SHOP_SECTIONS.forEach((section) => {
+      const list = (shop.items || []).filter((item) => item.category === section.key);
+      if (!list.length) return;
+      groups.push(`<div class="shop-section">${section.title}</div>`);
+      groups.push(list.map(shopCard).join(""));
+    });
+    items.innerHTML = groups.join("");
+  }
   const bundles = $("shopBundles");
-  if (items) items.innerHTML = (shop.items || []).map(shopCard).join("");
   if (bundles) bundles.innerHTML = (shop.bundles || []).map(shopCard).join("");
   renderShopInventory();
+}
+
+function applyCosmetics() {
+  const inv = (state.shop && state.shop.inventory) || {};
+  document.body.classList.toggle("theme-neon", !!inv.theme_neon);
+  document.body.classList.toggle("theme-gold", !!inv.theme_gold);
 }
 
 async function loadShop() {
@@ -735,6 +768,57 @@ async function buyItem(key) {
   }
 }
 
+/* ---------- краш ---------- */
+
+function crashTarget() {
+  const slider = $("crashSlider");
+  return slider ? Math.round(Number(slider.value)) / 100 : 2;
+}
+
+function renderCrashTarget() {
+  const target = crashTarget();
+  const value = $("crashTargetValue");
+  const chance = $("crashChance");
+  if (value) value.textContent = fmtMult(target);
+  if (chance) chance.textContent = `шанс ${Math.round((0.99 / target) * 100)}%`;
+}
+
+async function playCrash() {
+  const input = $("crashBet");
+  const bet = clampBet(parseInt(input.value || "0", 10));
+  input.value = bet;
+  const target = crashTarget();
+  const btn = $("crashSpin");
+  const hint = $("crashResult");
+  btn.disabled = true;
+  hint.className = "crash-result";
+  hint.textContent = "Взлёт…";
+  try {
+    const data = await api("/api/games/crash", { bet, target });
+    state.user.balance = data.balance;
+    state.quests = data.quests || state.quests;
+    if (data.win) {
+      hint.textContent = `Краш на ${fmtMult(data.point)} — забрал ${fmt(data.payout)}`;
+      hint.className = "crash-result win";
+      sfx.cash();
+      haptic("success");
+      toast(`+${fmt(data.payout)} сапов`);
+    } else {
+      hint.textContent = `Краш на ${fmtMult(data.point)} — до ${fmtMult(data.target)} не дожило`;
+      hint.className = "crash-result lose";
+      sfx.boom();
+      haptic("error");
+    }
+    renderAll();
+  } catch (e) {
+    hint.textContent = e.message;
+    hint.className = "crash-result lose";
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function renderAll() {
   renderBalance();
   renderDaily();
@@ -745,6 +829,7 @@ function renderAll() {
   renderProfile();
   renderQuests();
   renderHistory();
+  applyCosmetics();
     const topTab = document.querySelector("#view-top .tab.active");
     renderTop(topTab ? topTab.dataset.tab : "balance");
   renderFair();
@@ -1080,6 +1165,21 @@ function bind() {
 
   $("wheelSpin").addEventListener("click", spinWheel);
 
+  document.querySelectorAll("[data-cbet]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const input = $("crashBet");
+      let v = parseInt(input.value, 10) || 0;
+      const mode = btn.dataset.cbet;
+      if (mode === "half") v = Math.floor(v / 2);
+      if (mode === "double") v = v * 2;
+      if (mode === "max") v = state.user ? state.user.balance : 1000;
+      input.value = clampBet(v);
+      haptic();
+    }));
+
+  $("crashSlider").addEventListener("input", renderCrashTarget);
+  $("crashSpin").addEventListener("click", playCrash);
+
   $("view-shop").addEventListener("click", (e) => {
     const btn = e.target.closest(".shop-buy");
     if (!btn || btn.disabled) return;
@@ -1119,6 +1219,7 @@ async function init() {
   if (soundBtn) soundBtn.textContent = state.sound ? "🔊" : "🔇";
 
   bind();
+  renderCrashTarget();
   renderControls();
   try {
     await loadState();

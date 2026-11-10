@@ -38,6 +38,7 @@
         <button class="gs-btn active" data-game="mines">💣 Сапёр</button>
         <button class="gs-btn" data-game="dice">🎲 Кости</button>
         <button class="gs-btn" data-game="wheel">🎡 Колесо</button>
+        <button class="gs-btn" data-game="crash">📈 Краш</button>
       </div>
 
       <div class="game-pane active" id="game-pane-mines">
@@ -148,6 +149,38 @@
           <div class="wheel-legend" id="wheelLegend"></div>
         </div>
       </div>
+
+      <div class="game-pane" id="game-pane-crash">
+        <div class="panel">
+          <div class="field-row">
+            <label class="field-label" for="crashBet">Ставка</label>
+            <div class="bet-controls">
+              <button class="chip-btn" data-cbet="half">½</button>
+              <button class="chip-btn" data-cbet="double">2×</button>
+              <button class="chip-btn" data-cbet="max">MAX</button>
+            </div>
+          </div>
+          <div class="bet-input-wrap">
+            <span class="coin">◈</span>
+            <input id="crashBet" type="number" inputmode="numeric" min="10" step="10" value="50">
+            <span class="bet-unit">сапов</span>
+          </div>
+
+          <div class="field-row">
+            <label class="field-label">Забрать на</label>
+            <span class="mines-value" id="crashTargetValue">×2,00</span>
+          </div>
+          <input class="slider" id="crashSlider" type="range" min="120" max="1000" step="5" value="200">
+          <div class="risk-line">
+            <span>×1,2</span>
+            <span id="crashChance">шанс 50%</span>
+            <span>×10</span>
+          </div>
+
+          <div class="crash-result" id="crashResult">Выберите ставку и множитель</div>
+          <button class="cta" id="crashSpin">Запустить</button>
+        </div>
+      </div>
     </section>
 
     <section class="view" id="view-profile">
@@ -203,7 +236,6 @@
       <div class="card-title page-title">Магазин</div>
       <div class="shop-inventory" id="shopInventory"></div>
       <div class="card">
-        <div class="card-title">Товары</div>
         <div class="shop-list" id="shopItems"></div>
       </div>
       <div class="card">

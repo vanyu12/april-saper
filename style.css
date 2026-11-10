@@ -1003,7 +1003,53 @@ body::before {
 
 .shop-buy .shop-price { font-size: 11px; opacity: 0.9; }
 .shop-buy:active { transform: scale(0.97); }
-.shop-buy[disabled] { opacity: 0.5; cursor: default; }
+.shop-buy[disabled] { opacity: 0.55; cursor: default; }
+
+.shop-section {
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 12px 2px 6px;
+}
+
+.shop-section:first-child { margin-top: 0; }
+
+.owned-mark { color: var(--mint); font-size: 12px; }
+.shop-card.owned { opacity: 0.88; }
+
+body.theme-neon { --mint: #24f0d0; --violet: #56b8ff; }
+
+body.theme-gold .cell.safe {
+  background: linear-gradient(160deg, rgba(255, 204, 77, 0.35), rgba(255, 204, 77, 0.12));
+  border-color: rgba(255, 204, 77, 0.6);
+  box-shadow: 0 0 16px rgba(255, 204, 77, 0.28);
+}
+
+/* компактная шапка на узких экранах */
+@media (max-width: 430px) {
+  .brand-sub { display: none; }
+  .brand-title { font-size: 14px; }
+  .topbar-right { gap: 6px; }
+  .balance-chip { padding: 7px 10px; font-size: 13px; }
+  .icon-btn, .daily-btn { width: 34px; height: 34px; font-size: 14px; }
+  .brand-mark { width: 34px; height: 34px; font-size: 16px; }
+  .gs-btn { font-size: 11px; padding: 9px 2px; }
+  .admin-actions .chip-btn { font-size: 10px; padding: 6px 7px; }
+}
+
+/* краш */
+.crash-result {
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  margin: 12px 0;
+  min-height: 18px;
+}
+
+.crash-result.win { color: var(--mint); }
+.crash-result.lose { color: var(--danger); }
+#crashSpin { margin-top: 2px; }
 
 /* квесты */
 .quests { display: flex; flex-direction: column; gap: 10px; }

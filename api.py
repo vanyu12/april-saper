@@ -280,6 +280,7 @@ class Api:
         payout = game.payout_for(rnd["bet"], mult) if finished else 0
         if finished:
             payout = self._charm_bonus(user, payout)
+            payout = self._apply_relic(user, "mines", payout)
         status = "won" if finished else "active"
         self.db.update_round(rnd["id"], opened, mult, status, payout)
 
@@ -316,6 +317,7 @@ class Api:
         mult = game.multiplier(rnd["mines"], len(rnd["opened"]))
         payout = game.payout_for(rnd["bet"], mult)
         payout = self._charm_bonus(user, payout)
+        payout = self._apply_relic(user, "mines", payout)
         self.db.update_round(rnd["id"], rnd["opened"], mult, "cashed", payout)
         balance = self.db.add_balance(user["user_id"], payout)
         self.db.finish_stats(user["user_id"], rnd["bet"], payout, mult)
@@ -471,6 +473,7 @@ class Api:
         refund = 0
         if win:
             payout = self._charm_bonus(user, payout)
+            payout = self._apply_relic(user, "dice", payout)
         else:
             refund = self._insurance_refund(user, bet)
 
@@ -511,6 +514,7 @@ class Api:
         refund = 0
         if multiplier > 0:
             payout = self._charm_bonus(user, payout)
+            payout = self._apply_relic(user, "wheel", payout)
         else:
             refund = self._insurance_refund(user, bet)
 
@@ -580,12 +584,14 @@ class Api:
     # --- магазин ---------------------------------------------------------
     def _inventory_view(self, user: dict) -> dict:
         inv = self.db.inventory(user["user_id"])
-        return {key: int(inv.get(key, 0)) for key in ("insurance", "double_daily", "charm")}
+        keys = {item["key"] for item in game.SHOP_ITEMS}
+        keys.update({"insurance", "double_daily", "charm"})
+        return {key: int(inv.get(key, 0)) for key in sorted(keys)}
 
     def _insurance_refund(self, user: dict, bet: int) -> int:
         if not self.db.take_item(user["user_id"], "insurance"):
             return 0
-        refund = int(bet * game.INSURANCE_REFUND)
+        refund = min(int(bet * game.INSURANCE_REFUND), game.INSURANCE_CAP)
         if refund > 0:
             self.db.add_balance(user["user_id"], refund)
         return refund
@@ -601,16 +607,85 @@ class Api:
         self.db.add_balance(user["user_id"], extra)
         return payout + extra
 
+    def _apply_relic(self, user: dict, game_key: str, payout: int) -> int:
+        if payout <= 0:
+            return payout
+        relic = game.GAME_RELICS.get(game_key)
+        if not relic or self.db.item_qty(user["user_id"], relic) <= 0:
+            return payout
+        bonus = int(payout * game.RELIC_BONUS)
+        if bonus <= 0:
+            return payout
+        self.db.add_balance(user["user_id"], bonus)
+        return payout + bonus
+
+    async def crash(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        body = await self._body(request)
+        try:
+            bet = int(body.get("bet", 0))
+            target = float(body.get("target", 2.0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректная ставка")
+        if not (game.CRASH_MIN <= target <= game.CRASH_MAX):
+            return self._fail(f"Множитель от {game.CRASH_MIN} до {game.CRASH_MAX}")
+        error = self._bet_error(user, bet)
+        if error:
+            return self._fail(error, 403 if user.get("is_banned") else 400)
+
+        nonce = self.db.bump_nonce(user["user_id"])
+        point = game.crash_point(user["server_seed"], user["client_seed"], nonce)
+        win = point >= target
+        multiplier = target if win else 0.0
+        payout = int(math.floor(bet * multiplier)) if win else 0
+        refund = 0
+        if win:
+            payout = self._charm_bonus(user, payout)
+            payout = self._apply_relic(user, "crash", payout)
+        else:
+            refund = self._insurance_refund(user, bet)
+
+        self.db.add_balance(user["user_id"], payout - bet)
+        self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "crash", bet, win, payout,
+                         {"point": point, "target": target, "nonce": nonce})
+        self.db.finish_stats(user["user_id"], bet, payout, multiplier or 1.0)
+        self._settle_referral(user["user_id"])
+
+        return self._json({
+            "ok": True,
+            "point": point,
+            "target": target,
+            "win": win,
+            "multiplier": multiplier,
+            "payout": payout,
+            "refund": refund,
+            "balance": self.db.user(user["user_id"])["balance"],
+            "quests": self._quests_view(user),
+        })
+
     async def shop(self, request: web.Request) -> web.Response:
         user = self._auth(request)
         if not user:
             return self._fail("unauthorized", 401)
+        inv = self.db.inventory(user["user_id"])
+        items = []
+        for item in game.SHOP_ITEMS:
+            entry = dict(item)
+            entry["owned"] = inv.get(item["key"], 0) > 0
+            items.append(entry)
+        bundles = []
+        for bundle in game.SHOP_BUNDLES:
+            entry = dict(bundle)
+            entry["owned"] = all(inv.get(key, 0) > 0 for key in bundle["items"])
+            bundles.append(entry)
         return self._json({
             "ok": True,
             "balance": user["balance"],
             "inventory": self._inventory_view(user),
-            "items": [dict(item) for item in game.SHOP_ITEMS],
-            "bundles": [dict(bundle) for bundle in game.SHOP_BUNDLES],
+            "items": items,
+            "bundles": bundles,
         })
 
     async def shop_buy(self, request: web.Request) -> web.Response:
@@ -630,6 +705,11 @@ class Api:
             entry = bundle
             grant = dict(bundle["items"])
         price = int(entry["price"])
+        unique = {"relic_mines", "relic_dice", "relic_wheel", "relic_crash",
+                  "theme_neon", "theme_gold"}
+        for item_key in (grant or {}):
+            if item_key in unique and self.db.item_qty(user["user_id"], item_key) > 0:
+                return self._fail("Этот предмет уже куплен")
         if user["balance"] < price:
             return self._fail("Недостаточно сапов")
         balance = self.db.add_balance(user["user_id"], -price)
@@ -782,6 +862,7 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/fairness/verify", api.verify_round)
     app.router.add_post("/api/games/dice", api.dice)
     app.router.add_post("/api/games/wheel", api.wheel)
+    app.router.add_post("/api/games/crash", api.crash)
     app.router.add_post("/api/quests", api.quests)
     app.router.add_post("/api/quests/claim", api.quest_claim)
     app.router.add_post("/api/shop", api.shop)
