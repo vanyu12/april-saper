@@ -29,7 +29,10 @@ SCHEMA_STATEMENTS = [
         photo_url        TEXT NOT NULL DEFAULT '',
         last_hourly      INTEGER NOT NULL DEFAULT 0,
         last_spin        INTEGER NOT NULL DEFAULT 0,
-        spin_day         INTEGER NOT NULL DEFAULT 1
+        spin_day         INTEGER NOT NULL DEFAULT 1,
+        xp               INTEGER NOT NULL DEFAULT 0,
+        duels_played     INTEGER NOT NULL DEFAULT 0,
+        duels_won        INTEGER NOT NULL DEFAULT 0
     )
     """,
     """
@@ -46,6 +49,7 @@ SCHEMA_STATEMENTS = [
         server_seed    TEXT NOT NULL,
         client_seed    TEXT NOT NULL,
         nonce          INTEGER NOT NULL,
+        auto_target    REAL NOT NULL DEFAULT 0,
         created_at     INTEGER NOT NULL,
         finished_at    INTEGER
     )
@@ -119,6 +123,31 @@ SCHEMA_STATEMENTS = [
         PRIMARY KEY (user_id, channel)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS user_achievements (
+        user_id    INTEGER NOT NULL,
+        key        TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, key)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS duels (
+        id              TEXT PRIMARY KEY,
+        challenger_id   INTEGER NOT NULL,
+        opponent_id     INTEGER NOT NULL,
+        bet             INTEGER NOT NULL,
+        status          TEXT NOT NULL DEFAULT 'pending',
+        challenger_roll INTEGER,
+        opponent_roll   INTEGER,
+        winner_id       INTEGER,
+        rake            INTEGER NOT NULL DEFAULT 0,
+        created_at      INTEGER NOT NULL,
+        finished_at     INTEGER
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_duels_status ON duels(status, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_duels_users ON duels(challenger_id, opponent_id)",
 ]
 
 DEFAULT_SETTINGS = {
@@ -132,6 +161,8 @@ DEFAULT_SETTINGS = {
     "game_dice": "1",
     "game_wheel": "1",
     "game_crash": "1",
+    "game_roulette": "1",
+    "game_slots": "1",
 }
 
 
@@ -235,9 +266,15 @@ class Database:
             ("last_hourly", "INTEGER NOT NULL DEFAULT 0"),
             ("last_spin", "INTEGER NOT NULL DEFAULT 0"),
             ("spin_day", "INTEGER NOT NULL DEFAULT 1"),
+            ("xp", "INTEGER NOT NULL DEFAULT 0"),
+            ("duels_played", "INTEGER NOT NULL DEFAULT 0"),
+            ("duels_won", "INTEGER NOT NULL DEFAULT 0"),
         ):
             if name not in present:
                 self._exec(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
+        if "auto_target" not in self._table_columns("rounds"):
+            self._exec(
+                "ALTER TABLE rounds ADD COLUMN auto_target REAL NOT NULL DEFAULT 0")
         for key, value in DEFAULT_SETTINGS.items():
             self._exec(
                 "INSERT INTO settings (key, value) VALUES (?, ?) "
@@ -297,6 +334,83 @@ class Database:
             row = self._row("SELECT balance FROM users WHERE user_id = ?", (user_id,))
             return row["balance"] if row else 0
 
+    def add_xp(self, user_id: int, amount: int) -> int:
+        with self._lock:
+            self._exec("UPDATE users SET xp = xp + ? WHERE user_id = ?",
+                       (int(amount), user_id))
+            row = self._row("SELECT xp FROM users WHERE user_id = ?", (user_id,))
+            return int(row["xp"]) if row else 0
+
+    def user_achievements(self, user_id: int) -> set[str]:
+        rows = self._rows("SELECT key FROM user_achievements WHERE user_id = ?",
+                          (user_id,))
+        return {row["key"] for row in rows}
+
+    def claim_achievement(self, user_id: int, key: str) -> bool:
+        changed = self._exec(
+            "INSERT INTO user_achievements (user_id, key, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (user_id, key) DO NOTHING",
+            (user_id, key, int(time.time())))
+        return bool(changed)
+
+    def count_deposits(self, user_id: int) -> int:
+        row = self._row("SELECT COUNT(*) AS c FROM deposits WHERE user_id = ?",
+                        (user_id,))
+        return int(row["c"]) if row else 0
+
+    # --- дуэли -----------------------------------------------------------
+    def user_by_username(self, username: str) -> dict | None:
+        name = (username or "").lstrip("@").strip()
+        if not name:
+            return None
+        return self._row("SELECT * FROM users WHERE LOWER(username) = LOWER(?)",
+                         (name,))
+
+    def create_duel(self, duel_id: str, challenger_id: int, opponent_id: int,
+                    bet: int, now: int) -> None:
+        self._exec(
+            """INSERT INTO duels (id, challenger_id, opponent_id, bet, status, created_at)
+               VALUES (?, ?, ?, ?, 'pending', ?)""",
+            (duel_id, challenger_id, opponent_id, bet, now))
+
+    def duel(self, duel_id: str) -> dict | None:
+        return self._row("SELECT * FROM duels WHERE id = ?", (duel_id,))
+
+    def pending_duel_for(self, user_id: int) -> dict | None:
+        return self._row(
+            """SELECT * FROM duels WHERE status = 'pending'
+               AND (challenger_id = ? OR opponent_id = ?)
+               ORDER BY created_at DESC LIMIT 1""", (user_id, user_id))
+
+    def close_duel(self, duel_id: str, status: str, now: int) -> bool:
+        changed = self._exec(
+            "UPDATE duels SET status = ?, finished_at = ? "
+            "WHERE id = ? AND status = 'pending'",
+            (status, now, duel_id))
+        return bool(changed)
+
+    def finish_duel(self, duel_id: str, challenger_roll: int, opponent_roll: int,
+                    winner_id: int | None, rake: int, now: int) -> bool:
+        changed = self._exec(
+            """UPDATE duels SET status = 'finished', challenger_roll = ?,
+                   opponent_roll = ?, winner_id = ?, rake = ?, finished_at = ?
+               WHERE id = ? AND status = 'pending'""",
+            (challenger_roll, opponent_roll, winner_id, rake, now, duel_id))
+        return bool(changed)
+
+    def add_duel_stats(self, user_id: int, won: bool) -> None:
+        self._exec(
+            "UPDATE users SET duels_played = duels_played + 1, "
+            "duels_won = duels_won + ? WHERE user_id = ?",
+            (1 if won else 0, user_id))
+
+    def top_duelists(self, limit: int = 10) -> list[dict]:
+        return self._rows(
+            """SELECT user_id, username, first_name, photo_url, duels_played, duels_won
+               FROM users WHERE duels_played > 0
+               ORDER BY duels_won DESC, duels_played ASC, user_id LIMIT ?""",
+            (int(limit),))
+
     def bump_nonce(self, user_id: int) -> int:
         with self._lock:
             self._exec("UPDATE users SET nonce = nonce + 1 WHERE user_id = ?", (user_id,))
@@ -318,13 +432,14 @@ class Database:
     # --- rounds ----------------------------------------------------------
     def create_round(self, round_id: str, user_id: int, bet: int, mines: int,
                      positions: list[int], server_seed: str, client_seed: str,
-                     nonce: int) -> None:
+                     nonce: int, auto_target: float = 0) -> None:
         self._exec(
             """INSERT INTO rounds (id, user_id, bet, mines, mine_positions, opened,
-                   multiplier, status, payout, server_seed, client_seed, nonce, created_at)
-               VALUES (?, ?, ?, ?, ?, '[]', 1.0, 'active', 0, ?, ?, ?, ?)""",
+                   multiplier, status, payout, server_seed, client_seed, nonce,
+                   auto_target, created_at)
+               VALUES (?, ?, ?, ?, ?, '[]', 1.0, 'active', 0, ?, ?, ?, ?, ?)""",
             (round_id, user_id, bet, mines, json.dumps(positions), server_seed,
-             client_seed, nonce, int(time.time())),
+             client_seed, nonce, float(auto_target or 0), int(time.time())),
         )
 
     def round(self, round_id: str) -> dict | None:

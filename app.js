@@ -6,6 +6,7 @@ const state = {
   mines: 3,
   bet: 50,
   lastBet: 50,
+  autoTarget: 0,
   settings: { min_bet: 10, max_bet: 100000, min_mines: 1, max_mines: 24, daily_bonus: 500, maintenance: 0 },
   isAdmin: false,
   sound: true,
@@ -14,6 +15,7 @@ const state = {
   shop: { items: [], bundles: [], inventory: {} },
   leaderboard: { by_balance: [], by_multiplier: [], me: 0 },
   history: [],
+  achievements: [],
   referrals: { total: 0, active: 0 },
   invites: { total: 0, ladder: [] },
   sponsors: [],
@@ -71,6 +73,58 @@ const sfx = {
   cash() { [660, 880, 1180].forEach((f, i) => setTimeout(() => tone(f, 0.12, "sine", 0.05), i * 80)); },
 };
 
+function confetti() {
+  const canvas = $("confetti");
+  if (!canvas) return;
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.floor(window.innerWidth * dpr);
+  canvas.height = Math.floor(window.innerHeight * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const colors = ["#7c5cff", "#2ee6a8", "#ffb02e", "#ff5d7a", "#f4f6ff"];
+  const parts = [];
+  for (let i = 0; i < 90; i++) {
+    parts.push({
+      x: window.innerWidth / 2 + (Math.random() - 0.5) * 180,
+      y: window.innerHeight * 0.42 + (Math.random() - 0.5) * 60,
+      vx: (Math.random() - 0.5) * 8,
+      vy: -Math.random() * 10 - 2,
+      size: 4 + Math.random() * 7,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      rot: Math.random() * Math.PI,
+      vr: (Math.random() - 0.5) * 0.35,
+      life: 70 + Math.floor(Math.random() * 45),
+    });
+  }
+  let frame = 0;
+  const tick = () => {
+    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    let alive = false;
+    for (const p of parts) {
+      if (p.life <= 0) continue;
+      alive = true;
+      p.life -= 1;
+      p.vy += 0.3;
+      p.x += p.vx;
+      p.y += p.vy;
+      p.rot += p.vr;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.life / 35));
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.62);
+      ctx.restore();
+    }
+    frame += 1;
+    if (alive && frame < 170) requestAnimationFrame(tick);
+    else ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+  };
+  requestAnimationFrame(tick);
+}
+
 function toast(text) {
   const el = $("toast");
   el.textContent = text;
@@ -127,7 +181,7 @@ function renderDaily() {
   const ready = state.user && state.user.daily_ready;
   btn.classList.toggle("ready", !!ready);
   btn.title = ready
-    ? `Забрать ${fmt(state.user.daily_amount || 300)} сапов`
+    ? `Забрать ${fmt(state.user.daily_amount || 300)} mCoin`
     : "Бонус уже получен";
 }
 
@@ -183,7 +237,7 @@ function renderTasks() {
               <div class="row-icon">👥</div>
               <div class="row-main">
                 <div class="row-title">Пригласи ${item.step} друзей</div>
-                <div class="row-sub">${fmt(item.reward)} сапов · приглашено ${invites.total}</div>
+                <div class="row-sub">${fmt(item.reward)} mCoin · приглашено ${invites.total}</div>
               </div>
               <button class="chip-btn" data-step="${item.step}"
                 ${item.claimed || !item.done ? "disabled" : ""}>${label}</button>
@@ -201,7 +255,7 @@ function renderTasks() {
         <div class="row-icon">📣</div>
         <div class="row-main">
           <div class="row-title">Подписка на ${escapeHtml(s.channel)}</div>
-          <div class="row-sub">+${fmt(s.reward)} сапов</div>
+          <div class="row-sub">+${fmt(s.reward)} mCoin</div>
         </div>
         <button class="chip-btn" data-channel="${escapeHtml(s.channel.replace("@", ""))}"
           ${s.claimed ? "disabled" : ""}>${s.claimed ? "Получено" : "Перейти"}</button>
@@ -229,7 +283,7 @@ function renderBank() {
     sbox.innerHTML = savings
       ? `<div class="row">
           <div class="row-main">
-            <div class="row-title">${fmt(savings.amount)} сапов</div>
+            <div class="row-title">${fmt(savings.amount)} mCoin</div>
             <div class="row-sub">начислено +${fmt(savings.accrued)} · 0,1% в день</div>
           </div>
           <div class="row-value">${fmt(savings.amount + savings.accrued)}</div>
@@ -246,7 +300,7 @@ function renderBank() {
           .map((d) => `<div class="row">
             <div class="row-icon ${d.ready ? "win" : "lose"}">🏦</div>
             <div class="row-main">
-              <div class="row-title">${fmt(d.amount)} сапов · ${String(d.rate_bps / 100).replace(".", ",")}%</div>
+              <div class="row-title">${fmt(d.amount)} mCoin · ${String(d.rate_bps / 100).replace(".", ",")}%</div>
               <div class="row-sub">${d.ready
                 ? "готов к закрытию"
                 : "закроется " + new Date(d.ends_at * 1000).toLocaleDateString("ru-RU")}</div>
@@ -270,7 +324,7 @@ function updateDepositHint() {
   const input = $("depositAmount");
   const amount = Math.max(0, parseInt(input && input.value ? input.value : "0", 10) || 0);
   const interest = Math.floor((amount * plan.rate_bps) / 10000);
-  hint.textContent = `${plan.days} дн. · ${String(plan.percent).replace(".", ",")}% → вернут ${fmt(amount + interest)} сапов`;
+  hint.textContent = `${plan.days} дн. · ${String(plan.percent).replace(".", ",")}% → вернут ${fmt(amount + interest)} mCoin`;
 }
 
 const HUB_GAMES = [
@@ -332,7 +386,7 @@ async function claimHourly() {
     sfx.coin();
     haptic("success");
     renderAll();
-    toast(`Бонус +${fmt(data.amount)} сапов`);
+    toast(`Бонус +${fmt(data.amount)} mCoin`);
   } catch (e) {
     toast(e.message);
   }
@@ -370,7 +424,7 @@ async function claimInvite(step) {
     const data = await api("/api/invites/claim", { step });
     sfx.cash();
     haptic("success");
-    toast(`Награда +${fmt(data.reward)} сапов`);
+    toast(`Награда +${fmt(data.reward)} mCoin`);
     await loadState();
   } catch (e) {
     toast(e.message);
@@ -383,7 +437,7 @@ async function claimSponsor(channel) {
     const data = await api("/api/sponsors/claim", { channel });
     sfx.cash();
     haptic("success");
-    toast(`Спонсор +${fmt(data.reward)} сапов`);
+    toast(`Спонсор +${fmt(data.reward)} mCoin`);
     await loadState();
   } catch (e) {
     toast(e.message);
@@ -435,7 +489,7 @@ async function depositClose(id) {
     state.deposits = data.deposits;
     haptic("success");
     renderAll();
-    toast(`Закрыто, +${fmt(data.payout)} сапов`);
+    toast(`Закрыто, +${fmt(data.payout)} mCoin`);
   } catch (e) {
     toast(e.message);
   }
@@ -544,10 +598,11 @@ function renderControls() {
     setup.classList.add("hidden");
     setup.style.display = "none";
     const payout = Math.floor(round.bet * round.multiplier);
-    cta.textContent = round.opened.length ? `Забрать ${fmt(payout)} сапов` : "Открой первую клетку";
+    cta.textContent = round.opened.length ? `Забрать ${fmt(payout)} mCoin` : "Открой первую клетку";
     cta.classList.add("cashout");
     cta.disabled = round.opened.length === 0;
-    $("hint").textContent = `Мин: ${round.mines} · ставка ${fmt(round.bet)}`;
+    const auto = round.auto_target ? ` · авто ${fmtMult(round.auto_target)}` : "";
+    $("hint").textContent = `Мин: ${round.mines} · ставка ${fmt(round.bet)}${auto}`;
   } else {
     setup.style.display = "";
     setup.classList.remove("hidden");
@@ -561,6 +616,7 @@ function renderControls() {
 
 function renderMines() {
   $("minesValue").textContent = state.mines;
+  if ($("autoTarget")) $("autoTarget").value = String(state.autoTarget || 0);
   $("minesSlider").value = state.mines;
   document.querySelectorAll("#minesChips .chip").forEach((c) => {
     c.classList.toggle("active", Number(c.dataset.mines) === Number(state.mines));
@@ -591,19 +647,25 @@ function renderProfile() {
   $("refActive").textContent = state.referrals.active || 0;
   $("refLink").textContent = botLink(u.ref_code);
 
-  const ach = [
-    { icon: "🎯", name: "Первая партия", done: u.games_played >= 1 },
-    { icon: "🔥", name: "10 партий", done: u.games_played >= 10 },
-    { icon: "💎", name: "Кэшаут ×2", done: (u.best_multiplier || 0) >= 2 },
-    { icon: "🏆", name: "Кэшаут ×10", done: (u.best_multiplier || 0) >= 10 },
-    { icon: "🧠", name: "100 партий", done: u.games_played >= 100 },
-  ];
-  $("achievements").innerHTML = ach
-    .map(
-      (a) =>
-        `<div class="ach ${a.done ? "done" : "locked"}"><div class="ach-icon">${a.icon}</div><div class="ach-name">${a.name}</div>${a.done ? '<div class="ach-check">✓</div>' : ""}</div>`
-    )
-    .join("");
+  $("levelBadge").textContent = u.level || 1;
+  $("levelTitle").textContent = `${u.level_title || "Новобранец"} · уровень ${u.level || 1}`;
+  $("levelSub").textContent = `${fmt(u.level_into || 0)} / ${fmt(u.level_need || 100)} XP`;
+  $("levelXp").textContent = `${fmt(u.xp || 0)} XP`;
+  $("xpFill").style.width = Math.max(0, Math.min(100, u.level_percent || 0)) + "%";
+
+  const ach = state.achievements || [];
+  $("achievements").innerHTML = ach.length
+    ? ach
+        .map((a) => {
+          const cls = a.claimed ? "done" : a.done ? "ready" : "locked";
+          return `<div class="ach ${cls}">
+            <div class="ach-icon">${a.icon}</div>
+            <div class="ach-name">${escapeHtml(a.title)}<span class="ach-desc">${escapeHtml(a.desc)} · ${a.progress}/${a.target}</span></div>
+            <div class="ach-reward">${a.claimed ? "✓" : "+" + fmt(a.reward)}</div>
+          </div>`;
+        })
+        .join("")
+    : '<div class="empty">Пока нет достижений</div>';
 }
 
 function botLink(code) {
@@ -625,7 +687,7 @@ function renderHistory() {
       return `<div class="row">
         <div class="row-icon ${win ? "win" : "lose"}">${win ? "💎" : "💥"}</div>
         <div class="row-main">
-          <div class="row-title">${fmt(r.bet)} сапов · ${r.mines} мин</div>
+          <div class="row-title">${fmt(r.bet)} mCoin · ${r.mines} мин</div>
           <div class="row-sub">${opened} клеток · ${date.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</div>
         </div>
         <div class="row-value ${win ? "plus" : "minus"}">${win ? "+" + fmt(r.payout) : "−" + fmt(r.bet)}</div>
@@ -649,7 +711,7 @@ function renderTop(tab) {
     rows = (state.leaderboard.by_balance || []).map((u, i) => ({
       place: i + 1,
       name: u.username || u.first_name || "id" + u.user_id,
-      value: fmt(u.balance) + " сапов",
+      value: fmt(u.balance) + " mCoin",
       id: u.user_id,
       photo: u.photo_url,
     }));
@@ -987,7 +1049,7 @@ async function playDice(pick) {
     if (data.win) {
       sfx.coin();
       haptic("success");
-      toast(`+${fmt(data.payout)} сапов`);
+      toast(`+${fmt(data.payout)} mCoin`);
     } else {
       sfx.boom();
       haptic("error");
@@ -1030,7 +1092,7 @@ async function spinWheel() {
       hint.className = "wheel-result win";
       sfx.cash();
       haptic("success");
-      toast(`+${fmt(data.payout)} сапов`);
+      toast(`+${fmt(data.payout)} mCoin`);
     } else {
       hint.textContent = "Пустой сектор — ставка сгорела";
       hint.className = "wheel-result lose";
@@ -1177,7 +1239,7 @@ async function playCrash() {
       hint.className = "crash-result win";
       sfx.cash();
       haptic("success");
-      toast(`+${fmt(data.payout)} сапов`);
+      toast(`+${fmt(data.payout)} mCoin`);
     } else {
       hint.textContent = `Краш на ${fmtMult(data.point)} — до ${fmtMult(data.target)} не дожило`;
       hint.className = "crash-result lose";
@@ -1219,7 +1281,15 @@ function renderAll() {
 
 async function loadState() {
   const data = await api("/api/state");
+  const prevUser = state.user;
+  const prevClaimed = new Set(
+    (state.achievements || []).filter((a) => a.claimed).map((a) => a.key)
+  );
   state.user = data.user;
+  if (prevUser && data.user.level > (prevUser.level || 1)) {
+    toast(`⭐ Уровень ${data.user.level} — ${data.user.level_title}`);
+    confetti();
+  }
   state.botUsername = data.bot_username || "";
   state.settings = data.settings || state.settings;
   state.isAdmin = !!data.is_admin;
@@ -1247,6 +1317,7 @@ async function loadState() {
   if (state.round) {
     state.bet = state.round.bet;
     state.mines = state.round.mines;
+    state.autoTarget = state.round.auto_target || 0;
   }
   renderAll();
 }
@@ -1271,7 +1342,7 @@ async function openCell(index) {
       setTimeout(() => grid.classList.remove("shake"), 420);
       sfx.boom();
       haptic("error");
-      modal("💥", "Мина!", `Ставка ${fmt(state.round.bet)} сапов сгорела. Попробуешь ещё?`, "Ещё раз");
+      modal("💥", "Мина!", `Ставка ${fmt(state.round.bet)} mCoin сгорела. Попробуешь ещё?`, "Ещё раз");
       await refreshMeta();
       return;
     }
@@ -1289,7 +1360,12 @@ async function openCell(index) {
     renderAll();
     if (data.finished) {
       haptic("success");
-      modal("💎", "Поле очищено!", `Ты забрал ${fmt(data.payout)} сапов с множителем ${fmtMult(data.multiplier)}.`, "Ещё раз");
+      confetti();
+      if (data.auto) {
+        modal("🤖", "Авто-кэшаут!", `${fmt(data.payout)} mCoin на множителе ${fmtMult(data.multiplier)}.`, "Ещё раз");
+      } else {
+        modal("💎", "Поле очищено!", `Ты забрал ${fmt(data.payout)} mCoin с множителем ${fmtMult(data.multiplier)}.`, "Ещё раз");
+      }
       await refreshMeta();
     }
   } catch (e) {
@@ -1303,8 +1379,10 @@ async function startGame() {
   const bet = Math.max(minBet, Math.min(maxBet, parseInt($("betInput").value || "0", 10) || 0));
   state.bet = bet;
   state.lastBet = bet;
+  const autoTarget = Number(($("autoTarget") && $("autoTarget").value) || 0);
+  state.autoTarget = autoTarget;
   try {
-    const data = await api("/api/game/start", { bet, mines: state.mines });
+    const data = await api("/api/game/start", { bet, mines: state.mines, auto_target: autoTarget });
     state.round = data.round;
     state.user.balance = data.balance;
     haptic("success");
@@ -1329,8 +1407,9 @@ async function cashout() {
     };
     sfx.cash();
     haptic("success");
+    confetti();
     renderAll();
-    modal("💰", "Забрано!", `${fmt(data.payout)} сапов на множителе ${fmtMult(data.multiplier)}.`, "Продолжить");
+    modal("💰", "Забрано!", `${fmt(data.payout)} mCoin на множителе ${fmtMult(data.multiplier)}.`, "Продолжить");
     await refreshMeta();
   } catch (e) {
     toast(e.message);
@@ -1344,7 +1423,7 @@ async function claimDaily() {
     state.user.daily_ready = false;
     haptic("success");
     renderAll();
-    toast(`Бонус +${fmt(data.amount)} сапов`);
+    toast(`Бонус +${fmt(data.amount)} mCoin`);
     await refreshMeta();
   } catch (e) {
     toast(e.message);
@@ -1418,6 +1497,12 @@ function bind() {
     renderMines();
     renderControls();
   });
+
+  if ($("autoTarget")) {
+    $("autoTarget").addEventListener("change", (e) => {
+      state.autoTarget = Number(e.target.value) || 0;
+    });
+  }
 
   $("betInput").addEventListener("input", (e) => {
     const v = parseInt(e.target.value, 10) || 0;
@@ -1622,10 +1707,17 @@ function bind() {
     if (!btn || btn.disabled) return;
     try {
       const data = await api("/api/quests/claim", { key: btn.dataset.quest });
-      state.quests = data.quests || state.quests;
+  state.quests = data.quests || state.quests;
+  state.achievements = data.achievements || [];
+  if (prevClaimed.size) {
+    const fresh = state.achievements.filter(
+      (a) => a.claimed && !prevClaimed.has(a.key)
+    );
+    if (fresh.length) toast(`🏅 ${fresh.map((a) => a.title).join(", ")}`);
+  }
       state.user.balance = data.balance;
       sfx.cash();
-      toast(`Награда +${fmt(data.reward)} сапов`);
+      toast(`Награда +${fmt(data.reward)} mCoin`);
       renderAll();
     } catch (err) {
       toast(err.message);

@@ -14,6 +14,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+import awards
 import game
 from config import config
 from db import Database
@@ -35,8 +36,8 @@ WELCOME = (
     "• /spin — колесо дня раз в 12 часов\n"
     "• /bonus — часовой и ежедневный бонусы\n"
     "• /deposit — вклады под процент\n\n"
-    "На старте — 1000 сапов. За друга, сыгравшего 5 партий, — 500 сапов.\n"
-    "Сапы виртуальные: реальные деньги не принимаются и не выводятся."
+    "На старте — 1000 mCoin. За друга, сыгравшего 5 партий, — 500 mCoin.\n"
+    "Валюта mCoin виртуальная: реальные деньги не принимаются и не выводятся."
 )
 
 
@@ -80,9 +81,12 @@ def main_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🎁 Бонусы", callback_data="menu:bonus"),
          InlineKeyboardButton(text="🏦 Банк", callback_data="menu:bank")],
         [InlineKeyboardButton(text="👤 Профиль", callback_data="menu:balance"),
-         InlineKeyboardButton(text="🎯 Задания", callback_data="menu:tasks")],
-        [InlineKeyboardButton(text="🏆 Топ игроков", callback_data="top"),
-         InlineKeyboardButton(text="🔐 Честность", callback_data="fair")],
+         InlineKeyboardButton(text="🏅 Достижения", callback_data="menu:ach")],
+        [InlineKeyboardButton(text="🎯 Задания", callback_data="menu:tasks"),
+         InlineKeyboardButton(text="🏆 Топ игроков", callback_data="top")],
+        [InlineKeyboardButton(text="🎰 Игры", callback_data="menu:games"),
+         InlineKeyboardButton(text="⚔️ Дуэли", callback_data="menu:duel")],
+        [InlineKeyboardButton(text="🔐 Честность", callback_data="fair")],
     ])
 
 
@@ -91,6 +95,8 @@ def play_keyboard() -> InlineKeyboardMarkup:
         [webapp_button()],
         [InlineKeyboardButton(text="💣 Сапёр в чате", callback_data="menu:mines"),
          InlineKeyboardButton(text="🎲 Кости", callback_data="menu:dice")],
+        [InlineKeyboardButton(text="🎰 Игры", callback_data="menu:games"),
+         InlineKeyboardButton(text="⚔️ Дуэли", callback_data="menu:duel")],
         [InlineKeyboardButton(text="🏆 Топ игроков", callback_data="top"),
          InlineKeyboardButton(text="🔐 Честность игры", callback_data="fair")],
     ])
@@ -151,9 +157,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
         min_bet = int(settings.get("min_bet", game.MIN_BET))
         max_bet = int(settings.get("max_bet", game.MAX_BET))
         if not (min_bet <= bet <= max_bet):
-            return f"Ставка от {num(min_bet)} до {num(max_bet)} сапов."
+            return f"Ставка от {num(min_bet)} до {num(max_bet)} mCoin."
         if int(user["balance"]) < bet:
-            return "Недостаточно сапов. Забери бонус: /bonus"
+            return "Недостаточно mCoin. Забери бонус: /bonus"
         return None
 
     def charm_bonus(user: dict, payout: int) -> int:
@@ -187,6 +193,45 @@ def build_dispatcher(db: Database) -> Dispatcher:
             db.add_balance(user["user_id"], refund)
         return refund
 
+    def finish_game(user: dict, bet: int, payout: int, mult: float):
+        xp_gain = game.XP_PER_GAME + (game.XP_PER_WIN if payout > 0 else 0)
+        before = game.level_from_xp(int(user.get("xp") or 0))
+        db.finish_stats(user["user_id"], bet, payout, mult)
+        db.add_xp(user["user_id"], xp_gain)
+        earned = awards.evaluate(db, user["user_id"])
+        db.claim_referral_bonus(user["user_id"])
+        after = game.level_from_xp(int(db.user(user["user_id"]).get("xp") or 0))
+        return earned, xp_gain, before, after
+
+    def xp_line(xp_gain: int, before: int, after: int) -> str:
+        text = f"🎖 +{xp_gain} XP"
+        if after > before:
+            text += f" · ⬆️ уровень {after} — {game.level_title(after)}"
+        return text
+
+    def awards_lines(earned: list[dict]) -> list[str]:
+        return [f"🏅 Достижение: {item['title']} (+{num(item['reward'])} mCoin)"
+                for item in earned]
+
+    def cashout_round(user: dict, rnd: dict, round_id: str, opened: list[int],
+                      mult: float, auto: bool = False):
+        payout = game.payout_for(rnd["bet"], mult)
+        payout = charm_bonus(user, payout)
+        payout = apply_relic(user, "mines", payout)
+        db.update_round(round_id, opened, mult, "cashed", payout)
+        db.add_balance(user["user_id"], payout)
+        earned, xp_gain, level_before, level_after = finish_game(
+            user, rnd["bet"], payout, mult)
+        balance = db.user(user["user_id"])["balance"]
+        title = "🤖 <b>Авто-кэшаут!</b>" if auto else "💰 <b>Забрал!</b>"
+        lines = [title, "",
+                 f"Множитель: ×{mult:.2f}",
+                 f"Выплата: <b>+{num(payout)}</b> mCoin",
+                 xp_line(xp_gain, level_before, level_after)]
+        lines.extend(awards_lines(earned))
+        lines.append(f"💰 Баланс: {num(balance)} mCoin")
+        return "\n".join(lines), payout
+
     def referral_link(user_id: int) -> str:
         name = config.bot_username or "bot"
         return f"https://t.me/{name}?start=ref_{user_id}"
@@ -195,18 +240,25 @@ def build_dispatcher(db: Database) -> Dispatcher:
         now = int(time.time())
         lost = max(0, int(user["total_wagered"]) - int(user["total_won"]))
         deposits_total = sum(int(row["amount"]) for row in db.deposits(user["user_id"]))
+        level = game.level_view(user.get("xp") or 0)
+        duels_played = int(user.get("duels_played") or 0)
+        duels_won = int(user.get("duels_won") or 0)
         lines = [
             "👤 <b>Профиль</b>",
-            f"💰 Баланс: <b>{num(user['balance'])} сапов</b>",
+            f"💰 Баланс: <b>{num(user['balance'])} mCoin</b>",
+            f"⭐ Уровень {level['level']} — {level['title']}",
+            f"🎖 XP: {level['into']} / {level['need']}",
             f"🎯 Партий: {user['games_played']} · побед: {user['games_won']}",
-            f"📉 Проиграно: {num(lost)} сапов",
+            f"📉 Проиграно: {num(lost)} mCoin",
             f"🔥 Лучший множитель: ×{user['best_multiplier']:.2f}",
         ]
+        if duels_played:
+            lines.append(f"⚔️ Дуэли: {duels_played} · побед: {duels_won}")
         place = db.rank(user["user_id"])
         if place:
             lines.append(f"🏆 Место в топе: #{place}")
         if deposits_total:
-            lines.append(f"🏦 В депозитах: {num(deposits_total)} сапов")
+            lines.append(f"🏦 В депозитах: {num(deposits_total)} mCoin")
         hourly_left = game.HOURLY_COOLDOWN - (now - int(user.get("last_hourly") or 0))
         spin_left = game.SPIN_COOLDOWN - (now - int(user.get("last_spin") or 0))
         lines.append("")
@@ -216,12 +268,156 @@ def build_dispatcher(db: Database) -> Dispatcher:
                                          else f"через {left_text(spin_left)}"))
         return "\n".join(lines)
 
+    def achievements_text(user: dict) -> str:
+        earned = awards.evaluate(db, user["user_id"])
+        fresh = db.user(user["user_id"])
+        claimed = db.user_achievements(user["user_id"])
+        stats = awards.metrics(db, user["user_id"])
+        level = game.level_view(fresh.get("xp") or 0)
+        lines = ["🏅 <b>Достижения</b>",
+                 f"⭐ Уровень {level['level']} — {level['title']}",
+                 f"🎖 XP: {level['into']} / {level['need']}", ""]
+        for ach in game.ACHIEVEMENTS:
+            progress = min(ach["target"], stats.get(ach["metric"], 0))
+            if ach["key"] in claimed:
+                mark = "✅"
+            elif progress >= ach["target"]:
+                mark = "🔓"
+            else:
+                mark = "▫️"
+            lines.append(f"{mark} {ach['icon']} {ach['title']} — "
+                         f"{progress}/{ach['target']} · +{num(ach['reward'])} mCoin")
+        if earned:
+            lines += ["", "Новые:"] + awards_lines(earned)
+            lines.append(f"💰 Баланс: {num(fresh['balance'])} mCoin")
+        return "\n".join(lines)
+
+    def user_name(user: dict | None) -> str:
+        if not user:
+            return "игрок"
+        if user.get("username"):
+            return "@" + str(user["username"]).lstrip("@")
+        return user.get("first_name") or f"id{user['user_id']}"
+
+    def duel_top_text() -> str:
+        rows = db.top_duelists(10)
+        lines = ["🏆 <b>Топ дуэлянтов</b>", ""]
+        medals = ("🥇", "🥈", "🥉")
+        for index, row in enumerate(rows, 1):
+            prefix = medals[index - 1] if index <= 3 else f"{index}."
+            lines.append(f"{prefix} {user_name(row)} — {row['duels_won']} побед "
+                         f"из {row['duels_played']}")
+        if not rows:
+            lines.append("Пока никто не играл дуэли.")
+        return "\n".join(lines)
+
+    def duel_menu_text(user: dict) -> str:
+        pending = db.pending_duel_for(user["user_id"])
+        lines = ["⚔️ <b>Дуэли 1×1</b>", "",
+                 "Вызови друга: <code>/duel 100 @username</code>",
+                 f"Победитель забирает {num(game.duel_prize(100))} mCoin "
+                 "со ставки 100 (комиссия 5%).", ""]
+        if pending:
+            other_id = (pending["opponent_id"]
+                        if int(pending["challenger_id"]) == int(user["user_id"])
+                        else pending["challenger_id"])
+            other = db.user(other_id)
+            role = ("твой вызов" if int(pending["challenger_id"]) == int(user["user_id"])
+                    else "тебя вызвали")
+            lines.append(f"⏳ Активный вызов: {user_name(other)} · "
+                         f"{num(pending['bet'])} mCoin ({role})")
+        else:
+            lines.append("Активных вызовов нет.")
+        lines += ["", f"Пар: {user['duels_played']} · побед: {user['duels_won']}"]
+        top = db.top_duelists(3)
+        if top:
+            lines += ["", "<b>Топ дуэлянтов</b>"]
+            for index, row in enumerate(top, 1):
+                lines.append(f"{index}. {user_name(row)} — {row['duels_won']} побед "
+                             f"из {row['duels_played']}")
+        return "\n".join(lines)
+
+    def duel_menu_keyboard(user: dict) -> InlineKeyboardMarkup:
+        rows = []
+        pending = db.pending_duel_for(user["user_id"])
+        if pending and int(pending["opponent_id"]) == int(user["user_id"]):
+            rows.append([
+                InlineKeyboardButton(text="⚔️ Принять",
+                                     callback_data=f"duel:accept:{pending['id']}"),
+                InlineKeyboardButton(text="❌ Отклонить",
+                                     callback_data=f"duel:decline:{pending['id']}"),
+            ])
+        rows.append([InlineKeyboardButton(text="🏆 Топ дуэлянтов",
+                                          callback_data="duel:top")])
+        rows.append([webapp_button()])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def duel_result_keyboard() -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚔️ Ещё дуэль", callback_data="menu:duel")],
+            [webapp_button()],
+        ])
+
+    def resolve_duel(duel: dict, challenger: dict, opponent: dict):
+        bet = int(duel["bet"])
+        prize = game.duel_prize(bet)
+        c_roll = game.duel_roll(challenger["server_seed"], challenger["client_seed"],
+                               db.bump_nonce(challenger["user_id"]))
+        o_roll = game.duel_roll(opponent["server_seed"], opponent["client_seed"],
+                               db.bump_nonce(opponent["user_id"]))
+        if c_roll == o_roll:
+            winner_id = None
+        elif c_roll > o_roll:
+            winner_id = challenger["user_id"]
+        else:
+            winner_id = opponent["user_id"]
+        now = int(time.time())
+        if not db.finish_duel(duel["id"], c_roll, o_roll, winner_id,
+                              2 * bet - prize, now):
+            return None
+        if winner_id is None:
+            db.add_balance(challenger["user_id"], bet)
+            db.add_balance(opponent["user_id"], bet)
+            db.add_duel_stats(challenger["user_id"], False)
+            db.add_duel_stats(opponent["user_id"], False)
+            db.add_xp(challenger["user_id"], game.XP_PER_GAME)
+            db.add_xp(opponent["user_id"], game.XP_PER_GAME)
+        else:
+            winner = challenger if int(winner_id) == int(challenger["user_id"]) else opponent
+            loser = opponent if int(winner_id) == int(challenger["user_id"]) else challenger
+            db.add_balance(winner_id, prize)
+            db.add_duel_stats(winner_id, True)
+            db.add_duel_stats(loser["user_id"], False)
+            db.add_xp(winner_id, game.XP_PER_GAME + game.XP_PER_DUEL_WIN)
+            db.add_xp(loser["user_id"], game.XP_PER_GAME)
+        awards.evaluate(db, challenger["user_id"])
+        awards.evaluate(db, opponent["user_id"])
+        return {"c_roll": c_roll, "o_roll": o_roll, "winner_id": winner_id,
+                "prize": prize, "bet": bet}
+
+    def duel_play_text(duel: dict, viewer: dict, result: dict) -> str:
+        challenger = db.user(duel["challenger_id"])
+        opponent = db.user(duel["opponent_id"])
+        lines = ["⚔️ <b>Дуэль завершена</b>", "",
+                 f"{user_name(challenger)}: <b>{result['c_roll']}</b>",
+                 f"{user_name(opponent)}: <b>{result['o_roll']}</b>", ""]
+        if result["winner_id"] is None:
+            lines.append("🤝 Ничья — ставки возвращены.")
+        elif int(result["winner_id"]) == int(viewer["user_id"]):
+            lines.append(f"🏆 Победа! +{num(result['prize'])} mCoin")
+        else:
+            lines.append(f"❌ Поражение. −{num(result['bet'])} mCoin")
+        fresh = db.user(viewer["user_id"])
+        lines.append(f"💰 Баланс: {num(fresh['balance'])} mCoin")
+        return "\n".join(lines)
+
     def profile_keyboard() -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎁 Бонусы", callback_data="menu:bonus"),
              InlineKeyboardButton(text="🏦 Банк", callback_data="menu:bank")],
-            [InlineKeyboardButton(text="🎯 Задания", callback_data="menu:tasks"),
-             InlineKeyboardButton(text="🏆 Топ", callback_data="top")],
+            [InlineKeyboardButton(text="🏅 Достижения", callback_data="menu:ach"),
+             InlineKeyboardButton(text="🎯 Задания", callback_data="menu:tasks")],
+            [InlineKeyboardButton(text="🏆 Топ", callback_data="top")],
             [webapp_button()],
         ])
 
@@ -232,7 +428,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         for index, row in enumerate(rows, 1):
             name = row["username"] or row["first_name"] or f"id{row['user_id']}"
             prefix = medals[index - 1] if index <= 3 else f"{index}."
-            lines.append(f"{prefix} {name} — {num(row['balance'])} сапов")
+            lines.append(f"{prefix} {name} — {num(row['balance'])} mCoin")
         if not rows:
             lines.append("Пока пусто")
         return "\n".join(lines)
@@ -240,7 +436,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
     def bank_text(user: dict) -> str:
         lines = [
             "🏦 <b>ДЕПОЗИТ БАНК</b>",
-            f"Баланс: <b>{num(user['balance'])} сапов</b>",
+            f"Баланс: <b>{num(user['balance'])} mCoin</b>",
             "",
             "💵 <b>Временные депозиты</b>",
         ]
@@ -254,7 +450,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "🪙 <b>Накопительный счёт</b>",
             f"└ {pct(game.SAVINGS_RATE_BPS / 100)}% в день, снять можно в любой момент",
             "",
-            f"Минимальный вклад — {num(game.DEPOSIT_MIN)} сапов. "
+            f"Минимальный вклад — {num(game.DEPOSIT_MIN)} mCoin. "
             "Проценты начисляются при закрытии.",
         ]
         return "\n".join(lines)
@@ -289,7 +485,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             return "Неизвестный срок."
         return (f"💵 <b>Депозит на {days} дн.</b>\n\n"
                 f"Ставка: <b>{pct(plan['rate_bps'] / 100)}%</b> за весь срок\n"
-                f"Сумма: от {num(game.DEPOSIT_MIN)} до {num(game.DEPOSIT_MAX)} сапов\n\n"
+                f"Сумма: от {num(game.DEPOSIT_MIN)} до {num(game.DEPOSIT_MAX)} mCoin\n\n"
                 "Выбери сумму 👇")
 
     def deposit_amounts_keyboard(days: int) -> InlineKeyboardMarkup:
@@ -313,8 +509,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
         accrued = game.savings_interest(savings["amount"], savings["rate_bps"],
                                         now - int(savings["started_at"]))
         return ("🪙 <b>Накопительный счёт</b>\n\n"
-                f"На счёте: <b>{num(savings['amount'])} сапов</b>\n"
-                f"Накоплено: +{num(accrued)} сапов\n"
+                f"На счёте: <b>{num(savings['amount'])} mCoin</b>\n"
+                f"Накоплено: +{num(accrued)} mCoin\n"
                 f"Ставка: {pct(savings['rate_bps'] / 100)}% в день\n\n"
                 "Пополнить или забрать можно в любой момент.")
 
@@ -344,12 +540,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
             total = int(row["amount"]) + interest
             ends = int(row["ends_at"] or 0)
             if now >= ends:
-                lines.append(f"✅ {num(row['amount'])} сапов — готов к закрытию, "
+                lines.append(f"✅ {num(row['amount'])} mCoin — готов к закрытию, "
                              f"к выплате {num(total)}")
                 rows.append([InlineKeyboardButton(
                     text=f"✅ Забрать {num(total)}", callback_data=f"depc:{row['id']}")])
             else:
-                lines.append(f"🔒 {num(row['amount'])} сапов → {num(total)} "
+                lines.append(f"🔒 {num(row['amount'])} mCoin → {num(total)} "
                              f"к {date_text(ends)} (+{num(interest)})")
                 rows.append([InlineKeyboardButton(
                     text=f"⏳ Ещё {left_text(ends - now)}",
@@ -367,9 +563,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
         settings = db.settings()
         return ("💣 <b>Сапёр в чате</b>\n\n"
                 "Напиши: <code>/mines 100 5</code>\n"
-                "где 100 — ставка, 5 — число мин.\n\n"
+                "где 100 — ставка, 5 — число мин.\n"
+                "Авто-кэшаут: <code>/mines 100 5 2</code> — забрать на ×2.\n\n"
                 f"Ставка: от {num(settings.get('min_bet', game.MIN_BET))} "
-                f"до {num(settings.get('max_bet', game.MAX_BET))} сапов\n"
+                f"до {num(settings.get('max_bet', game.MAX_BET))} mCoin\n"
                 f"Мин: от {settings.get('min_mines', 1)} "
                 f"до {settings.get('max_mines', 24)}\n\n"
                 "Открывай клетки кнопками — множитель растёт. "
@@ -388,11 +585,13 @@ def build_dispatcher(db: Database) -> Dispatcher:
             [InlineKeyboardButton(text=f"{num(base)} · 10 мин", callback_data=f"ms:{base}:10"),
              InlineKeyboardButton(text=f"{num(bigger)} · 3 мин",
                                   callback_data=f"ms:{bigger}:3")],
+            [InlineKeyboardButton(text=f"{num(base)} · 5 мин · авто ×2",
+                                  callback_data=f"ms:{base}:5:2")],
             [webapp_button("🎮 Полное поле в приложении")],
         ]
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
-    def start_mines(user: dict, bet: int, mines: int):
+    def start_mines(user: dict, bet: int, mines: int, target: float = 0):
         error = bet_error(user, bet, "mines")
         if error:
             return error, None
@@ -401,6 +600,11 @@ def build_dispatcher(db: Database) -> Dispatcher:
         max_mines = int(settings.get("max_mines", 24))
         if not (min_mines <= mines <= max_mines):
             return f"Число мин от {min_mines} до {max_mines}.", None
+        if target:
+            top = game.max_multiplier(mines)
+            if not (1.05 <= target <= top):
+                return (f"Авто-кэшаут от ×1,05 до ×{top:.2f} "
+                        f"для {mines} мин."), None
         if db.active_round(user["user_id"]):
             return "Сначала заверши текущую партию — нажми «Забрать» в её сообщении.", None
         nonce = db.bump_nonce(user["user_id"])
@@ -409,7 +613,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
         round_id = uuid.uuid4().hex[:12]
         db.add_balance(user["user_id"], -bet)
         db.create_round(round_id, user["user_id"], bet, mines, positions,
-                        user["server_seed"], user["client_seed"], nonce)
+                        user["server_seed"], user["client_seed"], nonce,
+                        float(target or 0))
         return None, db.round(round_id)
 
     def mines_text(rnd: dict) -> str:
@@ -418,15 +623,18 @@ def build_dispatcher(db: Database) -> Dispatcher:
         mult = float(rnd["multiplier"])
         lines = [
             f"💣 <b>Сапёр</b> · мин: {rnd['mines']}",
-            f"Ставка: {num(rnd['bet'])} сапов",
+            f"Ставка: {num(rnd['bet'])} mCoin",
             f"Открыто: {len(opened)} из {safe}",
             f"Множитель: ×{mult:.2f}",
         ]
         if opened:
             payout = game.payout_for(rnd["bet"], mult)
-            lines.append(f"К выплате: <b>{num(payout)}</b> сапов")
+            lines.append(f"К выплате: <b>{num(payout)}</b> mCoin")
         else:
             lines.append("К выплате: открой хотя бы одну клетку")
+        target = float(rnd.get("auto_target") or 0)
+        if target:
+            lines.append(f"🤖 Авто-кэшаут: ×{target:.2f}")
         chance = game.next_chance(int(rnd["mines"]), len(opened)) * 100
         lines += ["", f"Шанс следующей клетки: {chance:.1f}%",
                   "Нажми клетку, потом «Забрать»."]
@@ -453,11 +661,13 @@ def build_dispatcher(db: Database) -> Dispatcher:
         mines = ", ".join(str(pos + 1) for pos in sorted(rnd["mine_positions"]))
         lines = ["💥 <b>Мина!</b>",
                  f"Клетка {cell + 1} оказалась миной.",
-                 f"Ставка {num(rnd['bet'])} сапов потеряна."]
+                 f"Ставка {num(rnd['bet'])} mCoin потеряна."]
         if refund:
-            lines.append(f"🛡 Страховка вернула {num(refund)} сапов.")
-        lines += ["", f"Мины были на клетках: {mines}",
-                  f"💰 Баланс: {num(balance)} сапов"]
+            lines.append(f"🛡 Страховка вернула {num(refund)} mCoin.")
+        lines += ["", f"Открыто клеток: {len(rnd['opened'])} · "
+                       f"множитель дошёл до ×{float(rnd['multiplier']):.2f}",
+                  f"Мины были на клетках: {mines}",
+                  f"💰 Баланс: {num(balance)} mCoin"]
         return "\n".join(lines)
 
     def play_dice(user: dict, bet: int, pick: str) -> str:
@@ -479,19 +689,21 @@ def build_dispatcher(db: Database) -> Dispatcher:
         db.add_balance(user["user_id"], payout - bet)
         db.add_play(uuid.uuid4().hex[:16], user["user_id"], "dice", bet, win, payout,
                     {"roll": roll, "pick": pick, "nonce": nonce, "chat": True})
-        db.finish_stats(user["user_id"], bet, payout, multiplier or 1.0)
-        db.claim_referral_bonus(user["user_id"])
+        earned, xp_gain, level_before, level_after = finish_game(
+            user, bet, payout, multiplier or 1.0)
         balance = db.user(user["user_id"])["balance"]
         pick_title = "чёт" if pick == "even" else "нечёт"
         lines = [f"🎲 Выпало: <b>{roll}</b> ({'чёт' if is_even else 'нечёт'})",
-                 f"Ставка: {num(bet)} сапов на {pick_title}"]
+                 f"Ставка: {num(bet)} mCoin на {pick_title}"]
         if win:
-            lines.append(f"✅ Выигрыш: <b>+{num(payout)}</b> сапов")
+            lines.append(f"✅ Выигрыш: <b>+{num(payout)}</b> mCoin")
         else:
             lines.append("❌ Мимо")
         if refund:
-            lines.append(f"🛡 Страховка вернула {num(refund)} сапов")
-        lines.append(f"💰 Баланс: <b>{num(balance)}</b> сапов")
+            lines.append(f"🛡 Страховка вернула {num(refund)} mCoin")
+        lines.append(xp_line(xp_gain, level_before, level_after))
+        lines.extend(awards_lines(earned))
+        lines.append(f"💰 Баланс: <b>{num(balance)}</b> mCoin")
         return "\n".join(lines)
 
     def dice_hint_text() -> str:
@@ -500,8 +712,176 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 "Напиши: <code>/dice 100 чёт</code>\n"
                 "Выплата — ×1,96 при победе.\n\n"
                 f"Ставка: от {num(settings.get('min_bet', game.MIN_BET))} "
-                f"до {num(settings.get('max_bet', game.MAX_BET))} сапов.\n\n"
+                f"до {num(settings.get('max_bet', game.MAX_BET))} mCoin.\n\n"
                 "Можно и кнопкой 👇")
+
+    def settle_play(user: dict, game_name: str, bet: int, payout: int,
+                    mult: float, detail: dict):
+        db.add_balance(user["user_id"], payout - bet)
+        db.add_play(uuid.uuid4().hex[:16], user["user_id"], game_name, bet,
+                    payout > 0, payout, detail)
+        return finish_game(user, bet, payout, mult)
+
+    def games_hint_text() -> str:
+        return ("🎰 <b>Игры в чате</b>\n\n"
+                "/roulette 100 красное — рулетка (×2, зеро ×36)\n"
+                "/slots 100 — слоты (пара ×1,2, тройка до ×200)\n"
+                "/crash 100 2.5 — краш, цель от ×1,20 до ×10\n\n"
+                "Результат считается из твоего seed — проверить можно /fair.")
+
+    def games_keyboard() -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎡 Рулетка", callback_data="menu:roulette"),
+             InlineKeyboardButton(text="🎰 Слоты", callback_data="menu:slots")],
+            [InlineKeyboardButton(text="💥 Краш", callback_data="menu:crash")],
+            [webapp_button()],
+        ])
+
+    def roulette_hint_text() -> str:
+        return ("🎡 <b>Рулетка</b>\n\n"
+                "Напиши: <code>/roulette 100 красное</code>\n"
+                "Красное или чёрное — ×2, зеро — ×36.\n\n"
+                "Быстрый старт:")
+
+    def roulette_hint_keyboard() -> InlineKeyboardMarkup:
+        rows = []
+        for bet in (100, 500):
+            rows.append([
+                InlineKeyboardButton(text=f"{num(bet)} красное",
+                                     callback_data=f"rl:{bet}:red"),
+                InlineKeyboardButton(text=f"{num(bet)} чёрное",
+                                     callback_data=f"rl:{bet}:black"),
+                InlineKeyboardButton(text="зеро",
+                                     callback_data=f"rl:{bet}:green"),
+            ])
+        rows.append([InlineKeyboardButton(text="⬅️ Игры", callback_data="menu:games")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def slots_hint_text() -> str:
+        return ("🎰 <b>Слоты</b>\n\n"
+                "Напиши: <code>/slots 100</code>\n"
+                "Пара символов — ×1,2, три одинаковых — от ×4 до ×200.\n\n"
+                "Быстрый старт:")
+
+    def slots_hint_keyboard() -> InlineKeyboardMarkup:
+        rows = [[InlineKeyboardButton(text=num(bet), callback_data=f"sl:{bet}")
+                 for bet in (100, 500, 1000)]]
+        rows.append([InlineKeyboardButton(text="⬅️ Игры", callback_data="menu:games")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def crash_hint_text() -> str:
+        return ("💥 <b>Краш</b>\n\n"
+                "Напиши: <code>/crash 100 2.5</code>\n"
+                "Ставка и цель от ×1,20 до ×10,00.\n"
+                "Если точка краша не ниже цели — забираешь ставку × цель.\n\n"
+                "Быстрый старт:")
+
+    def crash_hint_keyboard() -> InlineKeyboardMarkup:
+        rows = [[
+            InlineKeyboardButton(text="×1,5", callback_data="cr:100:1.5"),
+            InlineKeyboardButton(text="×2", callback_data="cr:100:2"),
+            InlineKeyboardButton(text="×3", callback_data="cr:100:3"),
+        ]]
+        rows.append([InlineKeyboardButton(text="⬅️ Игры", callback_data="menu:games")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def play_roulette(user: dict, bet: int, pick: str) -> str:
+        error = bet_error(user, bet, "roulette")
+        if error:
+            return "⚠️ " + error
+        nonce = db.bump_nonce(user["user_id"])
+        number = game.roulette_number(user["server_seed"], user["client_seed"], nonce)
+        multiplier = game.roulette_multiplier(number, pick)
+        payout = int(math.floor(bet * multiplier)) if multiplier > 0 else 0
+        refund = 0
+        if payout > 0:
+            payout = charm_bonus(user, payout)
+            payout = apply_relic(user, "roulette", payout)
+        else:
+            refund = insurance_refund(user, bet)
+        earned, xp_gain, before, after = settle_play(
+            user, "roulette", bet, payout, multiplier or 1.0,
+            {"number": number, "pick": pick, "nonce": nonce, "chat": True})
+        color = ("зелёное" if number == 0
+                 else "красное" if number in game.ROULETTE_RED else "чёрное")
+        pick_title = {"red": "красное", "black": "чёрное", "green": "зеро"}[pick]
+        lines = ["🎡 <b>Рулетка</b>", "",
+                 f"Выпало: <b>{number}</b> ({color})",
+                 f"Ставка: {num(bet)} mCoin на {pick_title}"]
+        if payout > 0:
+            lines.append(f"✅ Выигрыш: <b>+{num(payout)}</b> mCoin")
+        else:
+            lines.append("❌ Мимо")
+        if refund:
+            lines.append(f"🛡 Страховка вернула {num(refund)} mCoin")
+        lines.append(xp_line(xp_gain, before, after))
+        lines.extend(awards_lines(earned))
+        lines.append(f"💰 Баланс: {num(db.user(user['user_id'])['balance'])} mCoin")
+        return "\n".join(lines)
+
+    def play_slots(user: dict, bet: int) -> str:
+        error = bet_error(user, bet, "slots")
+        if error:
+            return "⚠️ " + error
+        nonce = db.bump_nonce(user["user_id"])
+        reels, multiplier = game.spin_slots(user["server_seed"],
+                                            user["client_seed"], nonce)
+        payout = int(math.floor(bet * multiplier)) if multiplier > 0 else 0
+        refund = 0
+        if payout > 0:
+            payout = charm_bonus(user, payout)
+        else:
+            refund = insurance_refund(user, bet)
+        earned, xp_gain, before, after = settle_play(
+            user, "slots", bet, payout, multiplier or 1.0,
+            {"reels": [reel["key"] for reel in reels], "nonce": nonce, "chat": True})
+        icons = " ".join(reel["icon"] for reel in reels)
+        lines = ["🎰 <b>Слоты</b>", "", f"<b>{icons}</b>", ""]
+        if payout > 0:
+            lines.append(f"✅ ×{multiplier:.2f} — <b>+{num(payout)}</b> mCoin")
+        else:
+            lines.append("❌ Нет совпадений")
+        if refund:
+            lines.append(f"🛡 Страховка вернула {num(refund)} mCoin")
+        lines.append(xp_line(xp_gain, before, after))
+        lines.extend(awards_lines(earned))
+        lines.append(f"💰 Баланс: {num(db.user(user['user_id'])['balance'])} mCoin")
+        return "\n".join(lines)
+
+    def play_crash(user: dict, bet: int, target: float) -> str:
+        error = bet_error(user, bet, "crash")
+        if error:
+            return "⚠️ " + error
+        if not (game.CRASH_MIN <= target <= game.CRASH_MAX):
+            return f"⚠️ Цель от ×{game.CRASH_MIN:.2f} до ×{game.CRASH_MAX:.2f}"
+        target = round(float(target), 2)
+        nonce = db.bump_nonce(user["user_id"])
+        point = game.crash_point(user["server_seed"], user["client_seed"], nonce)
+        win = point >= target
+        payout = int(math.floor(bet * target)) if win else 0
+        refund = 0
+        if win:
+            payout = charm_bonus(user, payout)
+            payout = apply_relic(user, "crash", payout)
+        else:
+            refund = insurance_refund(user, bet)
+        earned, xp_gain, before, after = settle_play(
+            user, "crash", bet, payout, target if win else 0.0,
+            {"point": point, "target": target, "nonce": nonce, "chat": True})
+        lines = ["💥 <b>Краш</b>", "",
+                 f"Точка: <b>×{point:.2f}</b>",
+                 f"Твоя цель: ×{target:.2f}",
+                 f"Ставка: {num(bet)} mCoin", ""]
+        if win:
+            lines.append(f"✅ Выигрыш: <b>+{num(payout)}</b> mCoin")
+        else:
+            lines.append("❌ Краш раньше цели")
+        if refund:
+            lines.append(f"🛡 Страховка вернула {num(refund)} mCoin")
+        lines.append(xp_line(xp_gain, before, after))
+        lines.extend(awards_lines(earned))
+        lines.append(f"💰 Баланс: {num(db.user(user['user_id'])['balance'])} mCoin")
+        return "\n".join(lines)
 
     def tasks_view(user: dict) -> tuple[str, InlineKeyboardMarkup]:
         refs = db.referrals(user["user_id"])
@@ -521,16 +901,16 @@ def build_dispatcher(db: Database) -> Dispatcher:
                     text=f"🎁 Забрать {num(reward)}", callback_data=f"inv:{step}")])
             else:
                 mark, tail = "🔒", f"ещё {step - refs['total']} чел."
-            lines.append(f"{mark} {step} друзей — {num(reward)} сапов ({tail})")
+            lines.append(f"{mark} {step} друзей — {num(reward)} mCoin ({tail})")
         if config.sponsor_channels:
             done = db.sponsor_claims(user["user_id"])
             lines += ["", "<b>Спонсоры</b>"]
             for channel in config.sponsor_channels:
                 if channel in done:
                     lines.append(f"✅ @{channel} — "
-                                 f"{num(game.SPONSOR_REWARD)} сапов получено")
+                                 f"{num(game.SPONSOR_REWARD)} mCoin получено")
                     continue
-                lines.append(f"🎁 @{channel} — {num(game.SPONSOR_REWARD)} сапов")
+                lines.append(f"🎁 @{channel} — {num(game.SPONSOR_REWARD)} mCoin")
                 rows.append([
                     InlineKeyboardButton(text=f"Открыть @{channel}",
                                          url=f"https://t.me/{channel}"),
@@ -552,7 +932,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
                                      game.HOURLY_BONUS)
             if amount:
                 gained += amount
-                lines.append(f"✅ Часовой: +{num(amount)} сапов")
+                lines.append(f"✅ Часовой: +{num(amount)} mCoin")
             else:
                 lines.append("⏳ Часовой: ещё не готов")
         else:
@@ -573,20 +953,23 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 db.add_balance(user["user_id"], amount)
                 gained += amount
                 suffix = " (×2 за предмет)" if doubled else ""
-                lines.append(f"✅ Ежедневный: +{num(amount)} сапов{suffix}")
+                lines.append(f"✅ Ежедневный: +{num(amount)} mCoin{suffix}")
         else:
             lines.append(f"⏳ Ежедневный: через {left_text(daily_left)}")
 
         if gained:
+            earned = awards.evaluate(db, user["user_id"])
             fresh = db.user(user["user_id"])
-            lines += ["", f"💰 Баланс: <b>{num(fresh['balance'])}</b> сапов"]
+            if earned:
+                lines += [""] + awards_lines(earned)
+            lines += ["", f"💰 Баланс: <b>{num(fresh['balance'])}</b> mCoin"]
         else:
             lines += ["", "Пока нечего забирать — возвращайся позже."]
         return "\n".join(lines)
 
     def prize_title(prize: dict) -> str:
         if prize["kind"] == "coins":
-            return f"+{num(prize['amount'])} сапов"
+            return f"+{num(prize['amount'])} mCoin"
         item = next((entry for entry in game.SHOP_ITEMS if entry["key"] == prize["item"]),
                     None)
         title = item["title"] if item else prize["item"]
@@ -611,7 +994,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             referrer,
         )
         await message.answer(
-            WELCOME + f"\n\n💰 Твой баланс: <b>{num(user['balance'])} сапов</b>",
+            WELCOME + f"\n\n💰 Твой баланс: <b>{num(user['balance'])} mCoin</b>",
             reply_markup=main_keyboard(),
         )
 
@@ -643,8 +1026,16 @@ def build_dispatcher(db: Database) -> Dispatcher:
                     "Число мин тоже числом. Пример: <code>/mines 100 5</code>")
                 return
             mines = int(parts[2])
+        target = 0.0
+        if len(parts) > 3:
+            try:
+                target = float(parts[3].replace(",", "."))
+            except ValueError:
+                await message.answer("Авто-кэшаут — число. Пример: "
+                                     "<code>/mines 100 5 2</code>")
+                return
         user = get_user(message)
-        error, rnd = start_mines(user, bet, mines)
+        error, rnd = start_mines(user, bet, mines, target)
         if error:
             await message.answer("⚠️ " + error, reply_markup=mines_hint_keyboard())
             return
@@ -673,6 +1064,139 @@ def build_dispatcher(db: Database) -> Dispatcher:
         user = get_user(message)
         await message.answer(play_dice(user, int(raw_bet), pick))
 
+    @dp.message(Command("roulette", "roul"))
+    async def roulette_cmd(message: Message) -> None:
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer(roulette_hint_text(),
+                                 reply_markup=roulette_hint_keyboard())
+            return
+        raw_bet = parts[1].replace(" ", "")
+        if not raw_bet.isdigit():
+            await message.answer("Ставка должна быть числом. Пример: "
+                                 "<code>/roulette 100 красное</code>")
+            return
+        raw = parts[2].lower()
+        if raw in ("красное", "красный", "к", "red", "r"):
+            pick = "red"
+        elif raw in ("чёрное", "черное", "чёрный", "черный", "ч", "black", "b"):
+            pick = "black"
+        elif raw in ("зеро", "зелёное", "зеленое", "0", "green", "g", "з"):
+            pick = "green"
+        else:
+            await message.answer("Выбери: красное, чёрное или зеро.")
+            return
+        user = get_user(message)
+        await message.answer(play_roulette(user, int(raw_bet), pick))
+
+    @dp.message(Command("slots", "slot"))
+    async def slots_cmd(message: Message) -> None:
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.answer(slots_hint_text(), reply_markup=slots_hint_keyboard())
+            return
+        raw_bet = parts[1].replace(" ", "")
+        if not raw_bet.isdigit():
+            await message.answer("Ставка должна быть числом. Пример: "
+                                 "<code>/slots 100</code>")
+            return
+        user = get_user(message)
+        await message.answer(play_slots(user, int(raw_bet)))
+
+    @dp.message(Command("crash"))
+    async def crash_cmd(message: Message) -> None:
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer(crash_hint_text(),
+                                 reply_markup=crash_hint_keyboard())
+            return
+        raw_bet = parts[1].replace(" ", "")
+        if not raw_bet.isdigit():
+            await message.answer("Ставка должна быть числом. Пример: "
+                                 "<code>/crash 100 2.5</code>")
+            return
+        try:
+            target = float(parts[2].replace(",", "."))
+        except ValueError:
+            await message.answer("Цель должна быть числом. Пример: "
+                                 "<code>/crash 100 2.5</code>")
+            return
+        user = get_user(message)
+        await message.answer(play_crash(user, int(raw_bet), target))
+
+    @dp.message(Command("duel", "duels"))
+    async def duel_cmd(message: Message) -> None:
+        user = get_user(message)
+        parts = (message.text or "").split()
+        if len(parts) > 1 and parts[1].lower() in ("top", "топ"):
+            await message.answer(duel_top_text(), reply_markup=duel_menu_keyboard(user))
+            return
+        if len(parts) < 3:
+            await message.answer(duel_menu_text(user),
+                                 reply_markup=duel_menu_keyboard(user))
+            return
+        target = next((part for part in parts[1:] if part.startswith("@")), None)
+        bet_raw = next((part for part in parts[1:] if part.isdigit()), None)
+        if not target or not bet_raw:
+            await message.answer("Формат: <code>/duel 100 @username</code>")
+            return
+        bet = int(bet_raw)
+        error = bet_error(user, bet)
+        if error:
+            await message.answer("⚠️ " + error)
+            return
+        opponent = db.user_by_username(target)
+        if not opponent:
+            await message.answer("⚠️ Этот игрок ещё не запускал бота.")
+            return
+        if int(opponent["user_id"]) == int(user["user_id"]):
+            await message.answer("⚠️ Нельзя вызвать самого себя.")
+            return
+        if opponent.get("is_banned"):
+            await message.answer("⚠️ Игрок заблокирован.")
+            return
+        if int(opponent["balance"]) < bet:
+            await message.answer("⚠️ У соперника недостаточно mCoin.")
+            return
+        if db.pending_duel_for(user["user_id"]):
+            await message.answer("⚠️ У тебя уже есть активный вызов.")
+            return
+        if db.pending_duel_for(opponent["user_id"]):
+            await message.answer("⚠️ У соперника уже есть активный вызов.")
+            return
+        now = int(time.time())
+        duel_id = uuid.uuid4().hex[:10]
+        db.add_balance(user["user_id"], -bet)
+        db.create_duel(duel_id, user["user_id"], opponent["user_id"], bet, now)
+        prize = game.duel_prize(bet)
+        try:
+            await message.bot.send_message(
+                opponent["user_id"],
+                "⚔️ <b>Вызов на дуэль</b>\n\n"
+                f"{user_name(user)} вызывает тебя на <b>{num(bet)} mCoin</b>.\n"
+                f"Победитель забирает {num(prize)} mCoin.\n"
+                "Вызов действует 10 минут.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="⚔️ Принять",
+                                         callback_data=f"duel:accept:{duel_id}"),
+                    InlineKeyboardButton(text="❌ Отклонить",
+                                         callback_data=f"duel:decline:{duel_id}"),
+                ]]),
+            )
+        except Exception:
+            if db.close_duel(duel_id, "cancelled", now):
+                db.add_balance(user["user_id"], bet)
+            await message.answer("⚠️ Не удалось отправить вызов — ставка возвращена.")
+            return
+        await message.answer(
+            "⚔️ <b>Вызов отправлен</b>\n\n"
+            f"{user_name(opponent)} получил вызов на <b>{num(bet)} mCoin</b>.\n"
+            f"Победитель забирает {num(prize)} mCoin.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="❌ Отменить вызов",
+                                     callback_data=f"duel:cancel:{duel_id}")]]),
+        )
+
     @dp.message(Command("spin", "wheel"))
     async def spin_cmd(message: Message) -> None:
         user = get_user(message)
@@ -699,12 +1223,13 @@ def build_dispatcher(db: Database) -> Dispatcher:
         else:
             db.add_item(user["user_id"], prize["item"], prize_title_qty(prize))
         db.mark_spin(user["user_id"], now, next_day)
+        awards.evaluate(db, user["user_id"])
         fresh = db.user(user["user_id"])
         await message.answer(
             "🎡 <b>Колесо дня</b>\n\n"
             f"Выпало: <b>{prize_title(prize)}</b>\n"
             f"День серии: {day}/{game.SPIN_STREAK_DAYS}\n"
-            f"💰 Баланс: {num(fresh['balance'])} сапов\n\n"
+            f"💰 Баланс: {num(fresh['balance'])} mCoin\n\n"
             f"Следующее вращение через {left_text(game.SPIN_COOLDOWN)}",
             reply_markup=main_keyboard(),
         )
@@ -721,6 +1246,18 @@ def build_dispatcher(db: Database) -> Dispatcher:
     async def balance_cmd(message: Message) -> None:
         user = get_user(message)
         await message.answer(profile_text(user), reply_markup=profile_keyboard())
+
+    @dp.message(Command("achievements", "ach"))
+    async def achievements_cmd(message: Message) -> None:
+        user = get_user(message)
+        await message.answer(achievements_text(user), reply_markup=profile_keyboard())
+
+    @dp.callback_query(F.data == "menu:ach")
+    async def menu_ach(callback) -> None:
+        user = get_user(callback)
+        await callback.message.answer(achievements_text(user),
+                                      reply_markup=profile_keyboard())
+        await callback.answer()
 
     @dp.message(Command("deposit", "bank"))
     async def deposit_cmd(message: Message) -> None:
@@ -745,7 +1282,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             f"👥 <b>Приглашай друзей</b>\n\n"
             f"<code>{referral_link(user['user_id'])}</code>\n\n"
             f"Приглашено: {stats['total']}, активных: {stats['active']}\n"
-            f"За каждого друга, сыгравшего 5 партий, — {game.REF_BONUS} сапов.\n"
+            f"За каждого друга, сыгравшего 5 партий, — {game.REF_BONUS} mCoin.\n"
             "Плюс награды по лестнице: /tasks",
             disable_web_page_preview=True,
         )
@@ -770,18 +1307,23 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "<b>Играть в чате</b>\n"
             "/mines 100 5 — сапёр: ставка и число мин\n"
             "/dice 100 чёт — кости, выплата ×1,96\n"
+            "/roulette 100 красное — рулетка (зеро ×36)\n"
+            "/slots 100 — слоты (тройки до ×200)\n"
+            "/crash 100 2.5 — краш с целью ×1,20–×10\n"
+            "/duel 100 @username — дуэль 1×1 на бросок\n"
             "/spin — колесо дня раз в 12 часов\n\n"
             "<b>Баланс и бонусы</b>\n"
             "/balance — профиль и статистика\n"
             "/bonus — часовой и ежедневный бонусы\n"
             "/deposit — вклады под процент\n"
             "/tasks — приглашения и спонсоры\n"
+            "/achievements — уровни и достижения\n"
             "/top — рейтинг игроков\n\n"
             "<b>Приложение</b>\n"
             "/play — полное поле, магазин и история\n"
             "/ref — ссылка для друзей\n"
             "/fair — проверка честности\n\n"
-            "Сапы виртуальные: реальные деньги не принимаются и не выводятся.",
+            "Валюта mCoin виртуальная: реальные деньги не принимаются и не выводятся.",
             reply_markup=main_keyboard(),
         )
 
@@ -797,7 +1339,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         ])
         await message.answer(
             "<b>Админ-панель</b>\n\n"
-            "• Игроки — поиск, начисление и списание сапов, выдача предметов, бан\n"
+            "• Игроки — поиск, начисление и списание mCoin, выдача предметов, бан\n"
             "• Сводка — оборот, выплаты, RTP, статистика по играм\n"
             "• Настройки — лимиты ставки, число мин, бонус, игры, техработы",
             reply_markup=keyboard,
@@ -856,9 +1398,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     @dp.callback_query(F.data.startswith("ms:"))
     async def mines_quick(callback) -> None:
-        _, bet_raw, mines_raw = callback.data.split(":")
+        parts = callback.data.split(":")
+        target = float(parts[3]) if len(parts) > 3 else 0.0
         user = get_user(callback)
-        error, rnd = start_mines(user, int(bet_raw), int(mines_raw))
+        error, rnd = start_mines(user, int(parts[1]), int(parts[2]), target)
         if error:
             await callback.answer(error, show_alert=True)
             return
@@ -882,13 +1425,15 @@ def build_dispatcher(db: Database) -> Dispatcher:
             return
         if cell in rnd["mine_positions"]:
             db.update_round(round_id, rnd["opened"], rnd["multiplier"], "lost", 0)
-            db.finish_stats(user["user_id"], rnd["bet"], 0, 0)
+            earned, xp_gain, level_before, level_after = finish_game(
+                user, rnd["bet"], 0, 0)
             refund = insurance_refund(user, rnd["bet"])
-            db.claim_referral_bonus(user["user_id"])
             balance = db.user(user["user_id"])["balance"]
-            await safe_edit(callback.message,
-                            mines_lost_text(rnd, cell, refund, balance),
-                            finished_keyboard())
+            text = mines_lost_text(rnd, cell, refund, balance)
+            text += "\n" + xp_line(xp_gain, level_before, level_after)
+            if earned:
+                text += "\n" + "\n".join(awards_lines(earned))
+            await safe_edit(callback.message, text, finished_keyboard())
             await callback.answer("💥 Мина!")
             return
         opened = rnd["opened"] + [cell]
@@ -899,18 +1444,24 @@ def build_dispatcher(db: Database) -> Dispatcher:
             payout = charm_bonus(user, payout)
             payout = apply_relic(user, "mines", payout)
             db.update_round(round_id, opened, mult, "won", payout)
-            balance = db.add_balance(user["user_id"], payout)
-            db.finish_stats(user["user_id"], rnd["bet"], payout, mult)
-            db.claim_referral_bonus(user["user_id"])
-            await safe_edit(
-                callback.message,
-                "🏆 <b>Поле очищено!</b>\n\n"
-                f"Множитель: ×{mult:.2f}\n"
-                f"Выплата: <b>+{num(payout)}</b> сапов\n"
-                f"💰 Баланс: {num(balance)} сапов",
-                finished_keyboard(),
-            )
+            db.add_balance(user["user_id"], payout)
+            earned, xp_gain, level_before, level_after = finish_game(
+                user, rnd["bet"], payout, mult)
+            balance = db.user(user["user_id"])["balance"]
+            lines = ["🏆 <b>Поле очищено!</b>", "",
+                     f"Множитель: ×{mult:.2f}",
+                     f"Выплата: <b>+{num(payout)}</b> mCoin",
+                     xp_line(xp_gain, level_before, level_after)]
+            lines.extend(awards_lines(earned))
+            lines.append(f"💰 Баланс: {num(balance)} mCoin")
+            await safe_edit(callback.message, "\n".join(lines), finished_keyboard())
             await callback.answer(f"+{num(payout)}")
+            return
+        target = float(rnd.get("auto_target") or 0)
+        if target and mult >= target:
+            text, payout = cashout_round(user, rnd, round_id, opened, mult, auto=True)
+            await safe_edit(callback.message, text, finished_keyboard())
+            await callback.answer(f"Авто-кэшаут +{num(payout)}")
             return
         db.update_round(round_id, opened, mult, "active", 0)
         fresh = dict(rnd)
@@ -934,22 +1485,172 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer("Сначала открой хотя бы одну клетку", show_alert=True)
             return
         mult = game.multiplier(int(rnd["mines"]), len(rnd["opened"]))
-        payout = game.payout_for(rnd["bet"], mult)
-        payout = charm_bonus(user, payout)
-        payout = apply_relic(user, "mines", payout)
-        db.update_round(round_id, rnd["opened"], mult, "cashed", payout)
-        balance = db.add_balance(user["user_id"], payout)
-        db.finish_stats(user["user_id"], rnd["bet"], payout, mult)
-        db.claim_referral_bonus(user["user_id"])
-        await safe_edit(
-            callback.message,
-            "💰 <b>Забрал!</b>\n\n"
-            f"Множитель: ×{mult:.2f}\n"
-            f"Выплата: <b>+{num(payout)}</b> сапов\n"
-            f"💰 Баланс: {num(balance)} сапов",
-            finished_keyboard(),
-        )
+        text, payout = cashout_round(user, rnd, round_id, rnd["opened"], mult)
+        await safe_edit(callback.message, text, finished_keyboard())
         await callback.answer(f"+{num(payout)}")
+
+    @dp.callback_query(F.data == "menu:duel")
+    async def menu_duel(callback) -> None:
+        user = get_user(callback)
+        await callback.message.answer(duel_menu_text(user),
+                                      reply_markup=duel_menu_keyboard(user))
+        await callback.answer()
+
+    @dp.callback_query(F.data == "duel:top")
+    async def duel_top(callback) -> None:
+        user = get_user(callback)
+        await callback.message.answer(duel_top_text(),
+                                      reply_markup=duel_menu_keyboard(user))
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("duel:accept:"))
+    async def duel_accept(callback) -> None:
+        duel_id = callback.data.split(":")[-1]
+        user = get_user(callback)
+        duel = db.duel(duel_id)
+        if not duel or duel["status"] != "pending":
+            await callback.answer("Вызов уже неактивен", show_alert=True)
+            return
+        if int(duel["opponent_id"]) != int(user["user_id"]):
+            await callback.answer("Этот вызов не тебе", show_alert=True)
+            return
+        now = int(time.time())
+        challenger = db.user(duel["challenger_id"])
+        if not challenger:
+            await callback.answer("Соперник не найден", show_alert=True)
+            return
+        bet = int(duel["bet"])
+        if now - int(duel["created_at"]) > game.DUEL_TTL:
+            if db.close_duel(duel_id, "expired", now):
+                db.add_balance(challenger["user_id"], bet)
+                awards.evaluate(db, challenger["user_id"])
+            await safe_edit(callback.message,
+                            "⌛ <b>Вызов истёк</b>\nСтавка возвращена сопернику.",
+                            None)
+            await callback.answer("Вызов истёк", show_alert=True)
+            return
+        if int(user["balance"]) < bet:
+            await callback.answer("Недостаточно mCoin для ответа", show_alert=True)
+            return
+        db.add_balance(user["user_id"], -bet)
+        result = resolve_duel(duel, challenger, user)
+        if result is None:
+            db.add_balance(user["user_id"], bet)
+            await callback.answer("Вызов уже обработан", show_alert=True)
+            return
+        await safe_edit(callback.message, duel_play_text(duel, user, result),
+                        duel_result_keyboard())
+        try:
+            await callback.bot.send_message(
+                challenger["user_id"], duel_play_text(duel, challenger, result),
+                reply_markup=duel_result_keyboard())
+        except Exception:
+            pass
+        await callback.answer("Дуэль завершена")
+
+    @dp.callback_query(F.data.startswith("duel:decline:"))
+    async def duel_decline(callback) -> None:
+        duel_id = callback.data.split(":")[-1]
+        user = get_user(callback)
+        duel = db.duel(duel_id)
+        if not duel or duel["status"] != "pending":
+            await callback.answer("Вызов уже неактивен", show_alert=True)
+            return
+        if int(duel["opponent_id"]) != int(user["user_id"]):
+            await callback.answer("Этот вызов не тебе", show_alert=True)
+            return
+        now = int(time.time())
+        bet = int(duel["bet"])
+        if not db.close_duel(duel_id, "declined", now):
+            await callback.answer("Вызов уже обработан", show_alert=True)
+            return
+        challenger = db.user(duel["challenger_id"])
+        db.add_balance(challenger["user_id"], bet)
+        awards.evaluate(db, challenger["user_id"])
+        await safe_edit(callback.message,
+                        "❌ <b>Вызов отклонён</b>\nСтавка возвращена сопернику.",
+                        None)
+        try:
+            await callback.bot.send_message(
+                challenger["user_id"],
+                f"❌ {user_name(user)} отклонил вызов на {num(bet)} mCoin. "
+                "Ставка возвращена.")
+        except Exception:
+            pass
+        await callback.answer("Отклонено")
+
+    @dp.callback_query(F.data.startswith("duel:cancel:"))
+    async def duel_cancel(callback) -> None:
+        duel_id = callback.data.split(":")[-1]
+        user = get_user(callback)
+        duel = db.duel(duel_id)
+        if not duel or duel["status"] != "pending":
+            await callback.answer("Вызов уже неактивен", show_alert=True)
+            return
+        if int(duel["challenger_id"]) != int(user["user_id"]):
+            await callback.answer("Отменить может только автор вызова", show_alert=True)
+            return
+        now = int(time.time())
+        bet = int(duel["bet"])
+        if not db.close_duel(duel_id, "cancelled", now):
+            await callback.answer("Вызов уже обработан", show_alert=True)
+            return
+        db.add_balance(user["user_id"], bet)
+        awards.evaluate(db, user["user_id"])
+        await safe_edit(callback.message,
+                        "❌ <b>Вызов отменён</b>\nСтавка возвращена.", None)
+        try:
+            await callback.bot.send_message(
+                duel["opponent_id"],
+                f"❌ {user_name(user)} отменил вызов на {num(bet)} mCoin.")
+        except Exception:
+            pass
+        await callback.answer("Отменено")
+
+    @dp.callback_query(F.data == "menu:games")
+    async def menu_games(callback) -> None:
+        await callback.message.answer(games_hint_text(), reply_markup=games_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data == "menu:roulette")
+    async def menu_roulette(callback) -> None:
+        await callback.message.answer(roulette_hint_text(),
+                                      reply_markup=roulette_hint_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data == "menu:slots")
+    async def menu_slots(callback) -> None:
+        await callback.message.answer(slots_hint_text(),
+                                      reply_markup=slots_hint_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data == "menu:crash")
+    async def menu_crash(callback) -> None:
+        await callback.message.answer(crash_hint_text(),
+                                      reply_markup=crash_hint_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("rl:"))
+    async def roulette_quick(callback) -> None:
+        _, bet_raw, pick = callback.data.split(":")
+        user = get_user(callback)
+        await callback.message.answer(play_roulette(user, int(bet_raw), pick))
+        await callback.answer("Готово")
+
+    @dp.callback_query(F.data.startswith("sl:"))
+    async def slots_quick(callback) -> None:
+        bet = int(callback.data.split(":")[1])
+        user = get_user(callback)
+        await callback.message.answer(play_slots(user, bet))
+        await callback.answer("Готово")
+
+    @dp.callback_query(F.data.startswith("cr:"))
+    async def crash_quick(callback) -> None:
+        _, bet_raw, target_raw = callback.data.split(":")
+        user = get_user(callback)
+        await callback.message.answer(play_crash(user, int(bet_raw),
+                                                 float(target_raw)))
+        await callback.answer("Готово")
 
     @dp.callback_query(F.data.startswith("d:"))
     async def dice_quick(callback) -> None:
@@ -998,7 +1699,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 show_alert=True)
             return
         if int(user["balance"]) < amount:
-            await callback.answer("Недостаточно сапов. Забери бонус: /bonus",
+            await callback.answer("Недостаточно mCoin. Забери бонус: /bonus",
                                   show_alert=True)
             return
         now = int(time.time())
@@ -1008,6 +1709,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         db.add_balance(user["user_id"], -amount)
         db.create_deposit(deposit_id, user["user_id"], "fixed", amount,
                           plan["rate_bps"], now, ends)
+        awards.evaluate(db, user["user_id"])
         fresh = db.user(user["user_id"])
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📖 Мои депозиты", callback_data="dep:mine")],
@@ -1016,11 +1718,11 @@ def build_dispatcher(db: Database) -> Dispatcher:
         await safe_edit(
             callback.message,
             "✅ <b>Депозит открыт</b>\n\n"
-            f"Сумма: {num(amount)} сапов\n"
+            f"Сумма: {num(amount)} mCoin\n"
             f"Срок: {days} дн. — до {date_text(ends)}\n"
-            f"Доход: +{num(interest)} сапов ({pct(plan['rate_bps'] / 100)}%)\n"
-            f"К закрытию: {num(amount + interest)} сапов\n\n"
-            f"💰 Баланс: {num(fresh['balance'])} сапов",
+            f"Доход: +{num(interest)} mCoin ({pct(plan['rate_bps'] / 100)}%)\n"
+            f"К закрытию: {num(amount + interest)} mCoin\n\n"
+            f"💰 Баланс: {num(fresh['balance'])} mCoin",
             keyboard,
         )
         await callback.answer("Депозит открыт")
@@ -1040,7 +1742,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer("Аккаунт заблокирован.", show_alert=True)
             return
         if int(user["balance"]) < amount:
-            await callback.answer("Недостаточно сапов", show_alert=True)
+            await callback.answer("Недостаточно mCoin", show_alert=True)
             return
         now = int(time.time())
         savings = db.savings(user["user_id"])
@@ -1054,6 +1756,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             db.create_deposit(uuid.uuid4().hex[:12], user["user_id"], "savings",
                               amount, game.SAVINGS_RATE_BPS, now, None)
         db.add_balance(user["user_id"], -amount)
+        awards.evaluate(db, user["user_id"])
         fresh = db.user(user["user_id"])
         await safe_edit(callback.message, savings_text(fresh),
                         savings_keyboard(fresh))
@@ -1073,7 +1776,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if not db.close_deposit(savings["id"], payout, now):
             await callback.answer("Счёт уже закрыт", show_alert=True)
             return
-        balance = db.add_balance(user["user_id"], payout)
+        db.add_balance(user["user_id"], payout)
+        awards.evaluate(db, user["user_id"])
+        balance = db.user(user["user_id"])["balance"]
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🪙 Накопительный счёт",
                                   callback_data="dep:savings")],
@@ -1082,10 +1787,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
         await safe_edit(
             callback.message,
             "✅ <b>Счёт закрыт</b>\n\n"
-            f"На счёте было: {num(savings['amount'])} сапов\n"
-            f"Проценты: +{num(interest)} сапов\n"
-            f"Выплачено: <b>{num(payout)}</b> сапов\n"
-            f"💰 Баланс: {num(balance)} сапов",
+            f"На счёте было: {num(savings['amount'])} mCoin\n"
+            f"Проценты: +{num(interest)} mCoin\n"
+            f"Выплачено: <b>{num(payout)}</b> mCoin\n"
+            f"💰 Баланс: {num(balance)} mCoin",
             keyboard,
         )
         await callback.answer("Снято")
@@ -1121,14 +1826,16 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if not db.close_deposit(deposit_id, payout, now):
             await callback.answer("Депозит уже закрыт", show_alert=True)
             return
-        balance = db.add_balance(user["user_id"], payout)
+        db.add_balance(user["user_id"], payout)
+        awards.evaluate(db, user["user_id"])
+        balance = db.user(user["user_id"])["balance"]
         text, keyboard = deposits_text(db.user(user["user_id"]))
         await safe_edit(
             callback.message,
             f"✅ <b>Депозит закрыт</b>\n\n"
-            f"Вложено: {num(row['amount'])} сапов\n"
-            f"Выплачено: <b>{num(payout)}</b> сапов\n"
-            f"💰 Баланс: {num(balance)} сапов\n\n" + text,
+            f"Вложено: {num(row['amount'])} mCoin\n"
+            f"Выплачено: <b>{num(payout)}</b> mCoin\n"
+            f"💰 Баланс: {num(balance)} mCoin\n\n" + text,
             keyboard,
         )
         await callback.answer(f"+{num(payout)}")
@@ -1163,9 +1870,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer("Награда уже получена", show_alert=True)
             return
         db.add_balance(user["user_id"], reward)
+        awards.evaluate(db, user["user_id"])
         text, keyboard = tasks_view(db.user(user["user_id"]))
         await safe_edit(callback.message, text, keyboard)
-        await callback.answer(f"+{num(reward)} сапов")
+        await callback.answer(f"+{num(reward)} mCoin")
 
     @dp.callback_query(F.data.startswith("sp:"))
     async def sponsor_claim(callback) -> None:
@@ -1197,9 +1905,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer("Награда уже получена", show_alert=True)
             return
         db.add_balance(user["user_id"], game.SPONSOR_REWARD)
+        awards.evaluate(db, user["user_id"])
         text, keyboard = tasks_view(db.user(user["user_id"]))
         await safe_edit(callback.message, text, keyboard)
-        await callback.answer(f"+{num(game.SPONSOR_REWARD)} сапов")
+        await callback.answer(f"+{num(game.SPONSOR_REWARD)} mCoin")
 
     return dp
 
@@ -1213,11 +1922,16 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="play", description="Открыть приложение"),
         BotCommand(command="mines", description="Сапёр в чате"),
         BotCommand(command="dice", description="Кости в чате"),
+        BotCommand(command="roulette", description="Рулетка"),
+        BotCommand(command="slots", description="Слоты"),
+        BotCommand(command="crash", description="Краш"),
+        BotCommand(command="duel", description="Дуэль 1×1"),
         BotCommand(command="spin", description="Колесо дня"),
         BotCommand(command="bonus", description="Бонусы"),
         BotCommand(command="balance", description="Профиль и статистика"),
         BotCommand(command="deposit", description="Депозиты"),
         BotCommand(command="tasks", description="Задания"),
+        BotCommand(command="achievements", description="Уровни и достижения"),
         BotCommand(command="top", description="Топ игроков"),
         BotCommand(command="ref", description="Пригласить друга"),
         BotCommand(command="fair", description="Честность игры"),

@@ -10,6 +10,7 @@ from urllib.parse import parse_qsl
 import aiohttp
 from aiohttp import web
 
+import awards
 import game
 from config import config
 from db import Database
@@ -113,6 +114,8 @@ class Api:
                 "dice": int(raw.get("game_dice", 1)) == 1,
                 "wheel": int(raw.get("game_wheel", 1)) == 1,
                 "crash": int(raw.get("game_crash", 1)) == 1,
+                "roulette": int(raw.get("game_roulette", 1)) == 1,
+                "slots": int(raw.get("game_slots", 1)) == 1,
             },
         }
 
@@ -186,11 +189,33 @@ class Api:
             "streak_days": game.SPIN_STREAK_DAYS,
         }
 
+    def _achievements_view(self, user: dict) -> list[dict]:
+        claimed = self.db.user_achievements(user["user_id"])
+        stats = awards.metrics(self.db, user["user_id"])
+        items = []
+        for ach in game.ACHIEVEMENTS:
+            target = ach["target"]
+            progress = stats.get(ach["metric"], 0)
+            items.append({
+                "key": ach["key"],
+                "icon": ach["icon"],
+                "title": ach["title"],
+                "desc": ach["desc"],
+                "reward": ach["reward"],
+                "xp": ach["xp"],
+                "target": target,
+                "progress": min(target, progress),
+                "done": progress >= target,
+                "claimed": ach["key"] in claimed,
+            })
+        return items
+
     def _public_user(self, user: dict) -> dict:
         now = int(time.time())
         cooldown_left = max(0, user["last_daily"] + game.DAILY_COOLDOWN - now)
         hourly_left = max(0, int(user.get("last_hourly") or 0) + game.HOURLY_COOLDOWN - now)
         spin_left = max(0, int(user.get("last_spin") or 0) + game.SPIN_COOLDOWN - now)
+        level = game.level_view(user.get("xp") or 0)
         return {
             "id": user["user_id"],
             "username": user["username"],
@@ -202,6 +227,15 @@ class Api:
             "total_wagered": user["total_wagered"],
             "total_won": user["total_won"],
             "best_multiplier": user["best_multiplier"],
+            "xp": level["xp"],
+            "level": level["level"],
+            "level_title": level["title"],
+            "level_into": level["into"],
+            "level_need": level["need"],
+            "level_percent": level["percent"],
+            "level_next": level["next"],
+            "duels_played": int(user.get("duels_played") or 0),
+            "duels_won": int(user.get("duels_won") or 0),
             "daily_ready": cooldown_left == 0,
             "daily_in": cooldown_left,
             "daily_amount": int(self._settings().get("daily_bonus", game.DAILY_BONUS)),
@@ -218,10 +252,13 @@ class Api:
         user = self._auth(request)
         if not user:
             return self._fail("unauthorized", 401)
+        if awards.evaluate(self.db, user["user_id"]):
+            user = self.db.user(user["user_id"])
         active = self.db.active_round(user["user_id"])
         payload = {
             "ok": True,
             "user": self._public_user(user),
+            "achievements": self._achievements_view(user),
             "bot_username": config.bot_username,
             "is_admin": self._is_admin(user),
             "settings": self._public_settings(),
@@ -260,6 +297,7 @@ class Api:
             "multiplier": rnd["multiplier"],
             "status": rnd["status"],
             "payout": rnd["payout"],
+            "auto_target": float(rnd.get("auto_target") or 0),
             "next_chance": game.next_chance(rnd["mines"], len(rnd["opened"])),
             "max_multiplier": game.max_multiplier(rnd["mines"]),
             "ladder": game.ladder(rnd["mines"], len(rnd["opened"])),
@@ -280,6 +318,7 @@ class Api:
         try:
             bet = int(body.get("bet", 0))
             mines = int(body.get("mines", 3))
+            auto_target = float(body.get("auto_target", 0) or 0)
         except (TypeError, ValueError):
             return self._fail("Некорректная ставка")
 
@@ -301,6 +340,10 @@ class Api:
             return self._fail(f"Ставка от {min_bet} до {max_bet}")
         if not (min_mines <= mines <= max_mines):
             return self._fail(f"Мин от {min_mines} до {max_mines}")
+        if auto_target:
+            top = game.max_multiplier(mines)
+            if not (1.05 <= auto_target <= top):
+                return self._fail(f"Авто-кэшаут от 1.05 до {top:.2f}")
         if self.db.active_round(user["user_id"]):
             return self._fail("Сначала завершите текущую игру")
         if user["balance"] < bet:
@@ -312,7 +355,8 @@ class Api:
         round_id = uuid.uuid4().hex[:16]
         balance = self.db.add_balance(user["user_id"], -bet)
         self.db.create_round(round_id, user["user_id"], bet, mines, positions,
-                             user["server_seed"], user["client_seed"], nonce)
+                             user["server_seed"], user["client_seed"], nonce,
+                             auto_target)
         return self._json({
             "ok": True,
             "round": {
@@ -322,6 +366,7 @@ class Api:
                 "opened": [],
                 "multiplier": 1.0,
                 "payout": 0,
+                "auto_target": auto_target,
                 "status": "active",
                 "next_chance": game.next_chance(mines, 0),
                 "max_multiplier": game.max_multiplier(mines),
@@ -356,7 +401,7 @@ class Api:
 
         if cell in rnd["mine_positions"]:
             self.db.update_round(rnd["id"], rnd["opened"], rnd["multiplier"], "lost", 0)
-            self.db.finish_stats(user["user_id"], rnd["bet"], 0, 0)
+            self._finish(user, rnd["bet"], 0, 0)
             refund = self._insurance_refund(user, rnd["bet"])
             self._settle_referral(user["user_id"])
             return self._json({
@@ -374,17 +419,19 @@ class Api:
         mult = game.multiplier(rnd["mines"], len(opened))
         safe = game.CELLS - rnd["mines"]
         finished = len(opened) >= safe
-        payout = game.payout_for(rnd["bet"], mult) if finished else 0
-        if finished:
+        target = float(rnd.get("auto_target") or 0)
+        auto = bool(target) and not finished and mult >= target
+        payout = game.payout_for(rnd["bet"], mult) if (finished or auto) else 0
+        if finished or auto:
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "mines", payout)
-        status = "won" if finished else "active"
+        status = "won" if finished else ("cashed" if auto else "active")
         self.db.update_round(rnd["id"], opened, mult, status, payout)
 
         balance = self.db.user(user["user_id"])["balance"]
-        if finished:
+        if finished or auto:
             balance = self.db.add_balance(user["user_id"], payout)
-            self.db.finish_stats(user["user_id"], rnd["bet"], payout, mult)
+            self._finish(user, rnd["bet"], payout, mult)
             self._settle_referral(user["user_id"])
 
         return self._json({
@@ -394,7 +441,8 @@ class Api:
             "opened": opened,
             "multiplier": mult,
             "payout": payout,
-            "finished": finished,
+            "finished": finished or auto,
+            "auto": auto,
             "status": status,
             "next_chance": game.next_chance(rnd["mines"], len(opened)),
             "ladder": game.ladder(rnd["mines"], len(opened)),
@@ -417,7 +465,7 @@ class Api:
         payout = self._apply_relic(user, "mines", payout)
         self.db.update_round(rnd["id"], rnd["opened"], mult, "cashed", payout)
         balance = self.db.add_balance(user["user_id"], payout)
-        self.db.finish_stats(user["user_id"], rnd["bet"], payout, mult)
+        self._finish(user, rnd["bet"], payout, mult)
         self._settle_referral(user["user_id"])
         return self._json({
             "ok": True,
@@ -427,6 +475,14 @@ class Api:
             "mine_positions": rnd["mine_positions"],
             "status": "cashed",
         })
+
+    def _finish(self, user: dict, bet: int, payout: int, mult: float) -> list[dict]:
+        self.db.finish_stats(user["user_id"], bet, payout, mult)
+        xp = game.XP_PER_GAME + (game.XP_PER_WIN if payout > 0 else 0)
+        self.db.add_xp(user["user_id"], xp)
+        earned = awards.evaluate(self.db, user["user_id"])
+        self.db.claim_referral_bonus(user["user_id"])
+        return earned
 
     def _settle_referral(self, user_id: int) -> None:
         self.db.claim_referral_bonus(user_id)
@@ -447,7 +503,9 @@ class Api:
             bonus *= 2
         self.db._exec("UPDATE users SET last_daily = ? WHERE user_id = ?",
                       (now, user["user_id"]))
-        balance = self.db.add_balance(user["user_id"], bonus)
+        self.db.add_balance(user["user_id"], bonus)
+        awards.evaluate(self.db, user["user_id"])
+        balance = self.db.user(user["user_id"])["balance"]
         return self._json({"ok": True, "amount": bonus, "doubled": doubled,
                            "balance": balance})
 
@@ -579,7 +637,7 @@ class Api:
         self.db.add_balance(user["user_id"], payout - bet)
         self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "dice", bet, win, payout,
                          {"roll": roll, "pick": pick, "nonce": nonce})
-        self.db.finish_stats(user["user_id"], bet, payout, multiplier or 1.0)
+        self._finish(user, bet, payout, multiplier or 1.0)
         self._settle_referral(user["user_id"])
 
         return self._json({
@@ -620,7 +678,7 @@ class Api:
         self.db.add_balance(user["user_id"], payout - bet)
         self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "wheel", bet,
                          multiplier > 0, payout, {"segment": index, "nonce": nonce})
-        self.db.finish_stats(user["user_id"], bet, payout, multiplier or 1.0)
+        self._finish(user, bet, payout, multiplier or 1.0)
         self._settle_referral(user["user_id"])
 
         return self._json({
@@ -749,7 +807,7 @@ class Api:
         self.db.add_balance(user["user_id"], payout - bet)
         self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "crash", bet, win, payout,
                          {"point": point, "target": target, "nonce": nonce})
-        self.db.finish_stats(user["user_id"], bet, payout, multiplier or 1.0)
+        self._finish(user, bet, payout, multiplier or 1.0)
         self._settle_referral(user["user_id"])
 
         return self._json({
@@ -810,7 +868,7 @@ class Api:
             if item_key in unique and self.db.item_qty(user["user_id"], item_key) > 0:
                 return self._fail("Этот предмет уже куплен")
         if user["balance"] < price:
-            return self._fail("Недостаточно сапов")
+            return self._fail("Недостаточно mCoin")
         balance = self.db.add_balance(user["user_id"], -price)
         for item_key, qty in (grant or {}).items():
             if item_key == "charm":
@@ -842,6 +900,7 @@ class Api:
                                       game.HOURLY_COOLDOWN, game.HOURLY_BONUS)
         if amount is None:
             return self._fail("Бонус ещё не готов", 429)
+        awards.evaluate(self.db, user["user_id"])
         fresh = self.db.user(user["user_id"])
         return self._json({"ok": True, "amount": amount, "balance": fresh["balance"],
                            "user": self._public_user(fresh)})
@@ -865,6 +924,7 @@ class Api:
             qty = game.CHARM_CHARGES if prize["item"] == "charm" else 1
             self.db.add_item(user["user_id"], prize["item"], qty)
         self.db.mark_spin(user["user_id"], now, next_day)
+        awards.evaluate(self.db, user["user_id"])
         fresh = self.db.user(user["user_id"])
         return self._json({"ok": True, "index": index, "prize": self._prize_view(prize),
                            "day": day, "next_day": next_day, "balance": fresh["balance"],
@@ -890,7 +950,9 @@ class Api:
             return self._fail("Не хватает приглашённых")
         if not self.db.invite_claim(user["user_id"], step):
             return self._fail("Награда уже получена")
-        balance = self.db.add_balance(user["user_id"], reward)
+        self.db.add_balance(user["user_id"], reward)
+        awards.evaluate(self.db, user["user_id"])
+        balance = self.db.user(user["user_id"])["balance"]
         return self._json({"ok": True, "step": step, "reward": reward, "balance": balance})
 
     async def _channel_member(self, channel: str, user_id: int) -> bool:
@@ -926,7 +988,9 @@ class Api:
             return self._fail("Подписка не найдена")
         if not self.db.sponsor_claim(user["user_id"], channel):
             return self._fail("Награда уже получена")
-        balance = self.db.add_balance(user["user_id"], game.SPONSOR_REWARD)
+        self.db.add_balance(user["user_id"], game.SPONSOR_REWARD)
+        awards.evaluate(self.db, user["user_id"])
+        balance = self.db.user(user["user_id"])["balance"]
         return self._json({"ok": True, "channel": "@" + channel,
                            "reward": game.SPONSOR_REWARD, "balance": balance})
 
@@ -960,9 +1024,10 @@ class Api:
                 dep_id = uuid.uuid4().hex[:12]
                 self.db.create_deposit(dep_id, user["user_id"], "savings", amount,
                                        game.SAVINGS_RATE_BPS, now, None)
-            balance = self.db.add_balance(user["user_id"], -amount)
+            self.db.add_balance(user["user_id"], -amount)
+            awards.evaluate(self.db, user["user_id"])
             fresh = self.db.user(user["user_id"])
-            return self._json({"ok": True, "id": dep_id, "balance": balance,
+            return self._json({"ok": True, "id": dep_id, "balance": fresh["balance"],
                                "deposits": self._deposits_view(fresh)})
         try:
             days = int(body.get("days", 0))
@@ -975,6 +1040,7 @@ class Api:
         self.db.add_balance(user["user_id"], -amount)
         self.db.create_deposit(dep_id, user["user_id"], "fixed", amount,
                                plan["rate_bps"], now, now + days * 86400)
+        awards.evaluate(self.db, user["user_id"])
         fresh = self.db.user(user["user_id"])
         return self._json({"ok": True, "id": dep_id, "balance": fresh["balance"],
                            "deposits": self._deposits_view(fresh)})
@@ -1000,9 +1066,10 @@ class Api:
                 row["amount"], row["rate_bps"], now - int(row["started_at"]))
         if not self.db.close_deposit(dep_id, payout, now):
             return self._fail("Депозит уже закрыт")
-        balance = self.db.add_balance(user["user_id"], payout)
+        self.db.add_balance(user["user_id"], payout)
+        awards.evaluate(self.db, user["user_id"])
         fresh = self.db.user(user["user_id"])
-        return self._json({"ok": True, "payout": payout, "balance": balance,
+        return self._json({"ok": True, "payout": payout, "balance": fresh["balance"],
                            "deposits": self._deposits_view(fresh)})
 
     async def admin_overview(self, request: web.Request) -> web.Response:
@@ -1119,7 +1186,8 @@ class Api:
         body = await self._body(request)
         allowed = ("min_bet", "max_bet", "min_mines", "max_mines",
                    "daily_bonus", "maintenance",
-                   "game_mines", "game_dice", "game_wheel", "game_crash")
+                   "game_mines", "game_dice", "game_wheel", "game_crash",
+                   "game_roulette", "game_slots")
         updates: dict[str, int] = {}
         for key in allowed:
             if key not in body:
@@ -1145,7 +1213,8 @@ class Api:
             return self._fail("Некорректный ежедневный бонус")
         if merged["maintenance"] not in (0, 1):
             return self._fail("Техработы: 0 или 1")
-        for key in ("game_mines", "game_dice", "game_wheel", "game_crash"):
+        for key in ("game_mines", "game_dice", "game_wheel", "game_crash",
+                    "game_roulette", "game_slots"):
             if merged.get(key, 1) not in (0, 1):
                 return self._fail(f"Флаг игры {key}: только 0 или 1")
 

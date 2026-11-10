@@ -16,6 +16,54 @@ HOURLY_COOLDOWN = 60 * 60
 REF_BONUS = 500
 REF_GAMES_REQUIRED = 5
 
+XP_PER_GAME = 10
+XP_PER_WIN = 15
+XP_PER_DUEL_WIN = 40
+
+LEVEL_TITLES = (
+    (1, "Новобранец"),
+    (3, "Сапёр"),
+    (5, "Старшина"),
+    (8, "Ветеран"),
+    (12, "Мастер"),
+    (18, "Легенда"),
+    (25, "Гроссмейстер"),
+)
+
+
+def xp_for_level(level: int) -> int:
+    """Сколько всего XP нужно, чтобы достичь уровня."""
+    level = max(1, int(level))
+    return 50 * (level - 1) * level
+
+
+def level_from_xp(xp: int) -> int:
+    xp = max(0, int(xp))
+    level = 1
+    while xp >= xp_for_level(level + 1):
+        level += 1
+    return level
+
+
+def level_title(level: int) -> str:
+    title = LEVEL_TITLES[0][1]
+    for start, name in LEVEL_TITLES:
+        if level >= start:
+            title = name
+    return title
+
+
+def level_view(xp: int) -> dict:
+    xp = max(0, int(xp))
+    level = level_from_xp(xp)
+    floor_xp = xp_for_level(level)
+    next_xp = xp_for_level(level + 1)
+    need = next_xp - floor_xp
+    into = xp - floor_xp
+    percent = round(into / need * 100, 1) if need else 100.0
+    return {"level": level, "title": level_title(level), "xp": xp,
+            "into": into, "need": need, "percent": percent, "next": next_xp}
+
 REF_LADDER = (
     {"step": 3, "reward": 350},
     {"step": 6, "reward": 800},
@@ -116,6 +164,18 @@ def hash_seed(server_seed: str) -> str:
 
 DICE_MULTIPLIER = 1.96
 
+DUEL_RAKE = 0.05
+DUEL_TTL = 10 * 60
+
+
+def duel_roll(server_seed: str, client_seed: str, nonce: int) -> int:
+    value = next(_floats(server_seed, client_seed, nonce, 0, 1))
+    return min(100, int(value * 100) + 1)
+
+
+def duel_prize(bet: int) -> int:
+    return int(math.floor(int(bet) * 2 * (1 - DUEL_RAKE)))
+
 WHEEL_SEGMENTS = (
     {"multiplier": 0.0, "weight": 35},
     {"multiplier": 1.1, "weight": 25},
@@ -152,13 +212,52 @@ SPIN_STREAK_DAYS = 7
 DAILY_QUESTS = (
     {"key": "games5", "title": "Сыграть 5 партий", "metric": "games", "target": 5, "reward": 300},
     {"key": "wins3", "title": "Выиграть 3 раза", "metric": "wins", "target": 3, "reward": 500},
-    {"key": "wager1000", "title": "Поставить 1000 сапов", "metric": "wagered", "target": 1000,
+    {"key": "wager1000", "title": "Поставить 1000 mCoin", "metric": "wagered", "target": 1000,
      "reward": 700},
+)
+
+ACHIEVEMENTS = (
+    {"key": "first_game", "icon": "🎯", "title": "Первая партия",
+     "desc": "Сыграть одну партию", "metric": "games_played", "target": 1,
+     "reward": 100, "xp": 20},
+    {"key": "games_10", "icon": "🔟", "title": "Десятка",
+     "desc": "Сыграть 10 партий", "metric": "games_played", "target": 10,
+     "reward": 200, "xp": 30},
+    {"key": "games_50", "icon": "🎖", "title": "Полсотни",
+     "desc": "Сыграть 50 партий", "metric": "games_played", "target": 50,
+     "reward": 500, "xp": 60},
+    {"key": "win_1", "icon": "🏅", "title": "Первая победа",
+     "desc": "Выиграть один раз", "metric": "games_won", "target": 1,
+     "reward": 100, "xp": 20},
+    {"key": "win_10", "icon": "🥇", "title": "Десять побед",
+     "desc": "Выиграть 10 раз", "metric": "games_won", "target": 10,
+     "reward": 400, "xp": 50},
+    {"key": "mult_3", "icon": "🔥", "title": "Кэшаут ×3",
+     "desc": "Забрать выигрыш на множителе ×3", "metric": "best_multiplier", "target": 3,
+     "reward": 250, "xp": 40},
+    {"key": "mult_10", "icon": "💎", "title": "Кэшаут ×10",
+     "desc": "Забрать выигрыш на множителе ×10", "metric": "best_multiplier", "target": 10,
+     "reward": 1000, "xp": 100},
+    {"key": "balance_5000", "icon": "🪙", "title": "Пять тысяч",
+     "desc": "Накопить 5 000 mCoin", "metric": "balance", "target": 5000,
+     "reward": 300, "xp": 50},
+    {"key": "deposit_first", "icon": "🏦", "title": "Первый вклад",
+     "desc": "Открыть депозит", "metric": "deposits_count", "target": 1,
+     "reward": 150, "xp": 25},
+    {"key": "duel_win_1", "icon": "⚔️", "title": "Первая дуэль",
+     "desc": "Выиграть дуэль 1×1", "metric": "duels_won", "target": 1,
+     "reward": 300, "xp": 50},
+    {"key": "invite_3", "icon": "👥", "title": "Три друга",
+     "desc": "Пригласить трёх друзей", "metric": "referrals", "target": 3,
+     "reward": 300, "xp": 40},
+    {"key": "spin_7", "icon": "🎡", "title": "Неделя удачи",
+     "desc": "Дойти до 7-го дня серии колеса", "metric": "spin_day", "target": 7,
+     "reward": 500, "xp": 60},
 )
 
 SHOP_ITEMS = (
     {"key": "insurance", "title": "Страховка", "price": 120, "category": "items",
-     "desc": "Возврат 25% ставки при проигрыше, максимум 200 сапов"},
+     "desc": "Возврат 25% ставки при проигрыше, максимум 200 mCoin"},
     {"key": "double_daily", "title": "Двойной бонус", "price": 250, "category": "items",
      "desc": "Следующий ежедневный бонус ×2"},
     {"key": "charm", "title": "Талисман удачи", "price": 350, "category": "items",
@@ -197,8 +296,66 @@ GAME_RELICS = {
     "mines": "relic_mines",
     "dice": "relic_dice",
     "wheel": "relic_wheel",
+    "roulette": "relic_wheel",
     "crash": "relic_crash",
 }
+
+ROULETTE_RED = frozenset({1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36})
+ROULETTE_GREEN = 0
+
+
+def roulette_number(server_seed: str, client_seed: str, nonce: int) -> int:
+    value = next(_floats(server_seed, client_seed, nonce, 0, 1))
+    return min(36, int(value * 37))
+
+
+def roulette_multiplier(number: int, pick: str) -> float:
+    if pick == "green":
+        return 36.0 if number == ROULETTE_GREEN else 0.0
+    if number == ROULETTE_GREEN:
+        return 0.0
+    red = number in ROULETTE_RED
+    if pick == "red" and red:
+        return 2.0
+    if pick == "black" and not red:
+        return 2.0
+    return 0.0
+
+
+SLOT_SYMBOLS = (
+    {"key": "cherry", "icon": "🍒", "weight": 30, "triple": 4.0},
+    {"key": "lemon", "icon": "🍋", "weight": 25, "triple": 6.0},
+    {"key": "bell", "icon": "🔔", "weight": 20, "triple": 10.0},
+    {"key": "diamond", "icon": "💎", "weight": 12, "triple": 25.0},
+    {"key": "seven", "icon": "7️⃣", "weight": 8, "triple": 60.0},
+    {"key": "star", "icon": "⭐", "weight": 5, "triple": 200.0},
+)
+SLOT_PAIR = 1.2
+
+
+def spin_slots(server_seed: str, client_seed: str, nonce: int) -> tuple[list[dict], float]:
+    values = list(_floats(server_seed, client_seed, nonce, 0, 3))
+    total = sum(symbol["weight"] for symbol in SLOT_SYMBOLS)
+    reels = []
+    for value in values:
+        point = value * total
+        acc = 0.0
+        chosen = SLOT_SYMBOLS[-1]
+        for symbol in SLOT_SYMBOLS:
+            acc += symbol["weight"]
+            if point < acc:
+                chosen = symbol
+                break
+        reels.append(chosen)
+    keys = [symbol["key"] for symbol in reels]
+    if keys[0] == keys[1] == keys[2]:
+        multiplier = next(symbol["triple"] for symbol in SLOT_SYMBOLS
+                          if symbol["key"] == keys[0])
+    elif keys[0] == keys[1] or keys[0] == keys[2] or keys[1] == keys[2]:
+        multiplier = SLOT_PAIR
+    else:
+        multiplier = 0.0
+    return reels, multiplier
 
 CRASH_RTP = 0.99
 CRASH_MIN = 1.2
