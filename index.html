@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#0e1016">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='42' fill='%237c5cff'/%3E%3C/svg%3E">
   <title>Апрельский сапёр</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -138,9 +139,13 @@
             <input id="wheelBet" type="number" inputmode="numeric" min="10" step="10" value="50">
             <span class="bet-unit">сапов</span>
           </div>
-          <div class="wheel" id="wheelView"></div>
-          <button class="cta" id="wheelSpin">Крутить колесо</button>
-          <div class="hint" id="wheelHint">Сегменты: ×0, ×1,1, ×1,35, ×1,7, ×2,3, ×3,2</div>
+          <div class="wheel-stage">
+            <div class="wheel-pointer"></div>
+            <div class="wheel-disc" id="wheelView"></div>
+            <button class="wheel-spin" id="wheelSpin">Крутить</button>
+          </div>
+          <div class="wheel-result" id="wheelHint">Выберите ставку и жмите «Крутить»</div>
+          <div class="wheel-legend" id="wheelLegend"></div>
         </div>
       </div>
     </section>
@@ -192,6 +197,19 @@
         <button class="tab" data-tab="mult">По множителю</button>
       </div>
       <div class="list" id="topList"></div>
+    </section>
+
+    <section class="view" id="view-shop">
+      <div class="card-title page-title">Магазин</div>
+      <div class="shop-inventory" id="shopInventory"></div>
+      <div class="card">
+        <div class="card-title">Товары</div>
+        <div class="shop-list" id="shopItems"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Наборы</div>
+        <div class="shop-list" id="shopBundles"></div>
+      </div>
     </section>
 
     <section class="view" id="view-fair">
@@ -257,6 +275,7 @@
     <button class="nav-btn" data-view="profile"><span>👤</span>Профиль</button>
     <button class="nav-btn" data-view="history"><span>📜</span>История</button>
     <button class="nav-btn" data-view="top"><span>🏆</span>Топ</button>
+    <button class="nav-btn" data-view="shop"><span>🛒</span>Магазин</button>
     <button class="nav-btn" data-view="fair"><span>🔐</span>Честность</button>
     <button class="nav-btn" id="adminNav" data-view="admin" hidden><span>🛠</span>Админ</button>
   </nav>

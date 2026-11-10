@@ -11,6 +11,7 @@ const state = {
   sound: true,
   game: "mines",
   quests: [],
+  shop: { items: [], bundles: [], inventory: {} },
   leaderboard: { by_balance: [], by_multiplier: [], me: 0 },
   history: [],
   referrals: { total: 0, active: 0 },
@@ -401,7 +402,7 @@ function renderAdminRecent() {
         <div class="row-icon ${win ? "win" : "lose"}">${win ? "💎" : "💥"}</div>
         <div class="row-main">
           <div class="row-title">${escapeHtml(playerName(r))} · ${fmt(r.bet)}</div>
-          <div class="row-sub">${r.mines} мин · ${fmtMult(r.multiplier)} · ${r.status}</div>
+          <div class="row-sub">${escapeHtml(r.label || ((r.mines || 0) + " мин"))} · ${fmtMult(r.multiplier)} · ${r.status}</div>
         </div>
         <div class="row-value ${win ? "plus" : "minus"}">${win ? "+" + fmt(r.payout) : "−" + fmt(r.bet)}</div>
       </div>`;
@@ -523,21 +524,47 @@ function clampBet(value) {
   return Math.max(min, Math.min(max, Math.round(value || 0)));
 }
 
-function renderWheel(highlight) {
-  const box = $("wheelView");
-  if (!box) return;
-  const segments = state.wheelSegments && state.wheelSegments.length
+const WHEEL_COLORS = ["#3a2230", "#1f3a34", "#26324a", "#342a4d", "#4a3a20", "#1f3b46"];
+let wheelAngle = 0;
+
+function wheelSegments() {
+  return state.wheelSegments && state.wheelSegments.length
     ? state.wheelSegments
-    : [{ multiplier: 0 }, { multiplier: 1.1 }, { multiplier: 1.35 },
-       { multiplier: 1.7 }, { multiplier: 2.3 }, { multiplier: 3.2 }];
-  box.innerHTML = segments
-    .map((seg, i) => {
-      const zero = !seg.multiplier;
-      return `<div class="wheel-seg${highlight === i ? " hit" : ""}${zero ? " zero" : ""}">
-        ${zero ? "×0" : fmtMult(seg.multiplier)}
-      </div>`;
-    })
-    .join("");
+    : [{ multiplier: 0, weight: 35 }, { multiplier: 1.1, weight: 25 },
+       { multiplier: 1.35, weight: 18 }, { multiplier: 1.7, weight: 12 },
+       { multiplier: 2.3, weight: 7 }, { multiplier: 3.2, weight: 3 }];
+}
+
+function wheelMidAngle(index) {
+  const segments = wheelSegments();
+  const total = segments.reduce((sum, seg) => sum + (seg.weight || 1), 0);
+  let acc = 0;
+  for (let i = 0; i < index; i++) acc += segments[i].weight || 1;
+  const share = (segments[index].weight || 1) / total;
+  return ((acc + share / 2) / total) * 360;
+}
+
+function renderWheel() {
+  const disc = $("wheelView");
+  const legend = $("wheelLegend");
+  if (!disc) return;
+  const segments = wheelSegments();
+  const total = segments.reduce((sum, seg) => sum + (seg.weight || 1), 0);
+  let acc = 0;
+  const stops = [];
+  const chips = [];
+  segments.forEach((seg, i) => {
+    const from = (acc / total) * 360;
+    acc += seg.weight || 1;
+    const to = (acc / total) * 360;
+    const color = seg.multiplier ? WHEEL_COLORS[i % WHEEL_COLORS.length] : "#3a2230";
+    stops.push(`${color} ${from}deg ${to}deg`);
+    const label = seg.multiplier ? fmtMult(seg.multiplier) : "×0";
+    chips.push(`<span class="wheel-chip"><i style="background:${color}"></i>${label}</span>`);
+  });
+  disc.style.background = `conic-gradient(${stops.join(", ")})`;
+  disc.innerHTML = "";
+  if (legend) legend.innerHTML = chips.join("");
 }
 
 function renderQuests() {
@@ -603,30 +630,108 @@ async function spinWheel() {
   const bet = clampBet(parseInt(input.value || "0", 10));
   input.value = bet;
   const btn = $("wheelSpin");
+  const disc = $("wheelView");
+  const hint = $("wheelHint");
   btn.disabled = true;
+  hint.textContent = "Крутим…";
+  hint.className = "wheel-result";
   try {
     const data = await api("/api/games/wheel", { bet });
     state.user.balance = data.balance;
     state.quests = data.quests || state.quests;
     state.wheelSegments = data.segments || state.wheelSegments;
-    renderWheel(data.segment);
+    renderWheel();
+
+    const mid = wheelMidAngle(data.segment);
+    const delta = ((-mid - (wheelAngle % 360)) % 360 + 360) % 360;
+    wheelAngle += 360 * 4 + delta;
+    disc.style.transform = `rotate(${wheelAngle}deg)`;
+
+    await new Promise((resolve) => setTimeout(resolve, 3400));
+
     if (data.multiplier > 0) {
+      hint.textContent = `Сектор ${fmtMult(data.multiplier)} — выигрыш ${fmt(data.payout)}`;
+      hint.className = "wheel-result win";
       sfx.cash();
       haptic("success");
       toast(`+${fmt(data.payout)} сапов`);
     } else {
+      hint.textContent = "Пустой сектор — ставка сгорела";
+      hint.className = "wheel-result lose";
       sfx.boom();
       haptic("error");
-      toast("Пустой сектор");
     }
-    $("wheelHint").textContent = data.multiplier > 0
-      ? `Сектор ${fmtMult(data.multiplier)} — выигрыш ${fmt(data.payout)}`
-      : "Пустой сектор — ставка сгорела";
     renderAll();
   } catch (e) {
+    hint.textContent = e.message;
+    hint.className = "wheel-result lose";
     toast(e.message);
   } finally {
     btn.disabled = false;
+  }
+}
+
+/* ---------- магазин ---------- */
+
+const INV_LABELS = { insurance: "🛡 Страховка", double_daily: "×2 Бонус", charm: "🍀 Талисман" };
+
+function renderShopInventory() {
+  const box = $("shopInventory");
+  if (!box) return;
+  const inv = (state.shop && state.shop.inventory) || {};
+  const chips = Object.keys(INV_LABELS)
+    .filter((key) => (inv[key] || 0) > 0)
+    .map((key) => `<span class="inv-chip">${INV_LABELS[key]} ×${inv[key]}</span>`);
+  box.innerHTML = chips.length
+    ? chips.join("")
+    : '<span class="muted">Инвентарь пуст — купи предмет ниже.</span>';
+}
+
+function shopCard(entry) {
+  return `<div class="shop-card">
+    <div class="shop-meta">
+      <div class="shop-title">${escapeHtml(entry.title)}</div>
+      <div class="shop-desc">${escapeHtml(entry.desc)}</div>
+    </div>
+    <button class="shop-buy" data-key="${entry.key}">
+      <span class="shop-price">◈ ${fmt(entry.price)}</span>
+      Купить
+    </button>
+  </div>`;
+}
+
+function renderShop() {
+  const shop = state.shop || {};
+  const items = $("shopItems");
+  const bundles = $("shopBundles");
+  if (items) items.innerHTML = (shop.items || []).map(shopCard).join("");
+  if (bundles) bundles.innerHTML = (shop.bundles || []).map(shopCard).join("");
+  renderShopInventory();
+}
+
+async function loadShop() {
+  try {
+    const data = await api("/api/shop");
+    state.shop = data;
+    renderShop();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function buyItem(key) {
+  try {
+    const data = await api("/api/shop/buy", { key });
+    state.user.balance = data.balance;
+    state.shop.inventory = data.inventory || {};
+    sfx.cash();
+    haptic("success");
+    toast(`Куплено: ${data.bought}`);
+    renderAll();
+    renderShop();
+  } catch (e) {
+    haptic("error");
+    toast(e.message);
   }
 }
 
@@ -654,6 +759,7 @@ async function loadState() {
   state.settings = data.settings || state.settings;
   state.isAdmin = !!data.is_admin;
   state.quests = data.quests || state.quests;
+  state.shop.inventory = data.inventory || state.shop.inventory;
   const adminNav = $("adminNav");
   if (adminNav) adminNav.hidden = !state.isAdmin;
   state.referrals = data.referrals;
@@ -786,6 +892,7 @@ function switchView(name) {
   if (name === "top") loadTop();
   if (name === "history") loadHistory();
   if (name === "admin") loadAdmin();
+  if (name === "shop") loadShop();
 }
 
 async function loadTop() {
@@ -972,6 +1079,12 @@ function bind() {
     }));
 
   $("wheelSpin").addEventListener("click", spinWheel);
+
+  $("view-shop").addEventListener("click", (e) => {
+    const btn = e.target.closest(".shop-buy");
+    if (!btn || btn.disabled) return;
+    buyItem(btn.dataset.key);
+  });
 
   $("questsList").addEventListener("click", async (e) => {
     const btn = e.target.closest(".quest-claim");

@@ -76,6 +76,14 @@ SCHEMA_STATEMENTS = [
         PRIMARY KEY (user_id, day, quest)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS inventory (
+        user_id INTEGER NOT NULL,
+        item    TEXT NOT NULL,
+        qty     INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, item)
+    )
+    """,
 ]
 
 DEFAULT_SETTINGS = {
@@ -415,16 +423,28 @@ class Database:
         banned = self._row("SELECT COUNT(*) AS c FROM users WHERE is_banned = 1")
         rounds = self._row("SELECT COUNT(*) AS c FROM rounds WHERE status != 'active'")
         active = self._row("SELECT COUNT(*) AS c FROM rounds WHERE status = 'active'")
-        totals = self._row(
+        mine_totals = self._row(
             """SELECT COALESCE(SUM(bet), 0) AS wagered,
                       COALESCE(SUM(payout), 0) AS paid,
                       COALESCE(SUM(CASE WHEN payout > 0 THEN 1 ELSE 0 END), 0) AS wins
                FROM rounds WHERE status != 'active'""")
-        today = self._row(
+        play_totals = self._row(
             """SELECT COALESCE(SUM(bet), 0) AS wagered,
                       COALESCE(SUM(payout), 0) AS paid,
-                      COUNT(*) AS rounds
+                      COALESCE(SUM(CASE WHEN win = 1 THEN 1 ELSE 0 END), 0) AS wins,
+                      COUNT(*) AS c
+               FROM plays""")
+        mine_today = self._row(
+            """SELECT COALESCE(SUM(bet), 0) AS wagered,
+                      COALESCE(SUM(payout), 0) AS paid,
+                      COUNT(*) AS c
                FROM rounds WHERE status != 'active' AND created_at >= ?""",
+            (day_start,))
+        play_today = self._row(
+            """SELECT COALESCE(SUM(bet), 0) AS wagered,
+                      COALESCE(SUM(payout), 0) AS paid,
+                      COUNT(*) AS c
+               FROM plays WHERE created_at >= ?""",
             (day_start,))
         balances = self._row("SELECT COALESCE(SUM(balance), 0) AS s FROM users")
         best = self._row(
@@ -432,27 +452,62 @@ class Database:
                       r.multiplier, r.mines
                FROM rounds r LEFT JOIN users u ON u.user_id = r.user_id
                WHERE r.status != 'active' ORDER BY r.payout DESC LIMIT 1""")
-        wagered = totals["wagered"] if totals else 0
-        paid = totals["paid"] if totals else 0
+
+        def total(row, key):
+            return row[key] if row and row.get(key) is not None else 0
+
+        wagered = total(mine_totals, "wagered") + total(play_totals, "wagered")
+        paid = total(mine_totals, "paid") + total(play_totals, "paid")
+        wins = total(mine_totals, "wins") + total(play_totals, "wins")
+        round_count = total(rounds, "c") + total(play_totals, "c")
         rtp = round((paid / wagered) * 100, 2) if wagered else 0.0
         return {
-            "users": users["c"] if users else 0,
-            "banned": banned["c"] if banned else 0,
-            "rounds": rounds["c"] if rounds else 0,
-            "active_rounds": active["c"] if active else 0,
+            "users": total(users, "c"),
+            "banned": total(banned, "c"),
+            "rounds": round_count,
+            "active_rounds": total(active, "c"),
             "wagered": wagered,
             "paid": paid,
             "profit": wagered - paid,
             "rtp": rtp,
-            "wins": totals["wins"] if totals else 0,
-            "balances": balances["s"] if balances else 0,
+            "wins": wins,
+            "balances": total(balances, "s"),
             "today": {
-                "wagered": today["wagered"] if today else 0,
-                "paid": today["paid"] if today else 0,
-                "rounds": today["rounds"] if today else 0,
+                "wagered": total(mine_today, "wagered") + total(play_today, "wagered"),
+                "paid": total(mine_today, "paid") + total(play_today, "paid"),
+                "rounds": total(mine_today, "c") + total(play_today, "c"),
             },
             "best_round": best,
         }
+
+    def admin_recent(self, limit: int = 12) -> list[dict]:
+        rounds = self._rows(
+            """SELECT r.id, r.user_id, u.username, u.first_name, r.bet, r.multiplier,
+                      r.status, r.payout, r.mines, r.created_at
+               FROM rounds r LEFT JOIN users u ON u.user_id = r.user_id
+               WHERE r.status != 'active'
+               ORDER BY r.created_at DESC LIMIT ?""",
+            (int(limit),))
+        plays = self._rows(
+            """SELECT p.id, p.user_id, u.username, u.first_name, p.bet, p.game,
+                      p.win, p.payout, p.created_at
+               FROM plays p LEFT JOIN users u ON u.user_id = p.user_id
+               ORDER BY p.created_at DESC, p.id DESC LIMIT ?""",
+            (int(limit),))
+        items: list[dict] = []
+        for row in rounds:
+            item = dict(row)
+            item["label"] = f"{row['mines']} мин"
+            items.append(item)
+        names = {"dice": "Кости", "wheel": "Колесо"}
+        for row in plays:
+            item = dict(row)
+            item["label"] = names.get(row["game"], row["game"])
+            item["multiplier"] = 0.0
+            item["status"] = "win" if row["win"] else "lose"
+            items.append(item)
+        items.sort(key=lambda entry: entry["created_at"], reverse=True)
+        return items[: int(limit)]
 
     def admin_rounds(self, user_id: int | None = None, limit: int = 20) -> list[dict]:
         sql = (
@@ -519,3 +574,39 @@ class Database:
             (user_id, day, quest, int(time.time())),
         )
         return bool(changed)
+
+    # --- инвентарь -------------------------------------------------------
+    def item_qty(self, user_id: int, item: str) -> int:
+        row = self._row("SELECT qty FROM inventory WHERE user_id = ? AND item = ?",
+                        (user_id, item))
+        return row["qty"] if row else 0
+
+    def add_item(self, user_id: int, item: str, qty: int = 1) -> int:
+        if qty <= 0:
+            return self.item_qty(user_id, item)
+        if self.backend == "postgres":
+            self._exec(
+                """INSERT INTO inventory (user_id, item, qty) VALUES (?, ?, ?)
+                   ON CONFLICT (user_id, item)
+                   DO UPDATE SET qty = inventory.qty + ?""",
+                (user_id, item, qty, qty),
+            )
+        else:
+            self._exec(
+                """INSERT INTO inventory (user_id, item, qty) VALUES (?, ?, ?)
+                   ON CONFLICT (user_id, item) DO UPDATE SET qty = qty + ?""",
+                (user_id, item, qty, qty),
+            )
+        return self.item_qty(user_id, item)
+
+    def take_item(self, user_id: int, item: str, qty: int = 1) -> bool:
+        with self._lock:
+            if self.item_qty(user_id, item) < qty:
+                return False
+            self._exec("UPDATE inventory SET qty = qty - ? WHERE user_id = ? AND item = ?",
+                       (qty, user_id, item))
+            return True
+
+    def inventory(self, user_id: int) -> dict:
+        rows = self._rows("SELECT item, qty FROM inventory WHERE user_id = ?", (user_id,))
+        return {row["item"]: row["qty"] for row in rows if row["qty"] > 0}

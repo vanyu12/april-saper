@@ -122,6 +122,28 @@ DAILY_QUESTS = (
      "reward": 700},
 )
 
+SHOP_ITEMS = (
+    {"key": "insurance", "title": "Страховка", "price": 400,
+     "desc": "Возвращает 50% ставки при следующем проигрыше"},
+    {"key": "double_daily", "title": "Двойной бонус", "price": 600,
+     "desc": "Следующий ежедневный бонус ×2"},
+    {"key": "charm", "title": "Талисман удачи", "price": 900,
+     "desc": "+10% к выплате на 5 выигрышей"},
+)
+
+SHOP_BUNDLES = (
+    {"key": "starter", "title": "Набор новичка", "price": 1100,
+     "desc": "2 страховки + двойной бонус",
+     "items": {"insurance": 2, "double_daily": 1}},
+    {"key": "pro", "title": "Набор сапёра", "price": 2000,
+     "desc": "Талисман и 3 страховки",
+     "items": {"charm": 1, "insurance": 3}},
+)
+
+INSURANCE_REFUND = 0.5
+CHARM_BONUS = 0.1
+CHARM_CHARGES = 5
+
 
 def day_key() -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(time.time() + DAY_OFFSET))

@@ -123,7 +123,7 @@ class Api:
             "best_multiplier": user["best_multiplier"],
             "daily_ready": cooldown_left == 0,
             "daily_in": cooldown_left,
-            "daily_amount": game.DAILY_BONUS,
+            "daily_amount": int(self._settings().get("daily_bonus", game.DAILY_BONUS)),
             "ref_code": f"ref_{user['user_id']}",
         }
 
@@ -148,6 +148,7 @@ class Api:
                 "nonce": user["nonce"],
             },
             "quests": self._quests_view(user),
+            "inventory": self._inventory_view(user),
             "active_round": None,
         }
         if active:
@@ -259,6 +260,7 @@ class Api:
         if cell in rnd["mine_positions"]:
             self.db.update_round(rnd["id"], rnd["opened"], rnd["multiplier"], "lost", 0)
             self.db.finish_stats(user["user_id"], rnd["bet"], 0, 0)
+            refund = self._insurance_refund(user, rnd["bet"])
             self._settle_referral(user["user_id"])
             return self._json({
                 "ok": True,
@@ -266,6 +268,7 @@ class Api:
                 "cell": cell,
                 "mine_positions": rnd["mine_positions"],
                 "multiplier": rnd["multiplier"],
+                "refund": refund,
                 "balance": self.db.user(user["user_id"])["balance"],
                 "status": "lost",
             })
@@ -275,6 +278,8 @@ class Api:
         safe = game.CELLS - rnd["mines"]
         finished = len(opened) >= safe
         payout = game.payout_for(rnd["bet"], mult) if finished else 0
+        if finished:
+            payout = self._charm_bonus(user, payout)
         status = "won" if finished else "active"
         self.db.update_round(rnd["id"], opened, mult, status, payout)
 
@@ -310,6 +315,7 @@ class Api:
             return self._fail("Откройте хотя бы одну клетку")
         mult = game.multiplier(rnd["mines"], len(rnd["opened"]))
         payout = game.payout_for(rnd["bet"], mult)
+        payout = self._charm_bonus(user, payout)
         self.db.update_round(rnd["id"], rnd["opened"], mult, "cashed", payout)
         balance = self.db.add_balance(user["user_id"], payout)
         self.db.finish_stats(user["user_id"], rnd["bet"], payout, mult)
@@ -337,10 +343,14 @@ class Api:
             left = user["last_daily"] + game.DAILY_COOLDOWN - now
             return self._fail(f"Бонус будет доступен через {left // 3600} ч")
         bonus = int(self._settings().get("daily_bonus", game.DAILY_BONUS))
+        doubled = self.db.take_item(user["user_id"], "double_daily")
+        if doubled:
+            bonus *= 2
         self.db._exec("UPDATE users SET last_daily = ? WHERE user_id = ?",
                       (now, user["user_id"]))
         balance = self.db.add_balance(user["user_id"], bonus)
-        return self._json({"ok": True, "amount": bonus, "balance": balance})
+        return self._json({"ok": True, "amount": bonus, "doubled": doubled,
+                           "balance": balance})
 
     async def history(self, request: web.Request) -> web.Response:
         user = self._auth(request)
@@ -458,6 +468,11 @@ class Api:
         win = is_even if pick == "even" else not is_even
         multiplier = game.DICE_MULTIPLIER if win else 0.0
         payout = int(math.floor(bet * multiplier)) if win else 0
+        refund = 0
+        if win:
+            payout = self._charm_bonus(user, payout)
+        else:
+            refund = self._insurance_refund(user, bet)
 
         self.db.add_balance(user["user_id"], payout - bet)
         self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "dice", bet, win, payout,
@@ -472,6 +487,7 @@ class Api:
             "win": win,
             "multiplier": multiplier,
             "payout": payout,
+            "refund": refund,
             "balance": self.db.user(user["user_id"])["balance"],
             "quests": self._quests_view(user),
         })
@@ -492,6 +508,11 @@ class Api:
         nonce = self.db.bump_nonce(user["user_id"])
         index, multiplier = game.spin_wheel(user["server_seed"], user["client_seed"], nonce)
         payout = int(math.floor(bet * multiplier)) if multiplier > 0 else 0
+        refund = 0
+        if multiplier > 0:
+            payout = self._charm_bonus(user, payout)
+        else:
+            refund = self._insurance_refund(user, bet)
 
         self.db.add_balance(user["user_id"], payout - bet)
         self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "wheel", bet,
@@ -504,6 +525,7 @@ class Api:
             "segment": index,
             "multiplier": multiplier,
             "payout": payout,
+            "refund": refund,
             "balance": self.db.user(user["user_id"])["balance"],
             "segments": game.WHEEL_SEGMENTS,
             "quests": self._quests_view(user),
@@ -555,6 +577,73 @@ class Api:
         return self._json({"ok": True, "reward": quest["reward"], "balance": balance,
                            "quests": self._quests_view(user)})
 
+    # --- магазин ---------------------------------------------------------
+    def _inventory_view(self, user: dict) -> dict:
+        inv = self.db.inventory(user["user_id"])
+        return {key: int(inv.get(key, 0)) for key in ("insurance", "double_daily", "charm")}
+
+    def _insurance_refund(self, user: dict, bet: int) -> int:
+        if not self.db.take_item(user["user_id"], "insurance"):
+            return 0
+        refund = int(bet * game.INSURANCE_REFUND)
+        if refund > 0:
+            self.db.add_balance(user["user_id"], refund)
+        return refund
+
+    def _charm_bonus(self, user: dict, payout: int) -> int:
+        if payout <= 0:
+            return payout
+        if not self.db.take_item(user["user_id"], "charm"):
+            return payout
+        extra = int(payout * game.CHARM_BONUS)
+        if extra <= 0:
+            return payout
+        self.db.add_balance(user["user_id"], extra)
+        return payout + extra
+
+    async def shop(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        return self._json({
+            "ok": True,
+            "balance": user["balance"],
+            "inventory": self._inventory_view(user),
+            "items": [dict(item) for item in game.SHOP_ITEMS],
+            "bundles": [dict(bundle) for bundle in game.SHOP_BUNDLES],
+        })
+
+    async def shop_buy(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        key = str(body.get("key", ""))
+        entry = next((item for item in game.SHOP_ITEMS if item["key"] == key), None)
+        grant = {key: 1} if entry else None
+        if entry is None:
+            bundle = next((b for b in game.SHOP_BUNDLES if b["key"] == key), None)
+            if not bundle:
+                return self._fail("Товар не найден", 404)
+            entry = bundle
+            grant = dict(bundle["items"])
+        price = int(entry["price"])
+        if user["balance"] < price:
+            return self._fail("Недостаточно сапов")
+        balance = self.db.add_balance(user["user_id"], -price)
+        for item_key, qty in (grant or {}).items():
+            if item_key == "charm":
+                qty *= game.CHARM_CHARGES
+            self.db.add_item(user["user_id"], item_key, qty)
+        return self._json({
+            "ok": True,
+            "balance": balance,
+            "inventory": self._inventory_view(user),
+            "bought": entry["title"],
+        })
+
     # --- admin -----------------------------------------------------------
     @staticmethod
     async def _body(request: web.Request) -> dict:
@@ -572,7 +661,7 @@ class Api:
             "ok": True,
             "stats": self.db.admin_stats(),
             "settings": self._public_settings(),
-            "recent": self.db.admin_rounds(None, 12),
+            "recent": self.db.admin_recent(12),
         })
 
     async def admin_users(self, request: web.Request) -> web.Response:
@@ -695,6 +784,8 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/games/wheel", api.wheel)
     app.router.add_post("/api/quests", api.quests)
     app.router.add_post("/api/quests/claim", api.quest_claim)
+    app.router.add_post("/api/shop", api.shop)
+    app.router.add_post("/api/shop/buy", api.shop_buy)
     app.router.add_post("/api/admin/overview", api.admin_overview)
     app.router.add_post("/api/admin/users", api.admin_users)
     app.router.add_post("/api/admin/balance", api.admin_balance)
