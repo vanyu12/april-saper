@@ -25,7 +25,11 @@ SCHEMA_STATEMENTS = [
         nonce            INTEGER NOT NULL DEFAULT 0,
         referred_by      INTEGER,
         ref_paid         INTEGER NOT NULL DEFAULT 0,
-        is_banned        INTEGER NOT NULL DEFAULT 0
+        is_banned        INTEGER NOT NULL DEFAULT 0,
+        photo_url        TEXT NOT NULL DEFAULT '',
+        last_hourly      INTEGER NOT NULL DEFAULT 0,
+        last_spin        INTEGER NOT NULL DEFAULT 0,
+        spin_day         INTEGER NOT NULL DEFAULT 1
     )
     """,
     """
@@ -82,6 +86,37 @@ SCHEMA_STATEMENTS = [
         item    TEXT NOT NULL,
         qty     INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (user_id, item)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS deposits (
+        id         TEXT PRIMARY KEY,
+        user_id    INTEGER NOT NULL,
+        kind       TEXT NOT NULL DEFAULT 'fixed',
+        amount     INTEGER NOT NULL,
+        rate_bps   INTEGER NOT NULL,
+        started_at INTEGER NOT NULL,
+        ends_at    INTEGER,
+        status     TEXT NOT NULL DEFAULT 'active',
+        payout     INTEGER NOT NULL DEFAULT 0,
+        closed_at  INTEGER
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_deposits_user ON deposits(user_id, status)",
+    """
+    CREATE TABLE IF NOT EXISTS invite_claims (
+        user_id    INTEGER NOT NULL,
+        step       INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, step)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS sponsor_claims (
+        user_id    INTEGER NOT NULL,
+        channel    TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, channel)
     )
     """,
 ]
@@ -187,6 +222,15 @@ class Database:
         if "is_banned" not in self._table_columns("users"):
             self._exec(
                 "ALTER TABLE users ADD COLUMN is_banned INTEGER NOT NULL DEFAULT 0")
+        present = self._table_columns("users")
+        for name, ddl in (
+            ("photo_url", "TEXT NOT NULL DEFAULT ''"),
+            ("last_hourly", "INTEGER NOT NULL DEFAULT 0"),
+            ("last_spin", "INTEGER NOT NULL DEFAULT 0"),
+            ("spin_day", "INTEGER NOT NULL DEFAULT 1"),
+        ):
+            if name not in present:
+                self._exec(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
         for key, value in DEFAULT_SETTINGS.items():
             self._exec(
                 "INSERT INTO settings (key, value) VALUES (?, ?) "
@@ -204,13 +248,14 @@ class Database:
 
     # --- users -----------------------------------------------------------
     def ensure_user(self, user_id: int, username: str | None, first_name: str | None,
-                    referrer: int | None = None) -> dict:
+                    referrer: int | None = None, photo_url: str | None = None) -> dict:
         with self._lock:
             row = self._row("SELECT * FROM users WHERE user_id = ?", (user_id,))
             if row:
                 self._exec(
-                    "UPDATE users SET username = ?, first_name = ? WHERE user_id = ?",
-                    (username, first_name, user_id),
+                    "UPDATE users SET username = ?, first_name = ?, "
+                    "photo_url = COALESCE(?, photo_url) WHERE user_id = ?",
+                    (username, first_name, photo_url, user_id),
                 )
                 return self.user(user_id)
             now = int(time.time())
@@ -225,9 +270,10 @@ class Database:
                 referrer = None
             self._exec(
                 """INSERT INTO users (user_id, username, first_name, balance, created_at,
-                       server_seed, server_seed_hash, client_seed, referred_by)
-                   VALUES (?, ?, ?, 1000, ?, ?, ?, ?, ?)""",
-                (user_id, username, first_name, now, seed, seed_hash, client_seed, referrer),
+                       server_seed, server_seed_hash, client_seed, referred_by, photo_url)
+                   VALUES (?, ?, ?, 1000, ?, ?, ?, ?, ?, ?)""",
+                (user_id, username, first_name, now, seed, seed_hash, client_seed,
+                 referrer, photo_url or ""),
             )
             return self.user(user_id)
 
@@ -324,7 +370,8 @@ class Database:
 
     def leaderboard(self, limit: int = 20) -> list[dict]:
         return self._rows(
-            """SELECT user_id, username, first_name, balance, best_multiplier, games_played
+            """SELECT user_id, username, first_name, photo_url, balance,
+                      best_multiplier, games_played
                FROM users ORDER BY balance DESC LIMIT ?""",
             (limit,),
         )
@@ -370,6 +417,46 @@ class Database:
             self._exec("UPDATE users SET ref_paid = 1 WHERE user_id = ?", (user_id,))
             self.add_balance(me["referred_by"], 500)
             return me["referred_by"]
+
+    # --- бонусы и колесо -------------------------------------------------
+    def claim_hourly(self, user_id: int, now: int, cooldown: int, amount: int) -> int | None:
+        with self._lock:
+            me = self.user(user_id)
+            if not me or now - int(me["last_hourly"]) < cooldown:
+                return None
+            self._exec(
+                "UPDATE users SET last_hourly = ?, balance = balance + ? WHERE user_id = ?",
+                (now, amount, user_id))
+            return amount
+
+    def mark_spin(self, user_id: int, now: int, spin_day: int) -> None:
+        self._exec("UPDATE users SET last_spin = ?, spin_day = ? WHERE user_id = ?",
+                   (now, spin_day, user_id))
+
+    # --- приглашения -----------------------------------------------------
+    def invite_claim(self, user_id: int, step: int) -> bool:
+        changed = self._exec(
+            "INSERT INTO invite_claims (user_id, step, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (user_id, step) DO NOTHING",
+            (user_id, step, int(time.time())))
+        return bool(changed)
+
+    def invite_claims(self, user_id: int) -> set[int]:
+        rows = self._rows("SELECT step FROM invite_claims WHERE user_id = ?", (user_id,))
+        return {int(row["step"]) for row in rows}
+
+    # --- спонсоры --------------------------------------------------------
+    def sponsor_claim(self, user_id: int, channel: str) -> bool:
+        changed = self._exec(
+            "INSERT INTO sponsor_claims (user_id, channel, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (user_id, channel) DO NOTHING",
+            (user_id, channel, int(time.time())))
+        return bool(changed)
+
+    def sponsor_claims(self, user_id: int) -> set[str]:
+        rows = self._rows("SELECT channel FROM sponsor_claims WHERE user_id = ?",
+                          (user_id,))
+        return {row["channel"] for row in rows}
 
     # --- settings --------------------------------------------------------
     def settings(self) -> dict:
@@ -655,3 +742,48 @@ class Database:
     def inventory(self, user_id: int) -> dict:
         rows = self._rows("SELECT item, qty FROM inventory WHERE user_id = ?", (user_id,))
         return {row["item"]: row["qty"] for row in rows if row["qty"] > 0}
+
+    # --- депозиты --------------------------------------------------------
+    def deposit(self, dep_id: str) -> dict | None:
+        return self._row("SELECT * FROM deposits WHERE id = ?", (dep_id,))
+
+    def deposits(self, user_id: int, status: str = "active") -> list[dict]:
+        return self._rows(
+            "SELECT * FROM deposits WHERE user_id = ? AND status = ? "
+            "ORDER BY started_at DESC", (user_id, status))
+
+    def create_deposit(self, dep_id: str, user_id: int, kind: str, amount: int,
+                       rate_bps: int, now: int, ends_at: int | None) -> None:
+        self._exec(
+            """INSERT INTO deposits (id, user_id, kind, amount, rate_bps, started_at,
+                   ends_at, status, payout, closed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 0, NULL)""",
+            (dep_id, user_id, kind, amount, rate_bps, now, ends_at))
+
+    def savings(self, user_id: int) -> dict | None:
+        return self._row(
+            "SELECT * FROM deposits WHERE user_id = ? AND kind = 'savings' "
+            "AND status = 'active' LIMIT 1", (user_id,))
+
+    def update_savings(self, dep_id: str, amount: int, started_at: int) -> None:
+        self._exec("UPDATE deposits SET amount = ?, started_at = ? WHERE id = ?",
+                   (amount, started_at, dep_id))
+
+    def close_deposit(self, dep_id: str, payout: int, now: int) -> bool:
+        changed = self._exec(
+            """UPDATE deposits SET status = 'closed', payout = ?, closed_at = ?
+               WHERE id = ? AND status = 'active'""",
+            (payout, now, dep_id))
+        return bool(changed)
+
+    # --- хаб игр ---------------------------------------------------------
+    def game_players(self) -> dict[str, int]:
+        rows = self._rows(
+            "SELECT game, COUNT(DISTINCT user_id) AS c FROM plays GROUP BY game")
+        return {row["game"]: int(row["c"]) for row in rows}
+
+    def last_game(self, user_id: int) -> str | None:
+        row = self._row(
+            "SELECT game FROM plays WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+            (user_id,))
+        return row["game"] if row else None

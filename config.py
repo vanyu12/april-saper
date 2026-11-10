@@ -52,6 +52,8 @@ class Config:
     admin_usernames: list[str] = field(
         default_factory=lambda: _name_list("ADMIN_USERNAMES"))
     renewal_remind_hours: int = _int("RENEWAL_REMIND_HOURS", 96)
+    sponsor_channels: list[str] = field(
+        default_factory=lambda: _name_list("SPONSOR_CHANNELS"))
     bot_username: str = ""
 
 

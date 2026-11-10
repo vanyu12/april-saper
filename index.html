@@ -34,6 +34,18 @@
   <main class="views">
 
     <section class="view active" id="view-game">
+      <div class="bonus-strip">
+        <button class="bonus-card" id="hourlyCard">
+          <span class="bonus-icon">🎁</span>
+          <span class="bonus-main"><b>Бонус</b><small id="hourlyHint">раз в час</small></span>
+          <span class="bonus-badge" id="hourlyBadge">Забрать</span>
+        </button>
+        <button class="bonus-card" id="spinCard">
+          <span class="bonus-icon">🎡</span>
+          <span class="bonus-main"><b>Колесо дня</b><small id="spinHint">День 1</small></span>
+          <span class="bonus-badge" id="spinBadge">Крутить</span>
+        </button>
+      </div>
       <div class="game-switch" id="gameSwitch">
         <button class="gs-btn active" data-game="mines">💣 Сапёр</button>
         <button class="gs-btn" data-game="dice">🎲 Кости</button>
@@ -244,6 +256,65 @@
       </div>
     </section>
 
+    <section class="view" id="view-tasks">
+      <div class="card-title page-title">Задания</div>
+      <div class="card" id="dailySpinCard">
+        <div class="card-title">Колесо дня</div>
+        <div class="spin-stage">
+          <div class="spin-pointer"></div>
+          <div class="spin-disc" id="dailySpinDisc"></div>
+        </div>
+        <div class="spin-legend" id="dailySpinLegend"></div>
+        <button class="cta" id="dailySpinBtn">Прокрутить</button>
+        <div class="hint" id="dailySpinHint">Раз в 12 часов · День 1</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Ежедневные задания</div>
+        <div class="quests" id="tasksQuests"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Приглашай друзей</div>
+        <div class="list" id="inviteList"></div>
+      </div>
+      <div class="card" id="sponsorCard" hidden>
+        <div class="card-title">Спонсоры</div>
+        <div class="list" id="sponsorList"></div>
+      </div>
+    </section>
+
+    <section class="view" id="view-games">
+      <div class="card-title page-title">Игры</div>
+      <div class="hub-last" id="hubLast"></div>
+      <div class="hub-grid" id="hubGrid"></div>
+    </section>
+
+    <section class="view" id="view-bank">
+      <div class="card-title page-title">Депозит-банк</div>
+      <div class="card">
+        <div class="card-title">Временные депозиты</div>
+        <div class="plans" id="depositPlans"></div>
+        <div class="bet-input-wrap">
+          <span class="coin">◈</span>
+          <input id="depositAmount" type="number" inputmode="numeric" min="100" step="100" value="1000">
+          <span class="bet-unit">сапов</span>
+        </div>
+        <div class="hint" id="depositHint">Выберите срок</div>
+        <button class="cta" id="depositCreate">Открыть депозит</button>
+      </div>
+      <div class="card">
+        <div class="card-title">Накопительный счёт · 0,1% в день</div>
+        <div class="list" id="savingsCard"></div>
+        <div class="savings-actions">
+          <button class="secondary" id="savingsPut">Положить сумму</button>
+          <button class="secondary" id="savingsClose" hidden>Забрать всё</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Мои депозиты</div>
+        <div class="list" id="depositList"></div>
+      </div>
+    </section>
+
     <section class="view" id="view-fair">
       <div class="card-title page-title">Честность игры</div>
       <div class="card">
@@ -313,10 +384,13 @@
 
   <nav class="nav">
     <button class="nav-btn active" data-view="game"><span>💣</span>Игра</button>
-    <button class="nav-btn" data-view="profile"><span>👤</span>Профиль</button>
-    <button class="nav-btn" data-view="history"><span>📜</span>История</button>
+    <button class="nav-btn" data-view="tasks"><span>✅</span>Задания</button>
+    <button class="nav-btn" data-view="games"><span>🎮</span>Игры</button>
     <button class="nav-btn" data-view="top"><span>🏆</span>Топ</button>
     <button class="nav-btn" data-view="shop"><span>🛒</span>Магазин</button>
+    <button class="nav-btn" data-view="bank"><span>🏦</span>Банк</button>
+    <button class="nav-btn" data-view="profile"><span>👤</span>Профиль</button>
+    <button class="nav-btn" data-view="history"><span>📜</span>История</button>
     <button class="nav-btn" data-view="fair"><span>🔐</span>Честность</button>
     <button class="nav-btn" id="adminNav" data-view="admin" hidden><span>🛠</span>Админ</button>
   </nav>

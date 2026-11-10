@@ -11,8 +11,20 @@ MAX_BET = 100_000
 START_BALANCE = 1000
 DAILY_BONUS = 300
 DAILY_COOLDOWN = 24 * 60 * 60
+HOURLY_BONUS = 100
+HOURLY_COOLDOWN = 60 * 60
 REF_BONUS = 500
 REF_GAMES_REQUIRED = 5
+
+REF_LADDER = (
+    {"step": 3, "reward": 350},
+    {"step": 6, "reward": 800},
+    {"step": 10, "reward": 1200},
+    {"step": 25, "reward": 2500},
+    {"step": 50, "reward": 5500},
+)
+
+SPONSOR_REWARD = 500
 
 
 def _safe_count(mines: int) -> int:
@@ -115,6 +127,28 @@ WHEEL_SEGMENTS = (
 
 DAY_OFFSET = 3 * 3600
 
+DAILY_SPIN = (
+    {"kind": "coins", "amount": 25, "weight": 150},
+    {"kind": "coins", "amount": 50, "weight": 150},
+    {"kind": "coins", "amount": 75, "weight": 100},
+    {"kind": "coins", "amount": 100, "weight": 120},
+    {"kind": "coins", "amount": 150, "weight": 90},
+    {"kind": "coins", "amount": 200, "weight": 80},
+    {"kind": "coins", "amount": 250, "weight": 80},
+    {"kind": "coins", "amount": 350, "weight": 60},
+    {"kind": "coins", "amount": 500, "weight": 45},
+    {"kind": "coins", "amount": 800, "weight": 30},
+    {"kind": "coins", "amount": 1000, "weight": 18},
+    {"kind": "coins", "amount": 1500, "weight": 10},
+    {"kind": "coins", "amount": 3000, "weight": 4},
+    {"kind": "coins", "amount": 5000, "weight": 2},
+    {"kind": "item", "item": "insurance", "weight": 60},
+    {"kind": "item", "item": "charm", "weight": 30},
+)
+
+SPIN_COOLDOWN = 12 * 60 * 60
+SPIN_STREAK_DAYS = 7
+
 DAILY_QUESTS = (
     {"key": "games5", "title": "Сыграть 5 партий", "metric": "games", "target": 5, "reward": 300},
     {"key": "wins3", "title": "Выиграть 3 раза", "metric": "wins", "target": 3, "reward": 500},
@@ -197,8 +231,41 @@ def spin_wheel(server_seed: str, client_seed: str, nonce: int) -> tuple[int, flo
     return len(WHEEL_SEGMENTS) - 1, WHEEL_SEGMENTS[-1]["multiplier"]
 
 
+def spin_daily(server_seed: str, client_seed: str, nonce: int) -> tuple[int, dict]:
+    value = next(_floats(server_seed, client_seed, nonce, 0, 1))
+    total = sum(segment["weight"] for segment in DAILY_SPIN)
+    point = value * total
+    acc = 0.0
+    for index, segment in enumerate(DAILY_SPIN):
+        acc += segment["weight"]
+        if point < acc:
+            return index, segment
+    return len(DAILY_SPIN) - 1, DAILY_SPIN[-1]
+
+
 def crash_point(server_seed: str, client_seed: str, nonce: int) -> float:
     """Точка краша: P(точка ≥ m) = 0.99 / m, поэтому EV ставки равен 0.99."""
     value = next(_floats(server_seed, client_seed, nonce, 0, 1))
     value = min(max(value, 1e-6), 0.999999)
     return max(1.0, math.floor((CRASH_RTP / value) * 100) / 100)
+
+
+DEPOSIT_PLANS = (
+    {"days": 1, "rate_bps": 15},
+    {"days": 3, "rate_bps": 50},
+    {"days": 7, "rate_bps": 120},
+    {"days": 15, "rate_bps": 300},
+    {"days": 30, "rate_bps": 700},
+)
+SAVINGS_RATE_BPS = 10
+DEPOSIT_MIN = 100
+DEPOSIT_MAX = 1_000_000
+
+
+def deposit_interest(amount: int, rate_bps: int) -> int:
+    return int(amount) * rate_bps // 10000
+
+
+def savings_interest(amount: int, rate_bps: int, seconds: int) -> int:
+    seconds = max(0, int(seconds))
+    return int(amount) * rate_bps * seconds // (10000 * 86400)

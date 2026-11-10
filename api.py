@@ -7,6 +7,7 @@ import time
 import uuid
 from urllib.parse import parse_qsl
 
+import aiohttp
 from aiohttp import web
 
 import game
@@ -70,7 +71,8 @@ class Api:
             except ValueError:
                 referrer = None
         return self.db.ensure_user(
-            user["id"], user.get("username"), user.get("first_name"), referrer)
+            user["id"], user.get("username"), user.get("first_name"), referrer,
+            user.get("photo_url"))
 
     @staticmethod
     def _json(data: dict, status: int = 200) -> web.Response:
@@ -117,13 +119,83 @@ class Api:
     def _game_enabled(self, settings: dict, key: str) -> bool:
         return int(settings.get("game_" + key, 1)) == 1
 
+    @staticmethod
+    def _prize_view(prize: dict) -> dict:
+        if prize["kind"] == "coins":
+            return {"kind": "coins", "title": "+" + str(prize["amount"]),
+                    "amount": prize["amount"]}
+        item = next((i for i in game.SHOP_ITEMS if i["key"] == prize["item"]), None)
+        return {"kind": "item", "title": item["title"] if item else prize["item"],
+                "item": prize["item"]}
+
+    def _invites_view(self, user: dict) -> dict:
+        refs = self.db.referrals(user["user_id"])
+        claimed = self.db.invite_claims(user["user_id"])
+        ladder = [
+            {"step": item["step"], "reward": item["reward"],
+             "done": refs["total"] >= item["step"], "claimed": item["step"] in claimed}
+            for item in game.REF_LADDER
+        ]
+        return {"total": refs["total"], "active": refs["active"], "ladder": ladder}
+
+    def _sponsors_view(self, user: dict) -> list[dict]:
+        claimed = self.db.sponsor_claims(user["user_id"])
+        return [{"channel": "@" + channel, "reward": game.SPONSOR_REWARD,
+                 "claimed": channel in claimed}
+                for channel in config.sponsor_channels]
+
+    def _deposits_view(self, user: dict) -> dict:
+        now = int(time.time())
+        items = []
+        for row in self.db.deposits(user["user_id"]):
+            if row["kind"] != "fixed":
+                continue
+            interest = game.deposit_interest(row["amount"], row["rate_bps"])
+            items.append({
+                "id": row["id"],
+                "amount": row["amount"],
+                "rate_bps": row["rate_bps"],
+                "ends_at": row["ends_at"],
+                "ready": now >= int(row["ends_at"] or 0),
+                "payout": row["amount"] + interest,
+            })
+        savings = self.db.savings(user["user_id"])
+        savings_data = None
+        if savings:
+            accrued = game.savings_interest(
+                savings["amount"], savings["rate_bps"],
+                now - int(savings["started_at"]))
+            savings_data = {
+                "id": savings["id"],
+                "amount": savings["amount"],
+                "rate_bps": savings["rate_bps"],
+                "accrued": accrued,
+            }
+        plans = [
+            {"days": plan["days"], "rate_bps": plan["rate_bps"],
+             "percent": plan["rate_bps"] / 100}
+            for plan in game.DEPOSIT_PLANS
+        ]
+        return {"plans": plans, "items": items, "savings": savings_data,
+                "min": game.DEPOSIT_MIN, "max": game.DEPOSIT_MAX}
+
+    def _spin_view(self) -> dict:
+        return {
+            "prizes": [self._prize_view(segment) for segment in game.DAILY_SPIN],
+            "cooldown": game.SPIN_COOLDOWN,
+            "streak_days": game.SPIN_STREAK_DAYS,
+        }
+
     def _public_user(self, user: dict) -> dict:
         now = int(time.time())
         cooldown_left = max(0, user["last_daily"] + game.DAILY_COOLDOWN - now)
+        hourly_left = max(0, int(user.get("last_hourly") or 0) + game.HOURLY_COOLDOWN - now)
+        spin_left = max(0, int(user.get("last_spin") or 0) + game.SPIN_COOLDOWN - now)
         return {
             "id": user["user_id"],
             "username": user["username"],
             "first_name": user["first_name"],
+            "photo_url": user.get("photo_url") or "",
             "balance": user["balance"],
             "games_played": user["games_played"],
             "games_won": user["games_won"],
@@ -133,6 +205,12 @@ class Api:
             "daily_ready": cooldown_left == 0,
             "daily_in": cooldown_left,
             "daily_amount": int(self._settings().get("daily_bonus", game.DAILY_BONUS)),
+            "hourly_ready": hourly_left == 0,
+            "hourly_in": hourly_left,
+            "hourly_amount": game.HOURLY_BONUS,
+            "spin_ready": spin_left == 0,
+            "spin_in": spin_left,
+            "spin_day": int(user.get("spin_day") or 1),
             "ref_code": f"ref_{user['user_id']}",
         }
 
@@ -158,6 +236,14 @@ class Api:
             },
             "quests": self._quests_view(user),
             "inventory": self._inventory_view(user),
+            "invites": self._invites_view(user),
+            "sponsors": self._sponsors_view(user),
+            "deposits": self._deposits_view(user),
+            "spin": self._spin_view(),
+            "games_hub": {
+                "players": self.db.game_players(),
+                "last": self.db.last_game(user["user_id"]),
+            },
             "active_round": None,
         }
         if active:
@@ -746,6 +832,179 @@ class Api:
             return {}
         return body if isinstance(body, dict) else {}
 
+    async def hourly(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        amount = self.db.claim_hourly(user["user_id"], int(time.time()),
+                                      game.HOURLY_COOLDOWN, game.HOURLY_BONUS)
+        if amount is None:
+            return self._fail("Бонус ещё не готов", 429)
+        fresh = self.db.user(user["user_id"])
+        return self._json({"ok": True, "amount": amount, "balance": fresh["balance"],
+                           "user": self._public_user(fresh)})
+
+    async def spin(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        now = int(time.time())
+        if now - int(user.get("last_spin") or 0) < game.SPIN_COOLDOWN:
+            return self._fail("Крутить можно раз в 12 часов", 429)
+        nonce = self.db.bump_nonce(user["user_id"])
+        index, prize = game.spin_daily(user["server_seed"], user["client_seed"], nonce)
+        day = int(user.get("spin_day") or 1)
+        next_day = day + 1 if day < game.SPIN_STREAK_DAYS else 1
+        if prize["kind"] == "coins":
+            self.db.add_balance(user["user_id"], prize["amount"])
+        else:
+            qty = game.CHARM_CHARGES if prize["item"] == "charm" else 1
+            self.db.add_item(user["user_id"], prize["item"], qty)
+        self.db.mark_spin(user["user_id"], now, next_day)
+        fresh = self.db.user(user["user_id"])
+        return self._json({"ok": True, "index": index, "prize": self._prize_view(prize),
+                           "day": day, "next_day": next_day, "balance": fresh["balance"],
+                           "user": self._public_user(fresh)})
+
+    async def invite_claim(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        try:
+            step = int(body.get("step", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректная ступень")
+        reward = next((item["reward"] for item in game.REF_LADDER
+                       if item["step"] == step), None)
+        if reward is None:
+            return self._fail("Некорректная ступень")
+        refs = self.db.referrals(user["user_id"])
+        if refs["total"] < step:
+            return self._fail("Не хватает приглашённых")
+        if not self.db.invite_claim(user["user_id"], step):
+            return self._fail("Награда уже получена")
+        balance = self.db.add_balance(user["user_id"], reward)
+        return self._json({"ok": True, "step": step, "reward": reward, "balance": balance})
+
+    async def _channel_member(self, channel: str, user_id: int) -> bool:
+        if not config.bot_token:
+            return False
+        url = f"https://api.telegram.org/bot{config.bot_token}/getChatMember"
+        params = {"chat_id": "@" + channel, "user_id": user_id}
+        try:
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, params=params) as resp:
+                    data = await resp.json()
+        except Exception:
+            return False
+        if not data.get("ok"):
+            return False
+        status = data.get("result", {}).get("status")
+        return status in ("member", "administrator", "creator")
+
+    async def sponsor_claim(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        channel = str(body.get("channel", "")).lstrip("@").lower()
+        if channel not in config.sponsor_channels:
+            return self._fail("Неизвестный спонсор", 404)
+        if not config.bot_token:
+            return self._fail("Спонсоры пока недоступны")
+        if not await self._channel_member(channel, user["user_id"]):
+            return self._fail("Подписка не найдена")
+        if not self.db.sponsor_claim(user["user_id"], channel):
+            return self._fail("Награда уже получена")
+        balance = self.db.add_balance(user["user_id"], game.SPONSOR_REWARD)
+        return self._json({"ok": True, "channel": "@" + channel,
+                           "reward": game.SPONSOR_REWARD, "balance": balance})
+
+    async def deposit_create(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        try:
+            amount = int(body.get("amount", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректная сумма")
+        if not (game.DEPOSIT_MIN <= amount <= game.DEPOSIT_MAX):
+            return self._fail(f"Сумма от {game.DEPOSIT_MIN} до {game.DEPOSIT_MAX}")
+        if int(user["balance"]) < amount:
+            return self._fail("Недостаточно средств")
+        now = int(time.time())
+        if str(body.get("kind", "fixed")) == "savings":
+            savings = self.db.savings(user["user_id"])
+            if savings:
+                interest = game.savings_interest(
+                    savings["amount"], savings["rate_bps"],
+                    now - int(savings["started_at"]))
+                if interest > 0:
+                    self.db.add_balance(user["user_id"], interest)
+                self.db.update_savings(savings["id"], savings["amount"] + amount, now)
+                dep_id = savings["id"]
+            else:
+                dep_id = uuid.uuid4().hex[:12]
+                self.db.create_deposit(dep_id, user["user_id"], "savings", amount,
+                                       game.SAVINGS_RATE_BPS, now, None)
+            balance = self.db.add_balance(user["user_id"], -amount)
+            fresh = self.db.user(user["user_id"])
+            return self._json({"ok": True, "id": dep_id, "balance": balance,
+                               "deposits": self._deposits_view(fresh)})
+        try:
+            days = int(body.get("days", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректный срок")
+        plan = next((p for p in game.DEPOSIT_PLANS if p["days"] == days), None)
+        if not plan:
+            return self._fail("Некорректный срок")
+        dep_id = uuid.uuid4().hex[:12]
+        self.db.add_balance(user["user_id"], -amount)
+        self.db.create_deposit(dep_id, user["user_id"], "fixed", amount,
+                               plan["rate_bps"], now, now + days * 86400)
+        fresh = self.db.user(user["user_id"])
+        return self._json({"ok": True, "id": dep_id, "balance": fresh["balance"],
+                           "deposits": self._deposits_view(fresh)})
+
+    async def deposit_close(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        dep_id = str(body.get("id", ""))
+        row = self.db.deposit(dep_id)
+        if not row or row["user_id"] != user["user_id"] or row["status"] != "active":
+            return self._fail("Депозит не найден", 404)
+        now = int(time.time())
+        if row["kind"] == "fixed":
+            if now < int(row["ends_at"] or 0):
+                return self._fail("Депозит ещё не закрылся")
+            payout = row["amount"] + game.deposit_interest(row["amount"], row["rate_bps"])
+        else:
+            payout = row["amount"] + game.savings_interest(
+                row["amount"], row["rate_bps"], now - int(row["started_at"]))
+        if not self.db.close_deposit(dep_id, payout, now):
+            return self._fail("Депозит уже закрыт")
+        balance = self.db.add_balance(user["user_id"], payout)
+        fresh = self.db.user(user["user_id"])
+        return self._json({"ok": True, "payout": payout, "balance": balance,
+                           "deposits": self._deposits_view(fresh)})
+
     async def admin_overview(self, request: web.Request) -> web.Response:
         admin, err = self._require_admin(request)
         if err:
@@ -916,6 +1175,12 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/quests/claim", api.quest_claim)
     app.router.add_post("/api/shop", api.shop)
     app.router.add_post("/api/shop/buy", api.shop_buy)
+    app.router.add_post("/api/bonus/hourly", api.hourly)
+    app.router.add_post("/api/spin", api.spin)
+    app.router.add_post("/api/invites/claim", api.invite_claim)
+    app.router.add_post("/api/sponsors/claim", api.sponsor_claim)
+    app.router.add_post("/api/deposits/create", api.deposit_create)
+    app.router.add_post("/api/deposits/close", api.deposit_close)
     app.router.add_post("/api/admin/overview", api.admin_overview)
     app.router.add_post("/api/admin/users", api.admin_users)
     app.router.add_post("/api/admin/balance", api.admin_balance)

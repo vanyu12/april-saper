@@ -15,6 +15,12 @@ const state = {
   leaderboard: { by_balance: [], by_multiplier: [], me: 0 },
   history: [],
   referrals: { total: 0, active: 0 },
+  invites: { total: 0, ladder: [] },
+  sponsors: [],
+  deposits: { plans: [], items: [], savings: null, min: 100, max: 1000000 },
+  spin: { prizes: [] },
+  gamesHub: { players: {}, last: null },
+  depositPlan: 0,
   fair: { seed_hash: "", client_seed: "", nonce: 0 },
   started: false,
 };
@@ -120,7 +126,319 @@ function renderDaily() {
   const btn = $("dailyBtn");
   const ready = state.user && state.user.daily_ready;
   btn.classList.toggle("ready", !!ready);
-  btn.title = ready ? "Забрать 500 сапов" : "Бонус уже получен";
+  btn.title = ready
+    ? `Забрать ${fmt(state.user.daily_amount || 300)} сапов`
+    : "Бонус уже получен";
+}
+
+function fmtTime(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function renderBonus() {
+  const u = state.user;
+  if (!u) return;
+  const hourly = $("hourlyCard");
+  if (hourly) {
+    hourly.classList.toggle("ready", !!u.hourly_ready);
+    $("hourlyBadge").textContent = u.hourly_ready ? "Забрать" : fmtTime(u.hourly_in);
+    $("hourlyHint").textContent = "раз в час · +" + fmt(u.hourly_amount || 100);
+  }
+  const spin = $("spinCard");
+  if (spin) {
+    spin.classList.toggle("ready", !!u.spin_ready);
+    $("spinBadge").textContent = u.spin_ready ? "Крутить" : fmtTime(u.spin_in);
+    $("spinHint").textContent = "День " + (u.spin_day || 1);
+  }
+  const hint = $("dailySpinHint");
+  if (hint) {
+    hint.textContent = u.spin_ready
+      ? "Доступна прокрутка · День " + (u.spin_day || 1)
+      : "Следующая через " + fmtTime(u.spin_in);
+  }
+  const btn = $("dailySpinBtn");
+  if (btn) btn.disabled = !u.spin_ready;
+}
+
+function renderTasks() {
+  const box = $("inviteList");
+  if (box) {
+    const invites = state.invites || { total: 0, ladder: [] };
+    const ladder = invites.ladder || [];
+    box.innerHTML = ladder.length
+      ? ladder
+          .map((item) => {
+            const label = item.claimed
+              ? "Получено"
+              : item.done
+                ? `Забрать +${fmt(item.reward)}`
+                : `${Math.min(invites.total, item.step)} / ${item.step}`;
+            return `<div class="row${item.done && !item.claimed ? " ready" : ""}">
+              <div class="row-icon">👥</div>
+              <div class="row-main">
+                <div class="row-title">Пригласи ${item.step} друзей</div>
+                <div class="row-sub">${fmt(item.reward)} сапов · приглашено ${invites.total}</div>
+              </div>
+              <button class="chip-btn" data-step="${item.step}"
+                ${item.claimed || !item.done ? "disabled" : ""}>${label}</button>
+            </div>`;
+          })
+          .join("")
+      : '<div class="empty">Ступени появятся позже</div>';
+  }
+  const sponsors = state.sponsors || [];
+  const card = $("sponsorCard");
+  if (card) {
+    card.hidden = !sponsors.length;
+    $("sponsorList").innerHTML = sponsors
+      .map((s) => `<div class="row">
+        <div class="row-icon">📣</div>
+        <div class="row-main">
+          <div class="row-title">Подписка на ${escapeHtml(s.channel)}</div>
+          <div class="row-sub">+${fmt(s.reward)} сапов</div>
+        </div>
+        <button class="chip-btn" data-channel="${escapeHtml(s.channel.replace("@", ""))}"
+          ${s.claimed ? "disabled" : ""}>${s.claimed ? "Получено" : "Перейти"}</button>
+      </div>`)
+      .join("");
+  }
+}
+
+function renderBank() {
+  const deposits = state.deposits || { plans: [], items: [], savings: null };
+  const plans = deposits.plans || [];
+  if (!state.depositPlan && plans.length) state.depositPlan = plans[0].days;
+  const box = $("depositPlans");
+  if (box) {
+    box.innerHTML = plans
+      .map((p) => `<button class="plan${p.days === state.depositPlan ? " active" : ""}" data-days="${p.days}">
+        <b>${p.days} дн.</b><span>${String(p.percent).replace(".", ",")}%</span>
+      </button>`)
+      .join("");
+  }
+  updateDepositHint();
+  const savings = deposits.savings;
+  const sbox = $("savingsCard");
+  if (sbox) {
+    sbox.innerHTML = savings
+      ? `<div class="row">
+          <div class="row-main">
+            <div class="row-title">${fmt(savings.amount)} сапов</div>
+            <div class="row-sub">начислено +${fmt(savings.accrued)} · 0,1% в день</div>
+          </div>
+          <div class="row-value">${fmt(savings.amount + savings.accrued)}</div>
+        </div>`
+      : '<div class="empty">Счёт пуст — пополните</div>';
+  }
+  const close = $("savingsClose");
+  if (close) close.hidden = !savings;
+  const list = $("depositList");
+  if (list) {
+    const items = deposits.items || [];
+    list.innerHTML = items.length
+      ? items
+          .map((d) => `<div class="row">
+            <div class="row-icon ${d.ready ? "win" : "lose"}">🏦</div>
+            <div class="row-main">
+              <div class="row-title">${fmt(d.amount)} сапов · ${String(d.rate_bps / 100).replace(".", ",")}%</div>
+              <div class="row-sub">${d.ready
+                ? "готов к закрытию"
+                : "закроется " + new Date(d.ends_at * 1000).toLocaleDateString("ru-RU")}</div>
+            </div>
+            <button class="chip-btn" data-dep="${d.id}" ${d.ready ? "" : "disabled"}>
+              ${d.ready ? "Забрать " + fmt(d.payout) : "Ждём"}
+            </button>
+          </div>`)
+          .join("")
+      : '<div class="empty">Пока нет вкладов</div>';
+  }
+}
+
+function updateDepositHint() {
+  const hint = $("depositHint");
+  if (!hint) return;
+  const deposits = state.deposits || { plans: [] };
+  const plans = deposits.plans || [];
+  const plan = plans.find((p) => p.days === state.depositPlan) || plans[0];
+  if (!plan) return;
+  const input = $("depositAmount");
+  const amount = Math.max(0, parseInt(input && input.value ? input.value : "0", 10) || 0);
+  const interest = Math.floor((amount * plan.rate_bps) / 10000);
+  hint.textContent = `${plan.days} дн. · ${String(plan.percent).replace(".", ",")}% → вернут ${fmt(amount + interest)} сапов`;
+}
+
+const HUB_GAMES = [
+  ["mines", "💣", "Сапёр", "Открывай клетки и забирай"],
+  ["dice", "🎲", "Кости", "Чёт или нечёт ×1,96"],
+  ["wheel", "🎡", "Колесо", "Шесть секторов до ×3,2"],
+  ["crash", "📈", "Краш", "Забери до краша"],
+];
+
+function renderGamesHub() {
+  const hub = state.gamesHub || { players: {}, last: null };
+  const lastBox = $("hubLast");
+  if (lastBox) {
+    const meta = HUB_GAMES.find((g) => g[0] === hub.last);
+    lastBox.innerHTML = `<div class="hub-last-sub">Ваша последняя игра</div>
+      <div class="hub-last-title">${meta ? meta[1] + " " + meta[2] : "Пока пусто"}</div>`;
+  }
+  const grid = $("hubGrid");
+  if (grid) {
+    grid.innerHTML = HUB_GAMES.map(([key, icon, title, desc]) => {
+      const players = (hub.players && hub.players[key]) || 0;
+      return `<button class="hub-card" data-hub-game="${key}">
+        <span class="hub-icon">${icon}</span>
+        <b>${title}</b>
+        <small>${desc}</small>
+        <span class="hub-players">${fmt(players)} играет</span>
+      </button>`;
+    }).join("");
+  }
+}
+
+const SPIN_COLORS = ["#7c5cff", "#2ee6a8", "#ffb02e", "#ff5d7a",
+  "#3d8bff", "#b06bff", "#36d1c4", "#ff8a3d"];
+let dailySpinAngle = 0;
+
+function renderDailySpin() {
+  const disc = $("dailySpinDisc");
+  const legend = $("dailySpinLegend");
+  const prizes = (state.spin && state.spin.prizes) || [];
+  if (!disc || !prizes.length) return;
+  const step = 360 / prizes.length;
+  const stops = prizes.map((p, i) => {
+    const color = SPIN_COLORS[i % SPIN_COLORS.length];
+    return `${color} ${i * step}deg ${(i + 1) * step}deg`;
+  });
+  disc.style.background = `conic-gradient(${stops.join(", ")})`;
+  if (legend) {
+    legend.innerHTML = prizes
+      .map((p, i) => `<span class="wheel-chip"><i style="background:${SPIN_COLORS[i % SPIN_COLORS.length]}"></i>${escapeHtml(p.title)}</span>`)
+      .join("");
+  }
+}
+
+async function claimHourly() {
+  try {
+    const data = await api("/api/bonus/hourly");
+    state.user = data.user;
+    state.user.balance = data.balance;
+    sfx.coin();
+    haptic("success");
+    renderAll();
+    toast(`Бонус +${fmt(data.amount)} сапов`);
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function spinDaily() {
+  const btn = $("dailySpinBtn");
+  const disc = $("dailySpinDisc");
+  if (!state.user || !state.user.spin_ready || !disc) return;
+  btn.disabled = true;
+  try {
+    const data = await api("/api/spin");
+    state.user = data.user;
+    state.user.balance = data.balance;
+    const prizes = (state.spin && state.spin.prizes) || [];
+    const step = 360 / Math.max(1, prizes.length);
+    const mid = (data.index + 0.5) * step;
+    const delta = ((-mid - (dailySpinAngle % 360)) % 360 + 360) % 360;
+    dailySpinAngle += 360 * 5 + delta;
+    disc.style.transform = `rotate(${dailySpinAngle}deg)`;
+    await new Promise((resolve) => setTimeout(resolve, 3600));
+    sfx.cash();
+    haptic("success");
+    renderAll();
+    toast("Приз: " + data.prize.title);
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    btn.disabled = !(state.user && state.user.spin_ready);
+  }
+}
+
+async function claimInvite(step) {
+  try {
+    const data = await api("/api/invites/claim", { step });
+    sfx.cash();
+    haptic("success");
+    toast(`Награда +${fmt(data.reward)} сапов`);
+    await loadState();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function claimSponsor(channel) {
+  if (channel) window.open("https://t.me/" + channel, "_blank");
+  try {
+    const data = await api("/api/sponsors/claim", { channel });
+    sfx.cash();
+    haptic("success");
+    toast(`Спонсор +${fmt(data.reward)} сапов`);
+    await loadState();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+function depositAmountValue() {
+  const input = $("depositAmount");
+  return parseInt(input && input.value ? input.value : "0", 10) || 0;
+}
+
+async function depositCreate() {
+  try {
+    const data = await api("/api/deposits/create",
+      { kind: "fixed", days: state.depositPlan, amount: depositAmountValue() });
+    state.user.balance = data.balance;
+    state.deposits = data.deposits;
+    haptic("success");
+    renderAll();
+    toast("Депозит открыт");
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function savingsPut() {
+  try {
+    const data = await api("/api/deposits/create",
+      { kind: "savings", amount: depositAmountValue() });
+    state.user.balance = data.balance;
+    state.deposits = data.deposits;
+    haptic("success");
+    renderAll();
+    toast("Счёт пополнен");
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function savingsClose() {
+  const savings = state.deposits && state.deposits.savings;
+  if (savings) await depositClose(savings.id);
+}
+
+async function depositClose(id) {
+  try {
+    const data = await api("/api/deposits/close", { id });
+    state.user.balance = data.balance;
+    state.deposits = data.deposits;
+    haptic("success");
+    renderAll();
+    toast(`Закрыто, +${fmt(data.payout)} сапов`);
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
 function renderGrid() {
@@ -325,6 +643,7 @@ function renderTop(tab) {
       name: u.username || u.first_name || "id" + u.user_id,
       value: fmtMult(u.best_multiplier),
       id: u.user_id,
+      photo: u.photo_url,
     }));
   } else {
     rows = (state.leaderboard.by_balance || []).map((u, i) => ({
@@ -332,6 +651,7 @@ function renderTop(tab) {
       name: u.username || u.first_name || "id" + u.user_id,
       value: fmt(u.balance) + " сапов",
       id: u.user_id,
+      photo: u.photo_url,
     }));
   }
   if (!rows.length) {
@@ -342,8 +662,10 @@ function renderTop(tab) {
   list.innerHTML = rows
     .map(
       (r) => `<div class="row" style="${r.id === state.leaderboard.me ? "border-color:rgba(46,230,168,.45)" : ""}">
-        <div class="row-icon">${medals[r.place - 1] || r.place}</div>
-        <div class="row-main"><div class="row-title">${escapeHtml(r.name)}</div></div>
+        ${r.photo
+          ? `<img class="row-avatar" src="${escapeHtml(r.photo)}" alt="">`
+          : `<span class="row-avatar letter">${escapeHtml(String(r.name).replace("@", "").charAt(0).toUpperCase() || "?")}</span>`}
+        <div class="row-main"><div class="row-title"><span class="top-place">${medals[r.place - 1] || r.place}</span> ${escapeHtml(r.name)}</div></div>
         <div class="row-value">${r.value}</div>
       </div>`
     )
@@ -621,22 +943,20 @@ function renderWheel() {
 }
 
 function renderQuests() {
-  const box = $("questsList");
-  if (!box) return;
+  const boxes = [$("questsList"), $("tasksQuests")].filter(Boolean);
+  if (!boxes.length) return;
   const items = state.quests || [];
-  if (!items.length) {
-    box.innerHTML = '<div class="empty">Задания появятся после первой партии</div>';
-    return;
-  }
-  box.innerHTML = items
-    .map((q) => {
-      const pct = Math.min(100, Math.round((q.progress / q.target) * 100));
-      const label = q.claimed
-        ? "Получено"
-        : q.ready
-          ? `Забрать +${fmt(q.reward)}`
-          : `${fmt(q.progress)} / ${fmt(q.target)}`;
-      return `<div class="quest${q.ready ? " ready" : ""}${q.claimed ? " done" : ""}">
+  const html = !items.length
+    ? '<div class="empty">Задания появятся после первой партии</div>'
+    : items
+        .map((q) => {
+          const pct = Math.min(100, Math.round((q.progress / q.target) * 100));
+          const label = q.claimed
+            ? "Получено"
+            : q.ready
+              ? `Забрать +${fmt(q.reward)}`
+              : `${fmt(q.progress)} / ${fmt(q.target)}`;
+          return `<div class="quest${q.ready ? " ready" : ""}${q.claimed ? " done" : ""}">
         <div class="quest-main">
           <div class="quest-title">${escapeHtml(q.title)}</div>
           <div class="quest-bar"><span style="width:${pct}%"></span></div>
@@ -644,8 +964,11 @@ function renderQuests() {
         <button class="chip-btn quest-claim" data-quest="${q.key}"
           ${q.ready ? "" : "disabled"}>${label}</button>
       </div>`;
-    })
-    .join("");
+        })
+        .join("");
+  boxes.forEach((box) => {
+    box.innerHTML = html;
+  });
 }
 
 async function playDice(pick) {
@@ -874,12 +1197,17 @@ async function playCrash() {
 function renderAll() {
   renderBalance();
   renderDaily();
+  renderBonus();
   renderMines();
   renderControls();
   renderGrid();
   renderLadder();
   renderProfile();
   renderQuests();
+  renderTasks();
+  renderBank();
+  renderGamesHub();
+  renderDailySpin();
   renderHistory();
   applyCosmetics();
     const topTab = document.querySelector("#view-top .tab.active");
@@ -906,6 +1234,14 @@ async function loadState() {
     me: data.user.id,
   };
   state.history = data.history || [];
+  state.invites = data.invites || state.invites;
+  state.sponsors = data.sponsors || state.sponsors;
+  state.deposits = data.deposits || state.deposits;
+  state.spin = data.spin || state.spin;
+  state.gamesHub = data.games_hub || state.gamesHub;
+  if (!state.depositPlan && state.deposits.plans && state.deposits.plans.length) {
+    state.depositPlan = state.deposits.plans[0].days;
+  }
   state.fair = data.fair;
   state.round = data.active_round;
   if (state.round) {
@@ -1030,6 +1366,9 @@ function switchView(name) {
   if (name === "history") loadHistory();
   if (name === "admin") loadAdmin();
   if (name === "shop") loadShop();
+  if (name === "tasks") renderTasks();
+  if (name === "bank") renderBank();
+  if (name === "games") renderGamesHub();
 }
 
 async function loadTop() {
@@ -1188,6 +1527,42 @@ function bind() {
   });
 
   $("saveSettings").addEventListener("click", saveAdminSettings);
+
+  if ($("hourlyCard")) $("hourlyCard").addEventListener("click", claimHourly);
+  if ($("spinCard")) $("spinCard").addEventListener("click", () => switchView("tasks"));
+  if ($("dailySpinBtn")) $("dailySpinBtn").addEventListener("click", spinDaily);
+  if ($("inviteList")) $("inviteList").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-step]");
+    if (btn) claimInvite(Number(btn.dataset.step));
+  });
+  if ($("sponsorList")) $("sponsorList").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-channel]");
+    if (btn) claimSponsor(btn.dataset.channel);
+  });
+  if ($("depositPlans")) $("depositPlans").addEventListener("click", (e) => {
+    const btn = e.target.closest(".plan");
+    if (!btn) return;
+    state.depositPlan = Number(btn.dataset.days);
+    renderBank();
+  });
+  if ($("depositAmount")) $("depositAmount").addEventListener("input", updateDepositHint);
+  if ($("depositCreate")) $("depositCreate").addEventListener("click", depositCreate);
+  if ($("savingsPut")) $("savingsPut").addEventListener("click", savingsPut);
+  if ($("savingsClose")) $("savingsClose").addEventListener("click", savingsClose);
+  if ($("depositList")) $("depositList").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-dep]");
+    if (btn) depositClose(btn.dataset.dep);
+  });
+  if ($("hubGrid")) $("hubGrid").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-hub-game]");
+    if (!btn) return;
+    switchView("game");
+    switchGame(btn.dataset.hubGame);
+  });
+
+  setInterval(() => {
+    if (state.user) renderBonus();
+  }, 1000);
 
   document.querySelectorAll("#gameSwitch .gs-btn").forEach((btn) =>
     btn.addEventListener("click", () => switchGame(btn.dataset.game)));
