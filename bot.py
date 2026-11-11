@@ -161,6 +161,70 @@ def build_dispatcher(db: Database) -> Dispatcher:
             return True
         return (user.get("role") or "user") in ("admin", "moderator")
 
+    ROLE_RANK = {"user": 0, "moderator": 1, "admin": 2}
+
+    def is_owner(user: dict) -> bool:
+        if user["user_id"] in config.admin_ids:
+            return True
+        name = (user.get("username") or "").lower()
+        return bool(name) and name in config.admin_usernames
+
+    def role_of(user: dict) -> str:
+        if is_owner(user):
+            return "admin"
+        role = (user.get("role") or "user").lower()
+        return role if role in ROLE_RANK else "user"
+
+    def rank(user: dict) -> int:
+        return ROLE_RANK[role_of(user)]
+
+    def can(user: dict, needed: str) -> bool:
+        return rank(user) >= ROLE_RANK.get(needed, 2)
+
+    def roles_text() -> str:
+        return ("👥 <b>Роли и права</b>\n\n"
+                "<b>Игрок</b>\n"
+                "• игры в чате и приложении, бонусы, задания\n"
+                "• переводы, промокоды, топ, история, честность\n\n"
+                "<b>Модератор</b>\n"
+                "• всё как у игрока\n"
+                "• /stats — статистика бота\n"
+                "• /player ID — карточка игрока\n"
+                "• /ban и /unban — блокировка и разблокировка\n"
+                "• /logs — журнал действий\n\n"
+                "<b>Админ</b>\n"
+                "• всё как у модератора\n"
+                "• /setbal и /addbal — баланс игрока\n"
+                "• /give — выдача предметов\n"
+                "• /role — назначение ролей (admin — только владелец)\n"
+                "• /promo_new, /promo_list, /promo_off, /promo_post\n"
+                "• /maint on|off и /game имя on|off\n"
+                "• /broadcast — рассылка игрокам\n\n"
+                "<b>Владелец</b> (ID из ADMIN_IDS)\n"
+                "• полный доступ и назначение админов\n\n"
+                "Команды работают и в группах — просто добавьте бота в чат.")
+
+    def find_user(raw: str) -> dict | None:
+        raw = (raw or "").strip()
+        if raw.startswith("@"):
+            return db.user_by_username(raw)
+        if raw.lstrip("-").isdigit():
+            return db.user(int(raw))
+        return db.user_by_username(raw)
+
+    def player_card(target: dict) -> str:
+        name = target.get("first_name") or "Игрок"
+        username = f"@{target['username']}" if target.get("username") else "—"
+        banned = "заблокирован" if target.get("is_banned") else "активен"
+        return (f"👤 <b>{name}</b>\n"
+                f"ID: <code>{target['user_id']}</code>\n"
+                f"username: {username}\n"
+                f"Роль: <b>{role_of(target)}</b> · {banned}\n"
+                f"Баланс: {num(int(target['balance']))} mCoin\n"
+                f"Партий: {num(int(target['games_played']))} · "
+                f"побед: {num(int(target['games_won']))}\n"
+                f"Оборот: {num(int(target['total_wagered']))} mCoin")
+
     def bet_error(user: dict, bet: int, game_key: str | None = None) -> str | None:
         if user.get("is_banned"):
             return "Аккаунт заблокирован."
@@ -1805,9 +1869,321 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "/play — полное поле, магазин и история\n"
             "/ref — ссылка для друзей\n"
             "/fair — проверка честности\n\n"
+            "<b>В группах</b>\n"
+            "Добавьте бота в чат — игры и команды работают там же,\n"
+            "/chatid покажет ID чата для настроек.\n\n"
             "Валюта mCoin виртуальная: реальные деньги не принимаются и не выводятся.",
             reply_markup=main_keyboard(),
         )
+
+    @dp.message(Command("roles"))
+    async def roles_cmd(message: Message) -> None:
+        await message.answer(roles_text())
+
+    @dp.message(Command("chatid"))
+    async def chatid_cmd(message: Message) -> None:
+        chat = message.chat
+        title = chat.title or getattr(chat, "full_name", "") or ""
+        await message.answer(
+            "🆔 <b>Этот чат</b>\n\n"
+            f"ID: <code>{chat.id}</code>\n"
+            f"Тип: {chat.type}\n"
+            f"Название: {title}\n\n"
+            "Для анонсов обновлений добавьте бота админом в канал и укажите\n"
+            "<code>UPDATE_CHANNEL=@username</code> в переменных окружения.")
+
+    @dp.message(Command("stats"))
+    async def stats_cmd(message: Message) -> None:
+        user = get_user(message)
+        if not can(user, "moderator"):
+            await message.answer("Команда доступна модераторам и админам.")
+            return
+        s = db.admin_stats()
+        await message.answer(
+            "📊 <b>Сводка</b>\n\n"
+            f"Игроков: {num(int(s.get('users', 0)))}\n"
+            f"Забанено: {num(int(s.get('banned', 0)))}\n"
+            f"Партий: {num(int(s.get('rounds', 0)))}\n"
+            f"Активных: {num(int(s.get('active_rounds', 0)))}\n"
+            f"Оборот: {num(int(s.get('wagered', 0)))} mCoin\n"
+            f"Выплачено: {num(int(s.get('paid', 0)))} mCoin")
+
+    @dp.message(Command("player"))
+    async def player_cmd(message: Message) -> None:
+        user = get_user(message)
+        if not can(user, "moderator"):
+            await message.answer("Команда доступна модераторам и админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.answer("Формат: <code>/player 123456789</code> "
+                                 "или <code>/player @ник</code>")
+            return
+        target = find_user(parts[1])
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        await message.answer(player_card(target))
+
+    @dp.message(Command("ban"))
+    async def ban_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "moderator"):
+            await message.answer("Команда доступна модераторам и админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.answer("Формат: <code>/ban 123456789 причина</code>")
+            return
+        target = find_user(parts[1])
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        if int(target["user_id"]) == int(actor["user_id"]):
+            await message.answer("Себя банить не нужно.")
+            return
+        if not is_owner(actor) and rank(target) >= rank(actor):
+            await message.answer("Нельзя блокировать равного или старшего по роли.")
+            return
+        reason = " ".join(parts[2:]).strip() or "не указана"
+        db.admin_set_ban(int(target["user_id"]), True)
+        db.admin_log(actor["user_id"], int(target["user_id"]), "ban",
+                     {"reason": reason})
+        await message.answer(f"⛔ Игрок <code>{target['user_id']}</code> заблокирован.\n"
+                             f"Причина: {reason}")
+
+    @dp.message(Command("unban"))
+    async def unban_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "moderator"):
+            await message.answer("Команда доступна модераторам и админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.answer("Формат: <code>/unban 123456789</code>")
+            return
+        target = find_user(parts[1])
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        db.admin_set_ban(int(target["user_id"]), False)
+        db.admin_log(actor["user_id"], int(target["user_id"]), "unban", {})
+        await message.answer(f"✅ Игрок <code>{target['user_id']}</code> разблокирован.")
+
+    @dp.message(Command("logs"))
+    async def logs_cmd(message: Message) -> None:
+        user = get_user(message)
+        if not can(user, "moderator"):
+            await message.answer("Команда доступна модераторам и админам.")
+            return
+        rows = db.admin_actions(10)
+        if not rows:
+            await message.answer("Журнал пока пуст.")
+            return
+        lines = ["📜 <b>Последние действия</b>", ""]
+        for row in rows:
+            lines.append(f"• {row.get('action', '?')} · "
+                         f"{row.get('admin_id', '?')} → "
+                         f"{row.get('target_id', '—')}")
+        await message.answer("\n".join(lines))
+
+    @dp.message(Command("setbal"))
+    async def setbal_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer("Формат: <code>/setbal 123456789 5000</code>")
+            return
+        target = find_user(parts[1])
+        try:
+            value = int(parts[2])
+        except ValueError:
+            await message.answer("Баланс должен быть числом.")
+            return
+        if not target or value < 0:
+            await message.answer("Игрок не найден или баланс отрицательный.")
+            return
+        new_balance = db.admin_set_balance(int(target["user_id"]), value)
+        db.admin_log(actor["user_id"], int(target["user_id"]), "setbal",
+                     {"value": value})
+        await message.answer(f"💰 Баланс <code>{target['user_id']}</code>: "
+                             f"{num(int(new_balance))} mCoin")
+
+    @dp.message(Command("addbal"))
+    async def addbal_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer("Формат: <code>/addbal 123456789 500</code> "
+                                 "(минус — списать)")
+            return
+        target = find_user(parts[1])
+        try:
+            delta = int(parts[2])
+        except ValueError:
+            await message.answer("Сумма должна быть числом.")
+            return
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        balance = int(target["balance"]) + delta
+        if balance < 0:
+            await message.answer("Баланс не может уйти в минус.")
+            return
+        db.admin_set_balance(int(target["user_id"]), balance)
+        db.admin_log(actor["user_id"], int(target["user_id"]), "addbal",
+                     {"delta": delta})
+        await message.answer(f"💰 Баланс <code>{target['user_id']}</code>: "
+                             f"{num(balance)} mCoin")
+
+    @dp.message(Command("role"))
+    async def role_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 3 or parts[2].lower() not in ("user", "moderator", "admin"):
+            await message.answer(
+                "Формат: <code>/role 123456789 moderator</code>\n"
+                "Роли: user, moderator, admin.")
+            return
+        target = find_user(parts[1])
+        role = parts[2].lower()
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        if int(target["user_id"]) == int(actor["user_id"]):
+            await message.answer("Свою роль менять нельзя.")
+            return
+        if role == "admin" and not is_owner(actor):
+            await message.answer("Назначать админов может только владелец.")
+            return
+        if not is_owner(actor) and rank(target) >= rank(actor):
+            await message.answer("Нельзя менять роль равного или старшего.")
+            return
+        db.admin_set_role(int(target["user_id"]), role)
+        db.admin_log(actor["user_id"], int(target["user_id"]), "role",
+                     {"role": role})
+        await message.answer(f"🛠 Игрок <code>{target['user_id']}</code> теперь "
+                             f"<b>{role}</b>.")
+
+    @dp.message(Command("give"))
+    async def give_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        parts = (message.text or "").split()
+        known = {item["key"] for item in game.SHOP_ITEMS}
+        known |= {"insurance", "double_daily", "charm"}
+        if len(parts) < 3:
+            await message.answer("Формат: <code>/give 123456789 insurance 2</code>\n"
+                                 "Предметы: " + ", ".join(sorted(known)))
+            return
+        target = find_user(parts[1])
+        item = parts[2].strip()
+        try:
+            qty = int(parts[3]) if len(parts) > 3 else 1
+        except ValueError:
+            qty = 1
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        if item not in known:
+            await message.answer("Неизвестный предмет. Доступно: "
+                                 + ", ".join(sorted(known)))
+            return
+        qty = max(1, min(100, qty))
+        total = db.add_item(int(target["user_id"]), item, qty)
+        db.admin_log(actor["user_id"], int(target["user_id"]), "give",
+                     {"item": item, "qty": qty})
+        await message.answer(f"🎁 Выдано {item} ×{qty}. Всего у игрока: {total}.")
+
+    @dp.message(Command("maint"))
+    async def maint_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        parts = (message.text or "").split()
+        arg = parts[1].lower() if len(parts) > 1 else ""
+        if arg not in ("on", "off", "1", "0"):
+            await message.answer("Формат: <code>/maint on</code> или "
+                                 "<code>/maint off</code>")
+            return
+        value = 1 if arg in ("on", "1") else 0
+        db.set_settings({"maintenance": value})
+        db.admin_log(actor["user_id"], None, "maintenance", {"value": value})
+        await message.answer("🛠 Техработы включены." if value
+                             else "✅ Техработы выключены.")
+
+    @dp.message(Command("game"))
+    async def game_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        aliases = {
+            "mines": "mines", "сапёр": "mines", "сапер": "mines",
+            "dice": "dice", "кости": "dice",
+            "wheel": "wheel", "колесо": "wheel",
+            "crash": "crash", "краш": "crash",
+            "coinflip": "coinflip", "орёл": "coinflip", "орел": "coinflip",
+            "blackjack": "blackjack", "21": "blackjack",
+            "basket": "basket", "баскет": "basket",
+            "roulette": "roulette", "рулетка": "roulette",
+            "slots": "slots", "слоты": "slots",
+        }
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer(
+                "Формат: <code>/game basket off</code>\n"
+                "Игры: " + ", ".join(sorted(set(aliases.values()))))
+            return
+        key = aliases.get(parts[1].lower())
+        arg = parts[2].lower()
+        if not key or arg not in ("on", "off", "1", "0"):
+            await message.answer("Неизвестная игра или состояние. "
+                                 "Пример: <code>/game dice off</code>")
+            return
+        value = 1 if arg in ("on", "1") else 0
+        db.set_settings({f"game_{key}": value})
+        db.admin_log(actor["user_id"], None, "game", {"game": key, "value": value})
+        await message.answer(f"🎮 Игра <b>{key}</b> "
+                             f"{'включена' if value else 'выключена'}.")
+
+    @dp.message(Command("broadcast"))
+    async def broadcast_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        text = (message.text or "").partition(" ")[2].strip()
+        if not text:
+            await message.answer("Формат: <code>/broadcast текст</code>")
+            return
+        if len(text) > 3500:
+            await message.answer("Слишком длинное сообщение (до 3500 символов).")
+            return
+        sent = 0
+        failed = 0
+        for user_id in db.broadcast_ids():
+            try:
+                await message.bot.send_message(user_id, text)
+                sent += 1
+            except Exception:
+                failed += 1
+            await asyncio.sleep(0.03)
+        db.admin_log(actor["user_id"], None, "broadcast",
+                     {"sent": sent, "failed": failed})
+        await message.answer(f"📣 Рассылка: отправлено {sent}, ошибок {failed}.")
 
     @dp.message(Command("admin"))
     async def admin_cmd(message: Message) -> None:
@@ -1824,7 +2200,17 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "<b>Админ-панель</b>\n\n"
             "• Игроки — поиск, начисление и списание mCoin, выдача предметов, бан\n"
             "• Сводка — оборот, выплаты, RTP, статистика по играм\n"
-            "• Настройки — лимиты ставки, число мин, бонус, игры, техработы",
+            "• Промокоды — создание, лимиты, публикация в канал\n"
+            "• Настройки — лимиты ставки, число мин, бонус, игры, техработы\n\n"
+            "<b>Команды</b>\n"
+            "/roles — кто что может\n"
+            "/stats · /player ID · /logs\n"
+            "/ban ID · /unban ID\n"
+            "/setbal ID сумма · /addbal ID сумма\n"
+            "/role ID moderator · /give ID предмет\n"
+            "/promo_new · /promo_list · /promo_post · /promo_off\n"
+            "/maint on|off · /game имя on|off · /broadcast текст\n"
+            "/chatid — ID группы или канала",
             reply_markup=keyboard,
         )
 
@@ -2624,6 +3010,8 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="pay", description="Перевод другому игроку"),
         BotCommand(command="promo", description="Активировать промокод"),
         BotCommand(command="updates", description="Что нового"),
+        BotCommand(command="roles", description="Роли и права"),
+        BotCommand(command="chatid", description="ID этого чата"),
         BotCommand(command="promo_new", description="Админ: создать промокод"),
         BotCommand(command="promo_list", description="Админ: список промокодов"),
         BotCommand(command="promo_post", description="Админ: промокод в канал"),
