@@ -76,6 +76,12 @@ def webapp_button(text: str = "🎮 Открыть игру") -> InlineKeyboardB
     return InlineKeyboardButton(text=text, web_app=WebAppInfo(url=app_url()))
 
 
+def chat_button() -> InlineKeyboardButton | None:
+    if not config.chat_url:
+        return None
+    return InlineKeyboardButton(text="💬 Чат игроков", url=config.chat_url)
+
+
 def main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [webapp_button()],
@@ -85,12 +91,13 @@ def main_keyboard() -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="🏦 Банк", callback_data="menu:bank")],
         [InlineKeyboardButton(text="👤 Профиль", callback_data="menu:balance"),
          InlineKeyboardButton(text="🏅 Достижения", callback_data="menu:ach")],
-        [InlineKeyboardButton(text="🎯 Задания", callback_data="menu:tasks"),
-         InlineKeyboardButton(text="🏆 Топ игроков", callback_data="top")],
-        [InlineKeyboardButton(text="🎰 Игры", callback_data="menu:games"),
-         InlineKeyboardButton(text="⚔️ Дуэли", callback_data="menu:duel")],
-        [InlineKeyboardButton(text="🔐 Честность", callback_data="fair")],
-    ])
+        [InlineKeyboardButton(text="🎁 Награды за уровень", callback_data="level:menu"),
+         InlineKeyboardButton(text="🎯 Задания", callback_data="menu:tasks")],
+        [InlineKeyboardButton(text="🏆 Топы", callback_data="top:menu"),
+         InlineKeyboardButton(text="🎰 Игры", callback_data="menu:games")],
+        [InlineKeyboardButton(text="⚔️ Дуэли", callback_data="menu:duel"),
+         InlineKeyboardButton(text="🔐 Честность", callback_data="fair")],
+    ] + ([[chat_button()]] if chat_button() else []))
 
 
 def play_keyboard() -> InlineKeyboardMarkup:
@@ -147,7 +154,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if user["user_id"] in config.admin_ids:
             return True
         name = (user.get("username") or "").lower()
-        return bool(name) and name in config.admin_usernames
+        if name and name in config.admin_usernames:
+            return True
+        return (user.get("role") or "user") in ("admin", "moderator")
 
     def bet_error(user: dict, bet: int, game_key: str | None = None) -> str | None:
         if user.get("is_banned"):
@@ -286,9 +295,13 @@ def build_dispatcher(db: Database) -> Dispatcher:
         claimed = db.user_achievements(user["user_id"])
         stats = awards.metrics(db, user["user_id"])
         level = game.level_view(fresh.get("xp") or 0)
+        pending = level_pending(fresh)
         lines = ["🏅 <b>Достижения</b>",
                  f"⭐ Уровень {level['level']} — {level['title']}",
-                 f"🎖 XP: {level['into']} / {level['need']}", ""]
+                 f"🎖 XP: {level['into']} / {level['need']}"]
+        if pending:
+            lines.append(f"🎁 Наград за уровни: {len(pending)} — забери в «Наградах»")
+        lines.append("")
         for ach in game.ACHIEVEMENTS:
             progress = min(ach["target"], stats.get(ach["metric"], 0))
             if ach["key"] in claimed:
@@ -303,6 +316,72 @@ def build_dispatcher(db: Database) -> Dispatcher:
             lines += ["", "Новые:"] + awards_lines(earned)
             lines.append(f"💰 Баланс: {num(fresh['balance'])} mCoin")
         return "\n".join(lines)
+
+    def level_pending(user: dict) -> list[int]:
+        level = game.level_view(user.get("xp") or 0)["level"]
+        claimed = db.level_claims(user["user_id"])
+        return [lvl for lvl in range(2, level + 1) if lvl not in claimed]
+
+    def level_reward_line(reward: dict) -> str:
+        parts = [f"+{num(reward['coins'])} mCoin"]
+        if reward["gmpoint"]:
+            parts.append(f"+{reward['gmpoint']} GMPOINT")
+        if reward["lootbox"]:
+            parts.append(f"+{reward['lootbox']} лутбокс")
+        if reward["prefix"]:
+            prefix = game.prefix_view(reward["prefix"])
+            parts.append(f"префикс «{prefix['title']}»" if prefix else "префикс")
+        return " · ".join(parts)
+
+    def level_menu_text(user: dict) -> str:
+        view = game.level_view(user.get("xp") or 0)
+        pending = level_pending(user)
+        lines = ["🎁 <b>Награды за уровень</b>",
+                 f"⭐ Уровень {view['level']} — {view['title']}",
+                 f"🎖 XP: {num(view['into'])} / {num(view['need'])}", ""]
+        if pending:
+            coins = sum(game.level_reward(lvl)["coins"] for lvl in pending)
+            lines.append(f"Доступно наград: <b>{len(pending)}</b> "
+                         f"(от {num(coins)} mCoin)")
+            lines.append("")
+            for lvl in pending[-6:]:
+                lines.append(f"• {lvl} ур. — {level_reward_line(game.level_reward(lvl))}")
+            if len(pending) > 6:
+                lines.append(f"… и ещё {len(pending) - 6}")
+        else:
+            lines.append("Все награды за достигнутые уровни уже получены.")
+        nxt = game.level_reward(view["level"] + 1)
+        lines += ["",
+                  f"Следующий, {view['level'] + 1} ур.: {level_reward_line(nxt)}",
+                  f"Осталось набрать {num(max(0, view['next'] - view['xp']))} XP"]
+        return "\n".join(lines)
+
+    def level_menu_keyboard(user: dict) -> InlineKeyboardMarkup:
+        rows = []
+        if level_pending(user):
+            rows.append([InlineKeyboardButton(text="🎁 Забрать награды",
+                                              callback_data="level:claim")])
+        rows.append([InlineKeyboardButton(text="🏅 Достижения", callback_data="menu:ach"),
+                     InlineKeyboardButton(text="🏆 Топ по уровню",
+                                          callback_data="top:level")])
+        rows.append([webapp_button()])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def claim_levels(user: dict) -> tuple[list[dict], int]:
+        level = game.level_view(user.get("xp") or 0)["level"]
+        claimed = db.level_claims(user["user_id"])
+        got: list[dict] = []
+        coins = 0
+        for lvl in range(2, level + 1):
+            if lvl in claimed:
+                continue
+            reward = game.level_reward(lvl)
+            if db.claim_level(user["user_id"], lvl, reward["coins"],
+                              reward["gmpoint"], reward["lootbox"],
+                              reward["prefix"]):
+                got.append(reward)
+                coins += reward["coins"]
+        return got, coins
 
     def user_name(user: dict | None) -> str:
         if not user:
@@ -429,7 +508,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
              InlineKeyboardButton(text="🏦 Банк", callback_data="menu:bank")],
             [InlineKeyboardButton(text="🏅 Достижения", callback_data="menu:ach"),
              InlineKeyboardButton(text="🎯 Задания", callback_data="menu:tasks")],
-            [InlineKeyboardButton(text="🏆 Топ", callback_data="top")],
+            [InlineKeyboardButton(text="🏆 Топ по балансу", callback_data="top"),
+             InlineKeyboardButton(text="⭐ Топ по уровню", callback_data="top:level")],
             [webapp_button()],
         ])
 
@@ -444,6 +524,77 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if not rows:
             lines.append("Пока пусто")
         return "\n".join(lines)
+
+    def top_level_text() -> str:
+        rows = db.top_by_level(10)
+        lines = ["⭐ <b>Топ по уровню</b>", ""]
+        medals = ("🥇", "🥈", "🥉")
+        for index, row in enumerate(rows, 1):
+            name = row["username"] or row["first_name"] or f"id{row['user_id']}"
+            level = game.level_view(row.get("xp") or 0)
+            prefix = game.prefix_view(row.get("prefix"))
+            mark = f" {prefix['title']}" if prefix else ""
+            place = medals[index - 1] if index <= 3 else f"{index}."
+            lines.append(
+                f"{place} {name}{mark} — {level['level']} ур. "
+                f"({level['title']}) · {num(level['xp'])} XP")
+        if not rows:
+            lines.append("Пока пусто")
+        return "\n".join(lines)
+
+    def admin_players_text(data: dict) -> str:
+        lines = [
+            "👥 <b>Игроки</b>",
+            f"Всего: <b>{num(data['total'])}</b> · "
+            f"страница {data['page']} из {data['pages']}",
+            "",
+        ]
+        if not data["items"]:
+            lines.append("Пока нет игроков.")
+            return "\n".join(lines)
+        start = (data["page"] - 1) * data["per_page"]
+        for index, row in enumerate(data["items"], start + 1):
+            level = game.level_view(row.get("xp") or 0)
+            name = row["first_name"] or "без имени"
+            nick = f"@{row['username']}" if row["username"] else f"id{row['user_id']}"
+            prefix = game.prefix_view(row.get("prefix"))
+            marks = []
+            if row.get("is_banned"):
+                marks.append("🚫 бан")
+            if (row.get("role") or "user") != "user":
+                marks.append(f"🛠 {row['role']}")
+            played = (date_text(int(row["last_played"]))
+                      if row.get("last_played") else "ещё не играл")
+            head = f"{index}. <b>{name}</b> · {nick}"
+            if prefix:
+                head += f" · {prefix['title']}"
+            if marks:
+                head += f" · {' · '.join(marks)}"
+            lines.append(
+                f"{head}\n"
+                f"   💰 {num(row['balance'])} mCoin · ⭐ {level['level']} ур. "
+                f"({level['title']})\n"
+                f"   🎮 партий: {row['games_played']} · побед: {row['games_won']}\n"
+                f"   🕒 {played}"
+            )
+        return "\n".join(lines)
+
+    def admin_players_keyboard(data: dict) -> InlineKeyboardMarkup:
+        page = int(data["page"])
+        pages = int(data["pages"])
+        nav = []
+        if page > 1:
+            nav.append(InlineKeyboardButton(text="◀️ Назад",
+                                            callback_data=f"adm:pl:{page - 1}"))
+        if page < pages:
+            nav.append(InlineKeyboardButton(text="Вперёд ▶️",
+                                            callback_data=f"adm:pl:{page + 1}"))
+        rows = []
+        if nav:
+            rows.append(nav)
+        rows.append([InlineKeyboardButton(text="🔄 Обновить",
+                                          callback_data=f"adm:pl:{page}")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def bank_text(user: dict) -> str:
         lines = [
@@ -1347,6 +1498,49 @@ def build_dispatcher(db: Database) -> Dispatcher:
                                       reply_markup=profile_keyboard())
         await callback.answer()
 
+    @dp.message(Command("levels", "level"))
+    async def levels_cmd(message: Message) -> None:
+        user = get_user(message)
+        await message.answer(level_menu_text(user),
+                             reply_markup=level_menu_keyboard(user))
+
+    @dp.callback_query(F.data == "level:menu")
+    async def level_menu_cb(callback) -> None:
+        user = get_user(callback)
+        await safe_edit(callback.message, level_menu_text(user),
+                        level_menu_keyboard(user))
+        await callback.answer()
+
+    @dp.callback_query(F.data == "level:claim")
+    async def level_claim_cb(callback) -> None:
+        user = get_user(callback)
+        got, coins = claim_levels(user)
+        fresh = db.user(user["user_id"])
+        if not got:
+            await callback.answer("Наград пока нет", show_alert=True)
+            await safe_edit(callback.message, level_menu_text(fresh),
+                            level_menu_keyboard(fresh))
+            return
+        last = got[-1]
+        parts = [f"Уровней: {len(got)}", f"+{num(coins)} mCoin"]
+        gmpoint = sum(item["gmpoint"] for item in got)
+        if gmpoint:
+            parts.append(f"+{gmpoint} GMPOINT")
+        boxes = sum(item["lootbox"] for item in got)
+        if boxes:
+            parts.append(f"+{boxes} лутбокс")
+        prefixes = [game.prefix_view(item["prefix"]) for item in got if item["prefix"]]
+        for prefix in prefixes:
+            if prefix:
+                parts.append(f"префикс «{prefix['title']}»")
+        await callback.answer(f"Получено до уровня {last['level']}", show_alert=False)
+        await safe_edit(
+            callback.message,
+            "🎉 <b>Награды получены</b>\n\n" + "\n".join(f"• {p}" for p in parts) +
+            f"\n\n💰 Баланс: {num(fresh['balance'])} mCoin",
+            level_menu_keyboard(fresh),
+        )
+
     @dp.message(Command("deposit", "bank"))
     async def deposit_cmd(message: Message) -> None:
         user = get_user(message)
@@ -1373,6 +1567,23 @@ def build_dispatcher(db: Database) -> Dispatcher:
             f"За каждого друга, сыгравшего 5 партий, — {game.REF_BONUS} mCoin.\n"
             "Плюс награды по лестнице: /tasks",
             disable_web_page_preview=True,
+        )
+
+    @dp.message(Command("chat"))
+    async def chat_cmd(message: Message) -> None:
+        get_user(message)
+        if not config.chat_url:
+            await message.answer(
+                "💬 <b>Чат игроков</b>\n\n"
+                "Чат ещё не настроен. Создай группу в Telegram, добавь в неё бота "
+                "администратором и укажи ссылку в переменной <code>CHAT_URL</code>.",
+            )
+            return
+        await message.answer(
+            "💬 <b>Чат игроков</b>\n\nОбсуждай игры, ищи соперников для дуэлей и делись выигрышами.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Открыть чат", url=config.chat_url)],
+            ]),
         )
 
     @dp.message(Command("fair"))
@@ -1425,6 +1636,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         url = f"{config.public_url}/?admin=1" if config.public_url else "https://example.com/"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🛠 Открыть админку", web_app=WebAppInfo(url=url))],
+            [InlineKeyboardButton(text="👥 Все игроки", callback_data="adm:pl:1")],
         ])
         await message.answer(
             "<b>Админ-панель</b>\n\n"
@@ -1437,6 +1649,38 @@ def build_dispatcher(db: Database) -> Dispatcher:
     @dp.callback_query(F.data == "top")
     async def top_cb(callback) -> None:
         await callback.message.answer(top_text())
+        await callback.answer()
+
+    @dp.callback_query(F.data == "top:menu")
+    async def top_menu_cb(callback) -> None:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💰 По балансу", callback_data="top"),
+             InlineKeyboardButton(text="⭐ По уровню", callback_data="top:level")],
+            [InlineKeyboardButton(text="⚔️ Дуэлянты", callback_data="duel:top")],
+        ])
+        await safe_edit(callback.message, "🏆 <b>Рейтинги</b>\n\nВыбери, что показать.",
+                        keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data == "top:level")
+    async def top_level_cb(callback) -> None:
+        await callback.message.answer(top_level_text())
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("adm:pl:"))
+    async def admin_players_cb(callback) -> None:
+        user = get_user(callback)
+        if not is_admin(user):
+            await callback.answer("Команда доступна только администратору.",
+                                  show_alert=True)
+            return
+        try:
+            page = int(callback.data.split(":")[2])
+        except (IndexError, ValueError):
+            page = 1
+        data = db.admin_players(page, 10)
+        await safe_edit(callback.message, admin_players_text(data),
+                        admin_players_keyboard(data))
         await callback.answer()
 
     @dp.callback_query(F.data == "fair")
@@ -2073,6 +2317,7 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="top", description="Топ игроков"),
         BotCommand(command="ref", description="Пригласить друга"),
         BotCommand(command="fair", description="Честность игры"),
+        BotCommand(command="chat", description="Чат игроков"),
         BotCommand(command="help", description="Помощь"),
     ]
     try:

@@ -284,6 +284,37 @@
         <div class="profile-rank" id="profileRank">#—</div>
       </div>
 
+      <div class="card account-card" id="accountCard">
+        <div class="card-title">Аккаунт</div>
+        <div id="accountLogged" hidden>
+          <div class="hint account-note">Вход по логину: <b id="accountLogin"></b></div>
+          <div class="account-actions">
+            <button class="secondary" id="accountLogout">Забыть это устройство</button>
+          </div>
+        </div>
+        <div id="accountForm">
+          <div class="hint account-note">Задай логин и пароль — сможешь заходить в игру из браузера.</div>
+          <input class="account-input" id="accountLoginInput" placeholder="Логин" autocomplete="username">
+          <input class="account-input" id="accountPasswordInput" type="password" placeholder="Пароль (от 6 символов)" autocomplete="current-password">
+          <label class="account-remember"><input type="checkbox" id="accountRemember" checked> Запомнить меня</label>
+          <div class="account-actions">
+            <button class="cta" id="accountRegister">Создать аккаунт</button>
+            <button class="secondary" id="accountLoginBtn">Войти</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Ещё</div>
+        <div class="quick-grid">
+          <button class="quick-btn" data-goto="games"><span>🎮</span>Все игры</button>
+          <button class="quick-btn" data-goto="bank"><span>🏦</span>Банк</button>
+          <button class="quick-btn" data-goto="history"><span>📜</span>История</button>
+          <button class="quick-btn" data-goto="fair"><span>🔐</span>Честность</button>
+          <button class="quick-btn" id="chatLink" hidden><span>💬</span>Чат игроков</button>
+        </div>
+      </div>
+
       <div class="card level-card">
         <div class="level-head">
           <span class="level-badge" id="levelBadge">1</span>
@@ -294,6 +325,10 @@
           <div class="level-xp" id="levelXp">0 XP</div>
         </div>
         <div class="xp-bar"><div class="xp-fill" id="xpFill"></div></div>
+        <div class="level-reward-row">
+          <span class="hint" id="levelRewardHint"></span>
+          <button class="cta" id="claimLevels" hidden>🎁 Забрать награды</button>
+        </div>
       </div>
 
       <div class="stats-grid">
@@ -331,6 +366,7 @@
       <div class="tabs">
         <button class="tab active" data-tab="balance">По балансу</button>
         <button class="tab" data-tab="mult">По множителю</button>
+        <button class="tab" data-tab="lvl">По уровню</button>
       </div>
       <div class="list" id="topList"></div>
     </section>
@@ -344,6 +380,16 @@
       <div class="card">
         <div class="card-title">Наборы</div>
         <div class="shop-list" id="shopBundles"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Донат-магазин <span class="shop-currency">G <b id="shopGmpoint">0</b></span></div>
+        <div class="hint shop-hint">Цены в GMPOINT. Донат-валюта не покупается деньгами — её выдают за уровни, задания и промо.</div>
+        <div class="shop-list" id="shopDonate"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Префиксы</div>
+        <div class="hint shop-hint">Префикс виден в профиле и в топе игроков.</div>
+        <div class="shop-list" id="shopPrefixes"></div>
       </div>
       <div class="card" id="lootboxCard" hidden>
         <div class="card-title">Кейс удачи</div>
@@ -493,13 +539,9 @@
   <nav class="nav">
     <button class="nav-btn active" data-view="game"><span>💣</span>Игра</button>
     <button class="nav-btn" data-view="tasks"><span>✅</span>Задания</button>
-    <button class="nav-btn" data-view="games"><span>🎮</span>Игры</button>
-    <button class="nav-btn" data-view="top"><span>🏆</span>Топ</button>
     <button class="nav-btn" data-view="shop"><span>🛒</span>Магазин</button>
-    <button class="nav-btn" data-view="bank"><span>🏦</span>Банк</button>
+    <button class="nav-btn" data-view="top"><span>🏆</span>Топ</button>
     <button class="nav-btn" data-view="profile"><span>👤</span>Профиль</button>
-    <button class="nav-btn" data-view="history"><span>📜</span>История</button>
-    <button class="nav-btn" data-view="fair"><span>🔐</span>Честность</button>
     <button class="nav-btn" id="adminNav" data-view="admin" hidden><span>🛠</span>Админ</button>
   </nav>
 
@@ -522,12 +564,16 @@
 
   <div class="toast" id="toast"></div>
 
-  <div class="modal" id="modal">
-    <div class="modal-card">
-      <div class="modal-emoji" id="modalEmoji">💥</div>
-      <div class="modal-title" id="modalTitle">Мина!</div>
-      <div class="modal-text" id="modalText">Ставка сгорела.</div>
-      <button class="cta" id="modalBtn">Ещё раз</button>
+  <div class="auth-gate" id="authGate" hidden>
+    <div class="auth-gate-card">
+      <div class="auth-gate-logo">💣</div>
+      <div class="auth-gate-title">Апрельский сапёр</div>
+      <div class="auth-gate-sub">Вход по логину и паролю</div>
+      <input class="account-input" id="gateLogin" placeholder="Логин" autocomplete="username">
+      <input class="account-input" id="gatePassword" type="password" placeholder="Пароль" autocomplete="current-password">
+      <label class="account-remember"><input type="checkbox" id="gateRemember" checked> Запомнить меня</label>
+      <button class="cta" id="gateSubmit">Войти</button>
+      <div class="auth-gate-hint">Нет аккаунта? Открой игру через Telegram и задай логин в профиле.</div>
     </div>
   </div>
 

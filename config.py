@@ -55,6 +55,7 @@ class Config:
     sponsor_channels: list[str] = field(
         default_factory=lambda: _name_list("SPONSOR_CHANNELS"))
     update_channel: str = os.getenv("UPDATE_CHANNEL", "").strip()
+    chat_url: str = os.getenv("CHAT_URL", "").strip()
     bot_username: str = ""
 
 

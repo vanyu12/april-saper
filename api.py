@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import math
+import re
 import secrets
 import time
 import uuid
@@ -11,6 +12,7 @@ import aiohttp
 from aiohttp import web
 
 import awards
+import auth
 import game
 from config import config
 from db import Database
@@ -60,6 +62,12 @@ class Api:
     def _auth(self, request: web.Request) -> dict | None:
         init_data = request.headers.get("X-Init-Data", "")
         user = parse_init_data(init_data, config.bot_token) if config.bot_token else None
+        if not user:
+            token = request.headers.get("X-Auth-Token", "").strip()
+            if token:
+                row = self.db.user_by_token(auth.token_hash(token), int(time.time()))
+                if row:
+                    return row
         if not user and config.dev_mode:
             user = {"id": config.dev_user_id or 1, "first_name": "Dev", "username": "dev"}
         if not user:
@@ -87,13 +95,29 @@ class Api:
         if user["user_id"] in config.admin_ids:
             return True
         username = (user.get("username") or "").lower()
-        return bool(username) and username in config.admin_usernames
+        if username and username in config.admin_usernames:
+            return True
+        return (user.get("role") or "user") == "admin"
+
+    @staticmethod
+    def _is_staff(user: dict) -> bool:
+        if Api._is_admin(user):
+            return True
+        return (user.get("role") or "user") == "moderator"
 
     def _require_admin(self, request: web.Request):
         user = self._auth(request)
         if not user:
             return None, self._fail("unauthorized", 401)
         if not self._is_admin(user):
+            return None, self._fail("Недостаточно прав", 403)
+        return user, None
+
+    def _require_staff(self, request: web.Request):
+        user = self._auth(request)
+        if not user:
+            return None, self._fail("unauthorized", 401)
+        if not self._is_staff(user):
             return None, self._fail("Недостаточно прав", 403)
         return user, None
 
@@ -250,6 +274,17 @@ class Api:
             "ref_code": f"ref_{user['user_id']}",
         }
 
+    def _level_rows(self, rows: list[dict]) -> list[dict]:
+        result = []
+        for row in rows:
+            level = game.level_view(row.get("xp") or 0)
+            result.append({
+                **row,
+                "level": level["level"],
+                "level_title": level["title"],
+            })
+        return result
+
     async def state(self, request: web.Request) -> web.Response:
         user = self._auth(request)
         if not user:
@@ -262,11 +297,17 @@ class Api:
             "user": self._public_user(user),
             "achievements": self._achievements_view(user),
             "bot_username": config.bot_username,
-            "is_admin": self._is_admin(user),
+            "chat_url": config.chat_url,
+            "is_admin": self._is_staff(user),
+            "is_superadmin": self._is_admin(user),
+            "role": user.get("role") or "user",
+            "account": ({"login": self.db.account(user["user_id"])["login"]}
+                        if self.db.account(user["user_id"]) else None),
             "settings": self._public_settings(),
             "rank": self.db.rank(user["user_id"]),
             "referrals": self.db.referrals(user["user_id"]),
             "leaderboard": self.db.leaderboard(10),
+            "leaderboard_level": self._level_rows(self.db.top_by_level(10)),
             "history": self.db.history(user["user_id"], 10),
             "fair": {
                 "seed_hash": user["server_seed_hash"],
@@ -279,6 +320,7 @@ class Api:
             "sponsors": self._sponsors_view(user),
             "deposits": self._deposits_view(user),
             "spin": self._spin_view(),
+            "levels": self._levels_view(user),
             "games_hub": {
                 "players": self.db.game_players(),
                 "last": self.db.last_game(user["user_id"]),
@@ -529,6 +571,7 @@ class Api:
             "ok": True,
             "by_balance": self.db.leaderboard(20),
             "by_multiplier": self.db.top_multiplier(10),
+            "by_level": self._level_rows(self.db.top_by_level(20)),
             "me": user["user_id"],
         })
 
@@ -969,6 +1012,99 @@ class Api:
         return self._json({"ok": True, "reward": quest["reward"], "balance": balance,
                            "quests": self._quests_view(user)})
 
+    # --- уровни ----------------------------------------------------------
+    def _levels_view(self, user: dict) -> dict:
+        view = game.level_view(user.get("xp") or 0)
+        claimed = self.db.level_claims(user["user_id"])
+        pending = [lvl for lvl in range(2, view["level"] + 1) if lvl not in claimed]
+        return {
+            "level": view["level"],
+            "title": view["title"],
+            "pending": len(pending),
+            "pending_levels": pending[-10:],
+            "next": view["level"] + 1,
+            "next_reward": game.level_reward(view["level"] + 1),
+            "to_next": max(0, view["next"] - view["xp"]),
+        }
+
+    async def level_claim(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        view = game.level_view(user.get("xp") or 0)
+        claimed = self.db.level_claims(user["user_id"])
+        got = []
+        for lvl in range(2, view["level"] + 1):
+            if lvl in claimed:
+                continue
+            reward = game.level_reward(lvl)
+            if self.db.claim_level(user["user_id"], lvl, reward["coins"],
+                                   reward["gmpoint"], reward["lootbox"],
+                                   reward["prefix"]):
+                got.append(reward)
+        fresh = self.db.user(user["user_id"])
+        return self._json({
+            "ok": True,
+            "claimed": got,
+            "coins": sum(item["coins"] for item in got),
+            "gmpoint": sum(item["gmpoint"] for item in got),
+            "lootbox": sum(item["lootbox"] for item in got),
+            "balance": fresh["balance"],
+            "levels": self._levels_view(fresh),
+        })
+
+    # --- аккаунт (логин и пароль) ---------------------------------------
+    async def auth_register(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("Откройте игру через Telegram", 401)
+        body = await self._body(request)
+        login = str(body.get("login", "")).strip()
+        password = str(body.get("password", ""))
+        if not re.fullmatch(r"[A-Za-z0-9_]{3,32}", login):
+            return self._fail("Логин: 3–32 символа, латиница, цифры и _")
+        if len(password) < 6:
+            return self._fail("Пароль не короче 6 символов")
+        existing = self.db.account_by_login(login)
+        if existing and int(existing["user_id"]) != int(user["user_id"]):
+            return self._fail("Логин уже занят")
+        digest, salt = auth.hash_password(password)
+        self.db.set_account(user["user_id"], login, digest, salt)
+        return self._json({"ok": True, "login": login})
+
+    async def auth_login(self, request: web.Request) -> web.Response:
+        body = await self._body(request)
+        login = str(body.get("login", "")).strip()
+        password = str(body.get("password", ""))
+        account = self.db.account_by_login(login)
+        if not account or not auth.verify_password(
+                password, account["password_hash"], account["password_salt"]):
+            return self._fail("Неверный логин или пароль", 401)
+        target = self.db.user(account["user_id"])
+        if not target:
+            return self._fail("Игрок не найден", 404)
+        if target.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        remember = bool(body.get("remember", True))
+        token = auth.new_token()
+        expires = int(time.time()) + (90 * 86400 if remember else 86400)
+        self.db.set_account_token(target["user_id"], auth.token_hash(token), expires)
+        return self._json({
+            "ok": True,
+            "token": token,
+            "expires": expires,
+            "login": account["login"],
+        })
+
+    async def auth_logout(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        self.db.clear_account_token(user["user_id"])
+        return self._json({"ok": True})
+
     # --- магазин ---------------------------------------------------------
     def _inventory_view(self, user: dict) -> dict:
         inv = self.db.inventory(user["user_id"])
@@ -1076,12 +1212,33 @@ class Api:
             entry = dict(bundle)
             entry["owned"] = all(inv.get(key, 0) > 0 for key in bundle["items"])
             bundles.append(entry)
+        donate = []
+        for item in game.DONATE_ITEMS:
+            entry = dict(item)
+            entry["qty"] = inv.get(item["key"], 0)
+            donate.append(entry)
+        owned_prefixes = self.db.user_prefixes(user["user_id"])
+        level = game.level_view(user.get("xp") or 0)["level"]
+        prefixes = []
+        for prefix in game.PREFIXES:
+            entry = dict(prefix)
+            entry["owned"] = prefix["key"] in owned_prefixes
+            entry["active"] = (user.get("prefix") or "") == prefix["key"]
+            entry["available"] = (
+                prefix["currency"] == "level"
+                and level >= int(prefix["level"])
+            ) or (prefix["currency"] != "level"
+                  and level >= int(prefix["level"]))
+            prefixes.append(entry)
         return self._json({
             "ok": True,
             "balance": user["balance"],
+            "gmpoint": user.get("gmpoint") or 0,
             "inventory": self._inventory_view(user),
             "items": items,
             "bundles": bundles,
+            "donate": donate,
+            "prefixes": prefixes,
         })
 
     async def shop_buy(self, request: web.Request) -> web.Response:
@@ -1092,6 +1249,50 @@ class Api:
             return self._fail("Аккаунт заблокирован", 403)
         body = await self._body(request)
         key = str(body.get("key", ""))
+        prefix = next((p for p in game.PREFIXES if p["key"] == key), None)
+        if prefix:
+            if prefix["currency"] == "level":
+                return self._fail("Этот префикс выдаётся за уровень")
+            if self.db.has_prefix(user["user_id"], key):
+                return self._fail("Префикс уже куплен")
+            price = int(prefix["price"])
+            if prefix["currency"] == "gmpoint":
+                if not self.db.spend_gmpoint(user["user_id"], price):
+                    return self._fail("Недостаточно GMPOINT")
+            else:
+                if user["balance"] < price:
+                    return self._fail("Недостаточно mCoin")
+                self.db.add_balance(user["user_id"], -price)
+            self.db.add_prefix(user["user_id"], key)
+            self.db.set_prefix(user["user_id"], key)
+            fresh = self.db.user(user["user_id"])
+            return self._json({
+                "ok": True,
+                "balance": fresh["balance"],
+                "gmpoint": fresh["gmpoint"],
+                "bought": f"префикс «{prefix['title']}»",
+                "prefix": key,
+                "inventory": self._inventory_view(fresh),
+            })
+
+        donate = next((d for d in game.DONATE_ITEMS if d["key"] == key), None)
+        if donate:
+            price = int(donate["price"])
+            if not self.db.spend_gmpoint(user["user_id"], price):
+                return self._fail("Недостаточно GMPOINT")
+            for item_key, qty in donate["items"].items():
+                if item_key == "charm":
+                    qty *= game.CHARM_CHARGES
+                self.db.add_item(user["user_id"], item_key, qty)
+            fresh = self.db.user(user["user_id"])
+            return self._json({
+                "ok": True,
+                "balance": fresh["balance"],
+                "gmpoint": fresh["gmpoint"],
+                "bought": donate["title"],
+                "inventory": self._inventory_view(fresh),
+            })
+
         entry = next((item for item in game.SHOP_ITEMS if item["key"] == key), None)
         grant = {key: 1} if entry else None
         if entry is None:
@@ -1366,7 +1567,7 @@ class Api:
         })
 
     async def admin_users(self, request: web.Request) -> web.Response:
-        admin, err = self._require_admin(request)
+        admin, err = self._require_staff(request)
         if err:
             return err
         body = await self._body(request)
@@ -1379,7 +1580,7 @@ class Api:
         return self._json({"ok": True, "items": self.db.admin_users(query, limit)})
 
     async def admin_balance(self, request: web.Request) -> web.Response:
-        admin, err = self._require_admin(request)
+        admin, err = self._require_staff(request)
         if err:
             return err
         body = await self._body(request)
@@ -1397,7 +1598,7 @@ class Api:
         return self._json({"ok": True, "user_id": target, "balance": balance})
 
     async def admin_ban(self, request: web.Request) -> web.Response:
-        admin, err = self._require_admin(request)
+        admin, err = self._require_staff(request)
         if err:
             return err
         body = await self._body(request)
@@ -1414,7 +1615,7 @@ class Api:
         return self._json({"ok": True, "user_id": target, "is_banned": 1 if banned else 0})
 
     async def admin_grant(self, request: web.Request) -> web.Response:
-        admin, err = self._require_admin(request)
+        admin, err = self._require_staff(request)
         if err:
             return err
         body = await self._body(request)
@@ -1444,8 +1645,30 @@ class Api:
             "qty": total,
         })
 
-    async def admin_rounds(self, request: web.Request) -> web.Response:
+    async def admin_role(self, request: web.Request) -> web.Response:
         admin, err = self._require_admin(request)
+        if err:
+            return err
+        body = await self._body(request)
+        try:
+            target = int(body.get("user_id", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректные данные")
+        if not self.db.user(target):
+            return self._fail("Игрок не найден", 404)
+        role = str(body.get("role", "user")).strip().lower()
+        if role not in ("user", "moderator", "admin"):
+            return self._fail("Неизвестная роль")
+        if target == admin["user_id"] and role != "admin":
+            return self._fail("Нельзя снять роль с самого себя")
+        if target in config.admin_ids and role != "admin":
+            return self._fail("Этот игрок админ из настроек бота")
+        self.db.admin_set_role(target, role)
+        self.db.admin_log(admin["user_id"], target, "role", {"role": role})
+        return self._json({"ok": True, "user_id": target, "role": role})
+
+    async def admin_rounds(self, request: web.Request) -> web.Response:
+        admin, err = self._require_staff(request)
         if err:
             return err
         body = await self._body(request)
@@ -1509,6 +1732,9 @@ def build_app(db: Database) -> web.Application:
     app["api"] = api
 
     app.router.add_post("/api/state", api.state)
+    app.router.add_post("/api/auth/register", api.auth_register)
+    app.router.add_post("/api/auth/login", api.auth_login)
+    app.router.add_post("/api/auth/logout", api.auth_logout)
     app.router.add_post("/api/game/start", api.start)
     app.router.add_post("/api/game/open", api.open)
     app.router.add_post("/api/game/cashout", api.cashout)
@@ -1528,6 +1754,7 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/games/bj/double", api.bj_double)
     app.router.add_post("/api/quests", api.quests)
     app.router.add_post("/api/quests/claim", api.quest_claim)
+    app.router.add_post("/api/levels/claim", api.level_claim)
     app.router.add_post("/api/shop", api.shop)
     app.router.add_post("/api/shop/buy", api.shop_buy)
     app.router.add_post("/api/shop/use", api.shop_use)
@@ -1542,6 +1769,7 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/admin/balance", api.admin_balance)
     app.router.add_post("/api/admin/ban", api.admin_ban)
     app.router.add_post("/api/admin/grant", api.admin_grant)
+    app.router.add_post("/api/admin/role", api.admin_role)
     app.router.add_post("/api/admin/rounds", api.admin_rounds)
     app.router.add_post("/api/admin/settings", api.admin_settings)
 

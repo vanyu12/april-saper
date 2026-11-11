@@ -2,6 +2,8 @@ const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : 
 
 const state = {
   user: null,
+  account: null,
+  chatUrl: "",
   round: null,
   mines: 3,
   bet: 50,
@@ -9,11 +11,13 @@ const state = {
   autoTarget: 0,
   settings: { min_bet: 10, max_bet: 100000, min_mines: 1, max_mines: 24, daily_bonus: 500, maintenance: 0 },
   isAdmin: false,
+  isSuper: false,
   sound: true,
   game: "mines",
   quests: [],
-  shop: { items: [], bundles: [], inventory: {} },
-  leaderboard: { by_balance: [], by_multiplier: [], me: 0 },
+  shop: { items: [], bundles: [], donate: [], prefixes: [], inventory: {}, gmpoint: 0 },
+  leaderboard: { by_balance: [], by_multiplier: [], by_level: [], me: 0 },
+  levels: { level: 1, pending: 0, pending_levels: [], next: 2, to_next: 0 },
   history: [],
   achievements: [],
   referrals: { total: 0, active: 0 },
@@ -152,6 +156,10 @@ async function api(path, body) {
   const headers = { "Content-Type": "application/json" };
   if (tg && tg.initData) headers["X-Init-Data"] = tg.initData;
   if (startParam) headers["X-Start-Param"] = startParam;
+  try {
+    const token = localStorage.getItem("saper_token");
+    if (token) headers["X-Auth-Token"] = token;
+  } catch (e) {}
   const res = await fetch(path, {
     method: "POST",
     headers,
@@ -662,6 +670,38 @@ function renderProfile() {
   $("levelXp").textContent = `${fmt(u.xp || 0)} XP`;
   $("xpFill").style.width = Math.max(0, Math.min(100, u.level_percent || 0)) + "%";
 
+  const levels = state.levels || {};
+  const claimBtn = $("claimLevels");
+  const rewardHint = $("levelRewardHint");
+  if (claimBtn && rewardHint) {
+    const pending = Number(levels.pending || 0);
+    claimBtn.hidden = pending <= 0;
+    claimBtn.textContent = `🎁 Забрать награды (${pending})`;
+    if (pending > 0) {
+      rewardHint.textContent = `Доступно наград за уровни: ${pending}`;
+    } else {
+      const reward = levels.next_reward || {};
+      const bits = [];
+      if (reward.coins) bits.push(`+${fmt(reward.coins)} mCoin`);
+      if (reward.gmpoint) bits.push(`+${reward.gmpoint} GMPOINT`);
+      if (reward.lootbox) bits.push(`+${reward.lootbox} лутбокс`);
+      rewardHint.textContent = bits.length
+        ? `До ${levels.next || (u.level || 1) + 1} ур.: ${bits.join(" · ")}`
+        : "";
+    }
+  }
+
+  if ($("chatLink")) $("chatLink").hidden = !state.chatUrl;
+
+  const logged = $("accountLogged");
+  const form = $("accountForm");
+  if (logged && form) {
+    const acc = state.account;
+    logged.hidden = !acc;
+    form.hidden = !!acc;
+    if (acc) $("accountLogin").textContent = acc.login;
+  }
+
   const ach = state.achievements || [];
   $("achievements").innerHTML = ach.length
     ? ach
@@ -680,6 +720,58 @@ function renderProfile() {
 function botLink(code) {
   const username = state.botUsername || (tg && tg.initDataUnsafe && tg.initDataUnsafe.user && window.BOT_USERNAME) || "AprilSaperBot";
   return `https://t.me/${username}?start=${code}`;
+}
+
+function saveAuthToken(token) {
+  try {
+    if (token) localStorage.setItem("saper_token", token);
+    else localStorage.removeItem("saper_token");
+  } catch (e) {}
+}
+
+async function accountRegister() {
+  const login = ($("accountLoginInput") && $("accountLoginInput").value || "").trim();
+  const password = ($("accountPasswordInput") && $("accountPasswordInput").value) || "";
+  try {
+    const data = await api("/api/auth/register", { login, password });
+    state.account = { login: data.login };
+    toast("Аккаунт создан");
+    renderProfile();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function accountLogin() {
+  const loginInput = $("accountLoginInput");
+  const passInput = $("accountPasswordInput");
+  const login = ((loginInput && loginInput.value) || ($("gateLogin") && $("gateLogin").value) || "").trim();
+  const password = (passInput && passInput.value) || ($("gatePassword") && $("gatePassword").value) || "";
+  const remember = $("accountRemember") ? $("accountRemember").checked
+    : ($("gateRemember") ? $("gateRemember").checked : true);
+  try {
+    const data = await api("/api/auth/login", { login, password, remember });
+    saveAuthToken(data.token);
+    const gate = $("authGate");
+    if (gate) gate.hidden = true;
+    toast("Вход выполнен");
+    await loadState();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function accountLogout() {
+  try { await api("/api/auth/logout"); } catch (e) {}
+  saveAuthToken(null);
+  state.account = null;
+  toast("Это устройство отвязано");
+  renderProfile();
+}
+
+function showAuthGate() {
+  const gate = $("authGate");
+  if (gate) gate.hidden = false;
 }
 
 function renderHistory() {
@@ -713,6 +805,14 @@ function renderTop(tab) {
       place: i + 1,
       name: u.username || u.first_name || "id" + u.user_id,
       value: fmtMult(u.best_multiplier),
+      id: u.user_id,
+      photo: u.photo_url,
+    }));
+  } else if (tab === "lvl") {
+    rows = (state.leaderboard.by_level || []).map((u, i) => ({
+      place: i + 1,
+      name: u.username || u.first_name || "id" + u.user_id,
+      value: `⭐ ${u.level || 1} ур. · ${fmt(u.xp || 0)} XP`,
       id: u.user_id,
       photo: u.photo_url,
     }));
@@ -908,6 +1008,12 @@ function renderAdminUsers() {
         <select class="mini-select" data-role="item">${ADMIN_ITEMS.map(([k, t]) => `<option value="${k}">${t}</option>`).join("")}</select>
         <button class="chip-btn" data-act="item">Выдать</button>
         <button class="chip-btn" data-act="${u.is_banned ? "unban" : "ban"}">${u.is_banned ? "Разбан" : "Бан"}</button>
+        ${state.isSuper ? `<select class="mini-select" data-role="role">
+          ${[["user", "Игрок"], ["moderator", "Модератор"], ["admin", "Админ"]]
+            .map(([k, t]) => `<option value="${k}"${(u.role || "user") === k ? " selected" : ""}>${t}</option>`)
+            .join("")}
+        </select>
+        <button class="chip-btn" data-act="role">Роль</button>` : ""}
       </div>
     </div>`)
     .join("");
@@ -967,6 +1073,16 @@ async function adminBalance(userId, delta) {
     await loadAdmin();
   } catch (e) {
     toast(e.message);
+  }
+}
+
+async function adminRole(userId, role) {
+  try {
+    await api("/api/admin/role", { user_id: userId, role });
+    toast("Роль обновлена");
+    await adminSearch($("adminSearch").value.trim());
+  } catch (err) {
+    toast(err.message);
   }
 }
 
@@ -1389,16 +1505,23 @@ const SHOP_SECTIONS = [
   { key: "cosmetics", title: "Косметика" },
 ];
 
-function shopCard(entry) {
+function shopCard(entry, opts) {
+  const options = opts || {};
   const owned = !!entry.owned && entry.key !== "lootbox";
-  return `<div class="shop-card${owned ? " owned" : ""}">
+  const currency = entry.currency === "gmpoint" ? "G" : (entry.currency === "level" ? "LVL" : "◈");
+  let priceText;
+  if (options.levelOnly) priceText = `с ${entry.level} ур.`;
+  else if (entry.currency === "level") priceText = `за ${entry.level} ур.`;
+  else priceText = `${currency} ${fmt(entry.price)}`;
+  const label = owned ? (entry.active ? "Надет" : "Куплено") : (options.buyLabel || "Купить");
+  return `<div class="shop-card${owned ? " owned" : ""}${entry.active ? " active" : ""}">
     <div class="shop-meta">
-      <div class="shop-title">${escapeHtml(entry.title)}${owned ? ' <span class="owned-mark">✓</span>' : ""}</div>
-      <div class="shop-desc">${escapeHtml(entry.desc)}</div>
+      <div class="shop-title">${escapeHtml(entry.title)}${owned ? ' <span class="owned-mark">✓</span>' : ""}${entry.active ? ' <span class="owned-mark">•</span>' : ""}</div>
+      <div class="shop-desc">${escapeHtml(entry.desc || (entry.currency === "level" ? "Награда за уровень" : ""))}</div>
     </div>
-    <button class="shop-buy" data-key="${entry.key}" ${owned ? "disabled" : ""}>
-      <span class="shop-price">${owned ? "Куплено" : "◈ " + fmt(entry.price)}</span>
-      ${owned ? "Есть" : "Купить"}
+    <button class="shop-buy" data-key="${entry.key}" ${owned || options.levelOnly ? "disabled" : ""}>
+      <span class="shop-price">${owned ? label : priceText}</span>
+      ${owned ? "Есть" : (entry.currency === "gmpoint" ? "За GMPOINT" : label)}
     </button>
   </div>`;
 }
@@ -1412,12 +1535,30 @@ function renderShop() {
       const list = (shop.items || []).filter((item) => item.category === section.key);
       if (!list.length) return;
       groups.push(`<div class="shop-section">${section.title}</div>`);
-      groups.push(list.map(shopCard).join(""));
+      groups.push(list.map((item) => shopCard(item)).join(""));
     });
-    items.innerHTML = groups.join("");
+    items.innerHTML = groups.join("") || '<div class="empty">Магазин пуст</div>';
   }
   const bundles = $("shopBundles");
-  if (bundles) bundles.innerHTML = (shop.bundles || []).map(shopCard).join("");
+  if (bundles) bundles.innerHTML = (shop.bundles || []).map((item) => shopCard(item)).join("");
+  const donate = $("shopDonate");
+  if (donate) {
+    donate.innerHTML = (shop.donate || []).map((item) => {
+      const qty = (shop.inventory && shop.inventory[item.key]) || 0;
+      const desc = `${item.desc}${qty ? ` · в инвентаре: ${qty}` : ""}`;
+      return shopCard({ ...item, desc }, { buyLabel: "Купить" });
+    }).join("") || '<div class="empty">Пока пусто</div>';
+  }
+  const prefixes = $("shopPrefixes");
+  if (prefixes) {
+    prefixes.innerHTML = (shop.prefixes || []).map((item) => {
+      const levelOnly = item.currency === "level";
+      const desc = `Цвет ${item.color}${levelOnly ? ` · открывается на ${item.level} уровне` : ""}`;
+      return shopCard({ ...item, desc }, { levelOnly, buyLabel: "Надеть" });
+    }).join("") || '<div class="empty">Пока пусто</div>';
+  }
+  const gmp = $("shopGmpoint");
+  if (gmp) gmp.textContent = fmt(shop.gmpoint || 0);
   const lootbox = (shop.inventory && shop.inventory.lootbox) || 0;
   const box = $("lootboxCard");
   if (box) box.hidden = lootbox <= 0;
@@ -1461,12 +1602,15 @@ async function buyItem(key) {
   try {
     const data = await api("/api/shop/buy", { key });
     state.user.balance = data.balance;
+    if (data.gmpoint !== undefined) state.shop.gmpoint = data.gmpoint;
     state.shop.inventory = data.inventory || {};
+    if (data.prefix) state.user.prefix = data.prefix;
     sfx.cash();
     haptic("success");
     toast(`Куплено: ${data.bought}`);
     renderAll();
     renderShop();
+    loadShop().catch(() => {});
   } catch (e) {
     haptic("error");
     toast(e.message);
@@ -1561,8 +1705,11 @@ async function loadState() {
     confetti();
   }
   state.botUsername = data.bot_username || "";
+  state.chatUrl = data.chat_url || "";
   state.settings = data.settings || state.settings;
   state.isAdmin = !!data.is_admin;
+  state.isSuper = !!data.is_superadmin;
+  state.account = data.account || null;
   state.quests = data.quests || state.quests;
   state.shop.inventory = data.inventory || state.shop.inventory;
   const adminNav = $("adminNav");
@@ -1571,6 +1718,7 @@ async function loadState() {
   state.leaderboard = {
     by_balance: data.leaderboard || [],
     by_multiplier: state.leaderboard.by_multiplier || [],
+    by_level: data.leaderboard_level || state.leaderboard.by_level || [],
     me: data.user.id,
   };
   state.history = data.history || [];
@@ -1578,6 +1726,7 @@ async function loadState() {
   state.sponsors = data.sponsors || state.sponsors;
   state.deposits = data.deposits || state.deposits;
   state.spin = data.spin || state.spin;
+  state.levels = data.levels || state.levels;
   state.gamesHub = data.games_hub || state.gamesHub;
   if (!state.depositPlan && state.deposits.plans && state.deposits.plans.length) {
     state.depositPlan = state.deposits.plans[0].days;
@@ -1726,6 +1875,7 @@ async function loadTop() {
     const data = await api("/api/leaderboard");
     state.leaderboard.by_balance = data.by_balance;
     state.leaderboard.by_multiplier = data.by_multiplier;
+    state.leaderboard.by_level = data.by_level || state.leaderboard.by_level;
     state.leaderboard.me = data.me;
   const topTab = document.querySelector("#view-top .tab.active");
   renderTop(topTab ? topTab.dataset.tab : "balance");
@@ -1880,6 +2030,10 @@ function bind() {
     }
     else if (act === "ban") adminBan(userId, true);
     else if (act === "unban") adminBan(userId, false);
+    else if (act === "role") {
+      const select = row.querySelector('select[data-role="role"]');
+      if (select) adminRole(userId, select.value);
+    }
   });
 
   $("saveSettings").addEventListener("click", saveAdminSettings);
@@ -2017,6 +2171,37 @@ function bind() {
 
   if ($("openLootbox")) $("openLootbox").addEventListener("click", openLootbox);
 
+  if ($("accountRegister")) $("accountRegister").addEventListener("click", accountRegister);
+  if ($("accountLoginBtn")) $("accountLoginBtn").addEventListener("click", accountLogin);
+  if ($("accountLogout")) $("accountLogout").addEventListener("click", accountLogout);
+  if ($("gateSubmit")) $("gateSubmit").addEventListener("click", accountLogin);
+
+  document.querySelectorAll("[data-goto]").forEach((btn) => {
+    btn.addEventListener("click", () => switchView(btn.dataset.goto));
+  });
+  if ($("chatLink")) $("chatLink").addEventListener("click", () => {
+    if (state.chatUrl) window.open(state.chatUrl, "_blank");
+    else toast("Чат пока не настроен");
+  });
+
+  if ($("claimLevels")) $("claimLevels").addEventListener("click", async () => {
+    try {
+      const data = await api("/api/levels/claim");
+      state.user.balance = data.balance;
+      state.levels = data.levels || state.levels;
+      const bits = [];
+      if (data.coins) bits.push(`+${fmt(data.coins)} mCoin`);
+      if (data.gmpoint) bits.push(`+${data.gmpoint} GMPOINT`);
+      if (data.lootbox) bits.push(`+${data.lootbox} лутбокс`);
+      toast(bits.length ? `Награды за уровни: ${bits.join(" · ")}` : "Наград пока нет");
+      if (bits.length) sfx.cash();
+      renderAll();
+      await loadState();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
   $("questsList").addEventListener("click", async (e) => {
     const btn = e.target.closest(".quest-claim");
     if (!btn || btn.disabled) return;
@@ -2062,7 +2247,11 @@ async function init() {
   try {
     await loadState();
   } catch (e) {
-    toast(e.message === "unauthorized" ? "Откройте игру через Telegram" : e.message);
+    if (String(e.message).toLowerCase().includes("unauthorized")) {
+      if (!(tg && tg.initData) ) showAuthGate();
+    } else {
+      toast(e.message === "unauthorized" ? "Откройте игру через Telegram" : e.message);
+    }
   }
 }
 

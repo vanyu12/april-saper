@@ -3,6 +3,7 @@ import os
 import sqlite3
 import threading
 import time
+import uuid
 
 
 SCHEMA_STATEMENTS = [
@@ -35,6 +36,57 @@ SCHEMA_STATEMENTS = [
         duels_won        INTEGER NOT NULL DEFAULT 0
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS level_claims (
+        user_id    INTEGER NOT NULL,
+        level      INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, level)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS user_prefixes (
+        user_id    INTEGER NOT NULL,
+        prefix_key TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, prefix_key)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS accounts (
+        user_id       INTEGER PRIMARY KEY,
+        login         TEXT UNIQUE,
+        password_hash TEXT,
+        password_salt TEXT,
+        token_hash    TEXT,
+        token_expires INTEGER NOT NULL DEFAULT 0,
+        created_at    INTEGER NOT NULL,
+        updated_at    INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS admin_actions (
+        id         TEXT PRIMARY KEY,
+        admin_id   INTEGER NOT NULL,
+        target_id  INTEGER,
+        action     TEXT NOT NULL,
+        detail     TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS gmpoint_log (
+        id         TEXT PRIMARY KEY,
+        user_id    INTEGER NOT NULL,
+        amount     INTEGER NOT NULL,
+        reason     TEXT NOT NULL,
+        admin_id   INTEGER,
+        created_at INTEGER NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_accounts_login ON accounts(login)",
+    "CREATE INDEX IF NOT EXISTS idx_admin_actions_created ON admin_actions(created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_gmpoint_log_user ON gmpoint_log(user_id, created_at DESC)",
     """
     CREATE TABLE IF NOT EXISTS rounds (
         id             TEXT PRIMARY KEY,
@@ -183,6 +235,11 @@ DEFAULT_SETTINGS = {
     "game_coinflip": "1",
     "game_blackjack": "1",
     "update_version": "0",
+    "chat_url": "",
+    "chat_id": "",
+    "chat_title": "",
+    "chat_rules": "Будь вежлив, без спама, рекламы и оскорблений.",
+    "chat_welcome": "Добро пожаловать в чат «Апрельского сапёра»!",
 }
 
 
@@ -289,6 +346,9 @@ class Database:
             ("xp", "INTEGER NOT NULL DEFAULT 0"),
             ("duels_played", "INTEGER NOT NULL DEFAULT 0"),
             ("duels_won", "INTEGER NOT NULL DEFAULT 0"),
+            ("role", "TEXT NOT NULL DEFAULT 'user'"),
+            ("gmpoint", "INTEGER NOT NULL DEFAULT 0"),
+            ("prefix", "TEXT NOT NULL DEFAULT ''"),
         ):
             if name not in present:
                 self._exec(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
@@ -344,6 +404,52 @@ class Database:
     def user(self, user_id: int) -> dict | None:
         return self._row("SELECT * FROM users WHERE user_id = ?", (user_id,))
 
+    def account(self, user_id: int) -> dict | None:
+        return self._row("SELECT * FROM accounts WHERE user_id = ?", (user_id,))
+
+    def account_by_login(self, login: str) -> dict | None:
+        return self._row("SELECT * FROM accounts WHERE LOWER(login) = LOWER(?)",
+                         ((login or "").strip(),))
+
+    def set_account(self, user_id: int, login: str, password_hash: str,
+                    password_salt: str) -> None:
+        now = int(time.time())
+        self._exec(
+            """INSERT INTO accounts (user_id, login, password_hash, password_salt,
+                                    created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT (user_id) DO UPDATE SET
+                   login = excluded.login,
+                   password_hash = excluded.password_hash,
+                   password_salt = excluded.password_salt,
+                   updated_at = excluded.updated_at""",
+            (user_id, login, password_hash, password_salt, now, now))
+
+    def set_account_password(self, user_id: int, password_hash: str,
+                             password_salt: str) -> None:
+        self._exec(
+            "UPDATE accounts SET password_hash = ?, password_salt = ?, updated_at = ? "
+            "WHERE user_id = ?",
+            (password_hash, password_salt, int(time.time()), user_id))
+
+    def set_account_token(self, user_id: int, token_hash: str, expires: int) -> None:
+        self._exec(
+            "UPDATE accounts SET token_hash = ?, token_expires = ?, updated_at = ? "
+            "WHERE user_id = ?",
+            (token_hash, int(expires), int(time.time()), user_id))
+
+    def user_by_token(self, token_hash: str, now: int) -> dict | None:
+        return self._row(
+            """SELECT u.* FROM accounts a JOIN users u ON u.user_id = a.user_id
+               WHERE a.token_hash = ? AND a.token_expires > ?""",
+            (token_hash, int(now)))
+
+    def clear_account_token(self, user_id: int) -> None:
+        self._exec(
+            "UPDATE accounts SET token_hash = NULL, token_expires = 0, updated_at = ? "
+            "WHERE user_id = ?",
+            (int(time.time()), user_id))
+
     def set_balance(self, user_id: int, balance: int) -> None:
         self._exec("UPDATE users SET balance = ? WHERE user_id = ?", (balance, user_id))
 
@@ -360,6 +466,94 @@ class Database:
                        (int(amount), user_id))
             row = self._row("SELECT xp FROM users WHERE user_id = ?", (user_id,))
             return int(row["xp"]) if row else 0
+
+    def add_gmpoint(self, user_id: int, delta: int) -> int | None:
+        with self._lock:
+            if delta < 0:
+                changed = self._exec(
+                    "UPDATE users SET gmpoint = gmpoint + ? "
+                    "WHERE user_id = ? AND gmpoint >= ?",
+                    (delta, user_id, -delta))
+                if not changed:
+                    return None
+            else:
+                self._exec(
+                    "UPDATE users SET gmpoint = gmpoint + ? WHERE user_id = ?",
+                    (delta, user_id))
+            row = self._row("SELECT gmpoint FROM users WHERE user_id = ?", (user_id,))
+            return int(row["gmpoint"]) if row else None
+
+    def set_gmpoint(self, user_id: int, value: int) -> int:
+        value = max(0, int(value))
+        self._exec("UPDATE users SET gmpoint = ? WHERE user_id = ?", (value, user_id))
+        return value
+
+    def spend_gmpoint(self, user_id: int, amount: int) -> bool:
+        if amount <= 0:
+            return True
+        changed = self._exec(
+            "UPDATE users SET gmpoint = gmpoint - ? "
+            "WHERE user_id = ? AND gmpoint >= ?",
+            (amount, user_id, amount))
+        return bool(changed)
+
+    def log_gmpoint(self, user_id: int, amount: int, reason: str,
+                    admin_id: int | None = None) -> None:
+        self._exec(
+            "INSERT INTO gmpoint_log (id, user_id, amount, reason, admin_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (uuid.uuid4().hex, user_id, int(amount), reason, admin_id, int(time.time())))
+
+    def level_claims(self, user_id: int) -> set[int]:
+        rows = self._rows("SELECT level FROM level_claims WHERE user_id = ?", (user_id,))
+        return {int(row["level"]) for row in rows}
+
+    def claim_level(self, user_id: int, level: int, coins: int, gmpoint: int = 0,
+                    lootbox: int = 0, prefix: str = "") -> bool:
+        with self._lock:
+            changed = self._exec(
+                "INSERT INTO level_claims (user_id, level, created_at) VALUES (?, ?, ?) "
+                "ON CONFLICT (user_id, level) DO NOTHING",
+                (user_id, int(level), int(time.time())))
+            if not changed:
+                return False
+            if coins:
+                self._exec("UPDATE users SET balance = balance + ? WHERE user_id = ?",
+                           (int(coins), user_id))
+            if gmpoint:
+                self._exec("UPDATE users SET gmpoint = gmpoint + ? WHERE user_id = ?",
+                           (int(gmpoint), user_id))
+                self.log_gmpoint(user_id, int(gmpoint), f"level:{level}")
+            if lootbox:
+                self.add_item(user_id, "lootbox", int(lootbox))
+            if prefix:
+                self.add_prefix(user_id, prefix)
+            return True
+
+    def user_prefixes(self, user_id: int) -> set[str]:
+        rows = self._rows("SELECT prefix_key FROM user_prefixes WHERE user_id = ?",
+                          (user_id,))
+        return {row["prefix_key"] for row in rows}
+
+    def add_prefix(self, user_id: int, prefix_key: str) -> bool:
+        changed = self._exec(
+            "INSERT INTO user_prefixes (user_id, prefix_key, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (user_id, prefix_key) DO NOTHING",
+            (user_id, prefix_key, int(time.time())))
+        return bool(changed)
+
+    def has_prefix(self, user_id: int, prefix_key: str) -> bool:
+        row = self._row(
+            "SELECT 1 AS ok FROM user_prefixes WHERE user_id = ? AND prefix_key = ?",
+            (user_id, prefix_key))
+        return bool(row)
+
+    def set_prefix(self, user_id: int, prefix_key: str) -> bool:
+        if prefix_key and not self.has_prefix(user_id, prefix_key):
+            return False
+        self._exec("UPDATE users SET prefix = ? WHERE user_id = ?",
+                   (prefix_key or "", user_id))
+        return True
 
     def user_achievements(self, user_id: int) -> set[str]:
         rows = self._rows("SELECT key FROM user_achievements WHERE user_id = ?",
@@ -526,6 +720,13 @@ class Database:
             (limit,),
         )
 
+    def top_by_level(self, limit: int = 10) -> list[dict]:
+        return self._rows(
+            """SELECT user_id, username, first_name, photo_url, xp, games_won, prefix
+               FROM users ORDER BY xp DESC, games_won DESC, created_at ASC LIMIT ?""",
+            (limit,),
+        )
+
     def rank(self, user_id: int) -> int:
         me = self.user(user_id)
         if not me:
@@ -631,8 +832,9 @@ class Database:
 
     # --- admin -----------------------------------------------------------
     ADMIN_USER_FIELDS = (
-        "user_id, username, first_name, balance, games_played, games_won, "
-        "total_wagered, total_won, best_multiplier, is_banned, created_at"
+        "user_id, username, first_name, balance, gmpoint, xp, role, prefix, "
+        "games_played, games_won, total_wagered, total_won, best_multiplier, "
+        "is_banned, created_at"
     )
 
     def admin_users(self, query: str = "", limit: int = 20) -> list[dict]:
@@ -654,6 +856,28 @@ class Database:
         params.append(int(limit))
         return self._rows(sql, tuple(params))
 
+    def admin_players(self, page: int = 1, per_page: int = 10) -> dict:
+        page = max(1, int(page))
+        per_page = max(1, min(50, int(per_page)))
+        total_row = self._row("SELECT COUNT(*) AS c FROM users")
+        total = int(total_row["c"]) if total_row else 0
+        pages = max(1, (total + per_page - 1) // per_page)
+        page = min(page, pages)
+        offset = (page - 1) * per_page
+        rows = self._rows(
+            f"""SELECT {self.ADMIN_USER_FIELDS},
+                       MAX(COALESCE((SELECT MAX(r.created_at) FROM rounds r
+                                     WHERE r.user_id = users.user_id), 0),
+                           COALESCE((SELECT MAX(p.created_at) FROM plays p
+                                     WHERE p.user_id = users.user_id), 0)) AS last_played
+                FROM users
+                ORDER BY last_played DESC, created_at DESC
+                LIMIT ? OFFSET ?""",
+            (per_page, offset),
+        )
+        return {"items": rows, "total": total, "page": page,
+                "per_page": per_page, "pages": pages}
+
     def admin_set_balance(self, user_id: int, value: int) -> int:
         with self._lock:
             self._exec("UPDATE users SET balance = ? WHERE user_id = ?",
@@ -664,6 +888,28 @@ class Database:
     def admin_set_ban(self, user_id: int, banned: bool) -> None:
         self._exec("UPDATE users SET is_banned = ? WHERE user_id = ?",
                    (1 if banned else 0, user_id))
+
+    def admin_set_role(self, user_id: int, role: str) -> None:
+        self._exec("UPDATE users SET role = ? WHERE user_id = ?", (role, user_id))
+
+    def admin_log(self, admin_id: int, target_id: int | None, action: str,
+                  detail: dict | None = None) -> None:
+        self._exec(
+            "INSERT INTO admin_actions (id, admin_id, target_id, action, detail, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (uuid.uuid4().hex, admin_id, target_id, action,
+             json.dumps(detail or {}, ensure_ascii=False), int(time.time())))
+
+    def admin_actions(self, limit: int = 30) -> list[dict]:
+        return self._rows(
+            """SELECT a.*, ua.username AS admin_username,
+                      ut.username AS target_username
+               FROM admin_actions a
+               LEFT JOIN users ua ON ua.user_id = a.admin_id
+               LEFT JOIN users ut ON ut.user_id = a.target_id
+               ORDER BY a.created_at DESC LIMIT ?""",
+            (int(limit),),
+        )
 
     def admin_stats(self) -> dict:
         now = int(time.time())
