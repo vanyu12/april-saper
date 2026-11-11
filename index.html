@@ -46,13 +46,17 @@
           <span class="bonus-badge" id="spinBadge">Крутить</span>
         </button>
       </div>
-      <div class="game-switch" id="gameSwitch">
-        <button class="gs-btn active" data-game="mines">💣 Сапёр</button>
-        <button class="gs-btn" data-game="dice">🎲 Кости</button>
-        <button class="gs-btn" data-game="wheel">🎡 Колесо</button>
-        <button class="gs-btn" data-game="crash">📈 Краш</button>
-        <button class="gs-btn" data-game="coinflip">🪙 Орёл</button>
-        <button class="gs-btn" data-game="blackjack">♠️ 21</button>
+      <div class="game-switch compact" id="gameSwitch">
+        <button class="game-picker-btn" id="gamePickerBtn" type="button"
+                aria-haspopup="dialog" aria-expanded="false">
+          <span class="gp-emoji" id="gameEmoji">💣</span>
+          <span class="gp-text">
+            <span class="gp-label">Игра</span>
+            <span class="gp-name" id="gameName">Сапёр</span>
+          </span>
+          <span class="gp-count" id="gameCount">6 режимов</span>
+          <span class="gp-arrow">▾</span>
+        </button>
       </div>
 
       <div class="game-pane active" id="game-pane-mines">
@@ -498,6 +502,21 @@
     <button class="nav-btn" data-view="fair"><span>🔐</span>Честность</button>
     <button class="nav-btn" id="adminNav" data-view="admin" hidden><span>🛠</span>Админ</button>
   </nav>
+
+  <div class="game-menu" id="gameMenu" hidden>
+    <div class="game-menu-backdrop" id="gameMenuBackdrop"></div>
+    <div class="game-menu-card" role="dialog" aria-modal="true" aria-label="Выбор игры">
+      <div class="game-menu-head">
+        <div>
+          <div class="game-menu-title">Выбери игру</div>
+          <div class="game-menu-sub">6 режимов · один клик</div>
+        </div>
+        <button class="game-menu-close" id="gameMenuClose" type="button"
+                aria-label="Закрыть">×</button>
+      </div>
+      <div class="game-menu-grid" id="gameMenuGrid"></div>
+    </div>
+  </div>
 
   <canvas class="confetti" id="confetti" aria-hidden="true"></canvas>
 

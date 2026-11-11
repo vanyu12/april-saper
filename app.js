@@ -1018,15 +1018,65 @@ async function saveAdminSettings() {
 
 /* ---------- другие игры и квесты ---------- */
 
+const GAMES = [
+  { key: "mines", icon: "💣", title: "Сапёр", desc: "5×5 · до 24 мин" },
+  { key: "dice", icon: "🎲", title: "Кости", desc: "Чёт или нечёт, ×1,96" },
+  { key: "wheel", icon: "🎡", title: "Колесо", desc: "Секторы до ×3,2" },
+  { key: "crash", icon: "📈", title: "Краш", desc: "Цель до ×10" },
+  { key: "coinflip", icon: "🟡", title: "Орёл и решка", desc: "Монета 50/50, ×1,96" },
+  { key: "blackjack", icon: "♠️", title: "21", desc: "Против дилера" },
+];
+
+function renderGameMenu() {
+  const grid = $("gameMenuGrid");
+  if (!grid) return;
+  grid.innerHTML = GAMES.map((game) => {
+    const active = state.game === game.key;
+    return `<button class="game-menu-item${active ? " active" : ""}" data-game="${game.key}" type="button">
+      <span class="gmi-icon">${game.icon}</span>
+      <span class="gmi-text"><span class="gmi-title">${game.title}</span><span class="gmi-desc">${game.desc}</span></span>
+      ${active ? '<span class="gmi-check">✓</span>' : ""}
+    </button>`;
+  }).join("");
+}
+
+function renderGameSwitch() {
+  const game = GAMES.find((item) => item.key === state.game) || GAMES[0];
+  if ($("gameEmoji")) $("gameEmoji").textContent = game.icon;
+  if ($("gameName")) $("gameName").textContent = game.title;
+  renderGameMenu();
+}
+
+function openGameMenu() {
+  const menu = $("gameMenu");
+  if (!menu) return;
+  renderGameMenu();
+  menu.hidden = false;
+  requestAnimationFrame(() => menu.classList.add("show"));
+  if ($("gamePickerBtn")) $("gamePickerBtn").setAttribute("aria-expanded", "true");
+  document.body.classList.add("game-menu-open");
+}
+
+function closeGameMenu() {
+  const menu = $("gameMenu");
+  if (!menu) return;
+  menu.classList.remove("show");
+  if ($("gamePickerBtn")) $("gamePickerBtn").setAttribute("aria-expanded", "false");
+  document.body.classList.remove("game-menu-open");
+  setTimeout(() => {
+    if (!menu.classList.contains("show")) menu.hidden = true;
+  }, 180);
+}
+
 function switchGame(name) {
   state.game = name;
-  document.querySelectorAll("#gameSwitch .gs-btn").forEach((btn) =>
-    btn.classList.toggle("active", btn.dataset.game === name));
   document.querySelectorAll(".game-pane").forEach((pane) =>
     pane.classList.toggle("active", pane.id === "game-pane-" + name));
   if (name === "wheel") renderWheel();
   if (name === "crash") renderCrashTarget();
   if (name === "blackjack") renderBlackjack();
+  renderGameSwitch();
+  closeGameMenu();
 }
 
 function clampBet(value) {
@@ -1479,6 +1529,7 @@ function renderAll() {
   renderDaily();
   renderBonus();
   renderMines();
+  renderGameSwitch();
   renderControls();
   renderGrid();
   renderLadder();
@@ -1869,8 +1920,18 @@ function bind() {
     if (state.user) renderBonus();
   }, 1000);
 
-  document.querySelectorAll("#gameSwitch .gs-btn").forEach((btn) =>
-    btn.addEventListener("click", () => switchGame(btn.dataset.game)));
+  if ($("gamePickerBtn")) $("gamePickerBtn").addEventListener("click", openGameMenu);
+  if ($("gameMenuClose")) $("gameMenuClose").addEventListener("click", closeGameMenu);
+  if ($("gameMenuBackdrop")) $("gameMenuBackdrop").addEventListener("click", closeGameMenu);
+  if ($("gameMenuGrid")) {
+    $("gameMenuGrid").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-game]");
+      if (btn) switchGame(btn.dataset.game);
+    });
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeGameMenu();
+  });
 
   document.querySelectorAll("[data-pick]").forEach((btn) =>
     btn.addEventListener("click", () => playDice(btn.dataset.pick)));
