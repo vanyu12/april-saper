@@ -4,6 +4,7 @@ const state = {
   user: null,
   account: null,
   chatUrl: "",
+  promos: [],
   round: null,
   mines: 3,
   bet: 50,
@@ -193,6 +194,8 @@ const startParam = (() => {
 function renderBalance() {
   $("balanceValue").textContent = fmt(state.user ? state.user.balance : 0);
   $("statBalance").textContent = fmt(state.user ? state.user.balance : 0);
+  if ($("gmpValue")) $("gmpValue").textContent = fmt(state.user ? (state.user.gmpoint || 0) : 0);
+  if ($("statGmpoint")) $("statGmpoint").textContent = fmt(state.user ? (state.user.gmpoint || 0) : 0);
 }
 
 function renderDaily() {
@@ -778,6 +781,80 @@ async function accountLogout() {
 function showAuthGate() {
   const gate = $("authGate");
   if (gate) gate.hidden = false;
+}
+
+function renderPromos() {
+  const box = $("promoList");
+  if (!box) return;
+  const items = state.promos || [];
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">Промокодов пока нет</div>';
+    return;
+  }
+  box.innerHTML = items.map((p) => {
+    const used = p.max_uses ? `${p.used}/${p.max_uses}` : `${p.used} / ∞`;
+    const exp = p.expires_at
+      ? new Date(p.expires_at * 1000).toLocaleDateString("ru-RU")
+      : "бессрочно";
+    return `<div class="row" data-code="${escapeHtml(p.code)}">
+      <div class="row-main">
+        <div class="row-title">${escapeHtml(p.code)} · +${fmt(p.amount)} G</div>
+        <div class="row-sub">Активаций: ${used} · до ${exp}</div>
+      </div>
+      <button class="chip-btn" data-act="del-promo">Удалить</button>
+    </div>`;
+  }).join("");
+}
+
+async function loadPromos() {
+  try {
+    const data = await api("/api/admin/promo/list");
+    state.promos = data.items || [];
+    renderPromos();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function createPromo() {
+  try {
+    const data = await api("/api/admin/promo/create", {
+      code: ($("promoCode").value || "").trim(),
+      amount: Number($("promoAmount").value || 0),
+      max_uses: Number($("promoMax").value || 0),
+      days: Number($("promoDays").value || 0),
+    });
+    $("promoHint").textContent = `Создан ${data.code} на +${fmt(data.amount)} GMPOINT`;
+    $("promoCode").value = "";
+    await loadPromos();
+  } catch (e) {
+    $("promoHint").textContent = e.message;
+  }
+}
+
+async function deletePromo(code) {
+  try {
+    await api("/api/admin/promo/delete", { code });
+    toast("Промокод удалён");
+    await loadPromos();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function redeemPromo() {
+  const code = ($("promoRedeemInput").value || "").trim();
+  if (!code) return;
+  try {
+    const data = await api("/api/promo/redeem", { code });
+    state.user.gmpoint = data.gmpoint;
+    toast(`+${fmt(data.amount)} GMPOINT`);
+    $("promoRedeemInput").value = "";
+    sfx.cash();
+    renderAll();
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
 function renderHistory() {
@@ -1731,9 +1808,11 @@ function renderUpdates(force) {
     $("updateList").innerHTML = (info.notes || [])
       .map((note) => `<li>${escapeHtml(note)}</li>`).join("");
   }
-  let seen = "";
-  try { seen = localStorage.getItem("saper_seen_version") || ""; } catch (e) {}
-  if (force || seen !== info.version) {
+  let dismissed = "";
+  try {
+    dismissed = sessionStorage.getItem("saper_updates_dismissed") || "";
+  } catch (e) {}
+  if (force || dismissed !== info.version) {
     modal.hidden = false;
     requestAnimationFrame(() => modal.classList.add("show"));
   }
@@ -1747,6 +1826,7 @@ function closeUpdates() {
   try {
     if (state.updates && state.updates.version) {
       localStorage.setItem("saper_seen_version", state.updates.version);
+      sessionStorage.setItem("saper_updates_dismissed", state.updates.version);
     }
   } catch (e) {}
 }
@@ -2159,6 +2239,7 @@ function bind() {
       document.querySelectorAll(".admin-pane").forEach((pane) => {
         pane.classList.toggle("active", pane.id === "pane-" + tab.dataset.atab);
       });
+      if (tab.dataset.atab === "promo") loadPromos();
     })
   );
 
@@ -2166,6 +2247,15 @@ function bind() {
     clearTimeout(e.target._t);
     e.target._t = setTimeout(() => adminSearch(e.target.value.trim()), 350);
   });
+
+  if ($("promoCreate")) $("promoCreate").addEventListener("click", createPromo);
+  if ($("promoList")) $("promoList").addEventListener("click", (e) => {
+    const btn = e.target.closest('button[data-act="del-promo"]');
+    if (!btn) return;
+    const row = btn.closest(".row");
+    if (row) deletePromo(row.dataset.code);
+  });
+  if ($("promoRedeemBtn")) $("promoRedeemBtn").addEventListener("click", redeemPromo);
 
   $("adminUsers").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-act]");

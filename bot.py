@@ -270,6 +270,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         lines = [
             "👤 <b>Профиль</b>",
             f"💰 Баланс: <b>{num(user['balance'])} mCoin</b>",
+            f"🎁 GMPOINT: <b>{num(user.get('gmpoint') or 0)}</b>",
             f"⭐ Уровень {level['level']} — {level['title']}",
             f"🎖 XP: {level['into']} / {level['need']}",
             f"🎯 Партий: {user['games_played']} · побед: {user['games_won']}",
@@ -1740,6 +1741,29 @@ def build_dispatcher(db: Database) -> Dispatcher:
             disable_web_page_preview=True,
         )
 
+    @dp.message(Command("promo"))
+    async def promo_cmd(message: Message) -> None:
+        user = get_user(message)
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            await message.answer("🎁 Введи код: <code>/promo КОД</code>")
+            return
+        code = parts[1].strip().upper()
+        status, amount = db.promo_redeem(code, user["user_id"])
+        messages = {
+            "not_found": "Промокод не найден",
+            "expired": "Срок действия промокода истёк",
+            "limit": "Лимит активаций исчерпан",
+            "used": "Ты уже активировал этот промокод",
+        }
+        if status != "ok":
+            await message.answer("⚠️ " + messages.get(status, "Не удалось активировать"))
+            return
+        fresh = db.user(user["user_id"])
+        await message.answer(
+            f"🎁 <b>+{num(amount)} GMPOINT</b>\n"
+            f"Всего: {num(fresh['gmpoint'])} GMPOINT")
+
     @dp.message(Command("chat"))
     async def chat_cmd(message: Message) -> None:
         get_user(message)
@@ -2616,6 +2640,10 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="pay", description="Перевод другому игроку"),
         BotCommand(command="promo", description="Активировать промокод"),
         BotCommand(command="updates", description="Что нового"),
+        BotCommand(command="promo_new", description="Админ: создать промокод"),
+        BotCommand(command="promo_list", description="Админ: список промокодов"),
+        BotCommand(command="promo_post", description="Админ: промокод в канал"),
+        BotCommand(command="promo_off", description="Админ: выключить промокод"),
         BotCommand(command="duel", description="Дуэль 1×1"),
         BotCommand(command="spin", description="Колесо дня"),
         BotCommand(command="bonus", description="Бонусы"),
@@ -2627,6 +2655,7 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="ref", description="Пригласить друга"),
         BotCommand(command="fair", description="Честность игры"),
         BotCommand(command="chat", description="Чат игроков"),
+        BotCommand(command="promo", description="Активировать промокод"),
         BotCommand(command="help", description="Помощь"),
     ]
     try:
