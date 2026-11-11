@@ -12,8 +12,8 @@ import aiohttp
 from aiohttp import web
 
 import awards
-import auth
 import game
+import updates
 from config import config
 from db import Database
 
@@ -332,7 +332,21 @@ class Api:
             payload["active_round"] = self._round_view(active, user, reveal=False)
         active_bj = self.db.active_bj(user["user_id"])
         payload["active_bj"] = self._bj_view(active_bj) if active_bj else None
+        payload["updates"] = self._updates_view()
+        payload["transfers"] = self.db.transfers(user["user_id"], 10)
         return self._json(payload)
+
+    async def updates_list(self, request: web.Request) -> web.Response:
+        return self._json({"ok": True, **self._updates_view()})
+
+    @staticmethod
+    def _updates_view() -> dict:
+        return {
+            "version": updates.VERSION,
+            "title": updates.TITLE,
+            "published": updates.PUBLISHED,
+            "notes": list(updates.NOTES),
+        }
 
     def _round_view(self, rnd: dict, user: dict, reveal: bool) -> dict:
         mines = rnd["mine_positions"]
@@ -966,6 +980,83 @@ class Api:
             "balance": self.db.user(user["user_id"])["balance"],
             "quests": self._quests_view(user),
         })
+
+    async def transfer(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        try:
+            amount = int(body.get("amount", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректная сумма")
+        target = str(body.get("to", "")).strip()
+        if amount < 1:
+            return self._fail("Сумма должна быть больше нуля")
+        if amount > int(user["balance"]):
+            return self._fail("Недостаточно средств")
+        if not target:
+            return self._fail("Укажите ID или @username получателя")
+
+        recipient = None
+        if target.startswith("@"):
+            recipient = self.db.user_by_username(target)
+        elif target.isdigit():
+            recipient = self.db.user(int(target))
+        if not recipient:
+            recipient = self.db.user_by_username(target)
+        if not recipient:
+            return self._fail("Игрок не найден")
+        if int(recipient["user_id"]) == int(user["user_id"]):
+            return self._fail("Нельзя перевести самому себе")
+        if recipient.get("is_banned"):
+            return self._fail("Получатель заблокирован")
+
+        self.db.make_transfer(uuid.uuid4().hex[:16], user["user_id"],
+                              int(recipient["user_id"]), amount)
+        balance = self.db.user(user["user_id"])["balance"]
+        return self._json({
+            "ok": True,
+            "amount": amount,
+            "to": {
+                "id": int(recipient["user_id"]),
+                "username": recipient.get("username") or "",
+                "first_name": recipient.get("first_name") or "",
+            },
+            "balance": balance,
+        })
+
+    async def transfers(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        return self._json({"ok": True, "items": self.db.transfers(user["user_id"], 20)})
+
+    async def promo(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        code = str(body.get("code", "")).strip().upper()
+        if not code:
+            return self._fail("Введите промокод")
+        status, amount = self.db.claim_promo(code, user["user_id"], int(time.time()))
+        messages = {
+            "not_found": "Такого промокода нет",
+            "inactive": "Промокод больше не действует",
+            "expired": "Срок действия промокода истёк",
+            "already": "Вы уже активировали этот промокод",
+            "exhausted": "Промокод закончился",
+        }
+        if status != "ok":
+            return self._fail(messages.get(status, "Не удалось активировать"))
+        balance = self.db.user(user["user_id"])["balance"]
+        return self._json({"ok": True, "amount": amount, "balance": balance,
+                           "quests": self._quests_view(user)})
 
     async def wheel(self, request: web.Request) -> web.Response:
         user = self._auth(request)
@@ -1792,6 +1883,10 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/games/crash", api.crash)
     app.router.add_post("/api/games/coinflip", api.coinflip)
     app.router.add_post("/api/games/basket", api.basket)
+    app.router.add_post("/api/transfer", api.transfer)
+    app.router.add_post("/api/transfers", api.transfers)
+    app.router.add_post("/api/promo", api.promo)
+    app.router.add_post("/api/updates", api.updates_list)
     app.router.add_post("/api/games/bj/start", api.bj_start)
     app.router.add_post("/api/games/bj/hit", api.bj_hit)
     app.router.add_post("/api/games/bj/stand", api.bj_stand)

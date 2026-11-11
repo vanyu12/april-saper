@@ -1239,6 +1239,49 @@ body.game-menu-open { overflow: hidden; }
 .basket-result.win { color: var(--mint); }
 .basket-result.lose { color: var(--danger); }
 
+/* перевод и промокоды */
+.transfer-id { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.transfer-id b { color: var(--text); font-size: 15px; }
+#transferTo, #transferAmount, #promoInput { margin-bottom: 8px; }
+#promoApply { width: 100%; }
+
+/* что нового */
+.update-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 8, 12, 0.74);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  z-index: 60;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.update-modal.show { opacity: 1; }
+.update-card {
+  width: 100%;
+  max-width: 340px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 20px;
+  animation: pop 0.24s ease;
+}
+.update-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(124, 92, 255, 0.18);
+  color: #b9a8ff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.update-title { font-size: 18px; font-weight: 800; margin: 10px 0 8px; }
+.update-list { margin: 0 0 14px; padding-left: 18px; display: grid; gap: 7px; }
+.update-list li { font-size: 13px; line-height: 1.45; color: var(--text); }
+
 /* колесо */
 .wheel-stage {
   position: relative;

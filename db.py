@@ -217,6 +217,41 @@ SCHEMA_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_bj_user ON bj_rounds(user_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_bj_status ON bj_rounds(status)",
+    """
+    CREATE TABLE IF NOT EXISTS transfers (
+        id         TEXT PRIMARY KEY,
+        from_id    INTEGER NOT NULL,
+        to_id      INTEGER NOT NULL,
+        amount     INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_transfers_from ON transfers(from_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_transfers_to ON transfers(to_id, created_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS promo_codes (
+        code       TEXT PRIMARY KEY,
+        amount     INTEGER NOT NULL,
+        max_uses   INTEGER NOT NULL DEFAULT 0,
+        used       INTEGER NOT NULL DEFAULT 0,
+        budget     INTEGER NOT NULL DEFAULT 0,
+        spent      INTEGER NOT NULL DEFAULT 0,
+        per_user   INTEGER NOT NULL DEFAULT 1,
+        active     INTEGER NOT NULL DEFAULT 1,
+        expires_at INTEGER,
+        note       TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS promo_claims (
+        code       TEXT NOT NULL,
+        user_id    INTEGER NOT NULL,
+        amount     INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (code, user_id)
+    )
+    """,
 ]
 
 DEFAULT_SETTINGS = {
@@ -1242,6 +1277,87 @@ class Database:
                    doubled = ?, finished_at = ? WHERE id = ?""",
             (json.dumps(player), json.dumps(dealer), status, payout,
              1 if doubled else 0, finished, round_id))
+
+    # --- переводы --------------------------------------------------------
+    def make_transfer(self, transfer_id: str, from_id: int, to_id: int,
+                      amount: int) -> None:
+        self._exec(
+            """INSERT INTO transfers (id, from_id, to_id, amount, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (transfer_id, from_id, to_id, amount, int(time.time())))
+        self.add_balance(from_id, -amount)
+        self.add_balance(to_id, amount)
+
+    def transfers(self, user_id: int, limit: int = 10) -> list[dict]:
+        return self._rows(
+            """SELECT * FROM transfers WHERE from_id = ? OR to_id = ?
+               ORDER BY created_at DESC LIMIT ?""",
+            (user_id, user_id, limit))
+
+    # --- промокоды -------------------------------------------------------
+    def create_promo(self, code: str, amount: int, max_uses: int = 0,
+                     budget: int = 0, per_user: int = 1,
+                     expires_at: int | None = None, note: str = "") -> None:
+        self._exec(
+            """INSERT INTO promo_codes (code, amount, max_uses, used, budget, spent,
+                   per_user, active, expires_at, note, created_at)
+               VALUES (?, ?, ?, 0, ?, 0, ?, 1, ?, ?, ?)""",
+            (code, amount, max_uses, budget, per_user, expires_at, note,
+             int(time.time())))
+
+    def promo(self, code: str) -> dict | None:
+        return self._row("SELECT * FROM promo_codes WHERE code = ?", (code,))
+
+    def promos(self, limit: int = 20) -> list[dict]:
+        return self._rows(
+            "SELECT * FROM promo_codes ORDER BY created_at DESC LIMIT ?", (limit,))
+
+    def promo_deactivate(self, code: str) -> bool:
+        return bool(self._exec(
+            "UPDATE promo_codes SET active = 0 WHERE code = ?", (code,)))
+
+    def promo_user_claims(self, code: str, user_id: int) -> int:
+        row = self._row(
+            "SELECT COUNT(*) AS c FROM promo_claims WHERE code = ? AND user_id = ?",
+            (code, user_id))
+        return int(row["c"]) if row else 0
+
+    def claim_promo(self, code: str, user_id: int, now: int) -> tuple[str, int]:
+        promo = self.promo(code)
+        if not promo:
+            return "not_found", 0
+        if not int(promo["active"]):
+            return "inactive", 0
+        if promo["expires_at"] and int(promo["expires_at"]) < now:
+            return "expired", 0
+        amount = int(promo["amount"])
+        if self.promo_user_claims(code, user_id) >= max(1, int(promo["per_user"])):
+            return "already", 0
+
+        sql = ("UPDATE promo_codes SET used = used + 1, spent = spent + ? "
+               "WHERE code = ? AND active = 1")
+        params: list = [amount, code]
+        if int(promo["max_uses"]) > 0:
+            sql += " AND used < max_uses"
+        if int(promo["budget"]) > 0:
+            sql += " AND spent + ? <= budget"
+            params.append(amount)
+        if not self._exec(sql, tuple(params)):
+            return "exhausted", 0
+
+        try:
+            self._exec(
+                """INSERT INTO promo_claims (code, user_id, amount, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (code, user_id, amount, now))
+        except Exception:
+            self._exec(
+                "UPDATE promo_codes SET used = used - 1, spent = spent - ? "
+                "WHERE code = ?", (amount, code))
+            return "already", 0
+
+        self.add_balance(user_id, amount)
+        return "ok", amount
 
     # --- хаб игр ---------------------------------------------------------
     def game_players(self) -> dict[str, int]:

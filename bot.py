@@ -36,10 +36,12 @@ WELCOME = (
     "Играть можно и в приложении, и прямо здесь — в чате.\n\n"
     "• /mines 100 5 — поле 5×5, ставка 100, пять мин\n"
     "• /dice 100 чёт — кости, выплата ×1,96\n"
-    "• /basket 100 — бросок в кольцо, выплата ×2,4\n"
+    "• /basket 100 попадёт — бросок в кольцо, попадёт или промах\n"
     "• /spin — колесо дня раз в 12 часов\n"
     "• /bonus — часовой и ежедневный бонусы\n"
-    "• /deposit — вклады под процент\n\n"
+    "• /deposit — вклады под процент\n"
+    "• /pay 100 @ник — перевод другому игроку\n"
+    "• /promo КОД — активировать промокод\n\n"
     "На старте — 1000 mCoin. За друга, сыгравшего 5 партий, — 500 mCoin.\n"
     "Валюта mCoin виртуальная: реальные деньги не принимаются и не выводятся."
 )
@@ -1161,6 +1163,52 @@ def build_dispatcher(db: Database) -> Dispatcher:
         lines.append(f"💰 Баланс: {num(db.user(user['user_id'])['balance'])} mCoin")
         return "\n".join(lines)
 
+    def transfer_text(sender: dict, target_raw: str, amount: int) -> str:
+        if amount < 1:
+            return "⚠️ Сумма должна быть больше нуля"
+        if amount > int(sender["balance"]):
+            return "⚠️ Недостаточно средств"
+        target = (target_raw or "").strip()
+        recipient = None
+        if target.startswith("@"):
+            recipient = db.user_by_username(target)
+        elif target.isdigit():
+            recipient = db.user(int(target))
+        else:
+            recipient = db.user_by_username(target)
+        if not recipient:
+            return "⚠️ Игрок не найден. Укажи ID или @username"
+        if int(recipient["user_id"]) == int(sender["user_id"]):
+            return "⚠️ Нельзя перевести самому себе"
+        if recipient.get("is_banned"):
+            return "⚠️ Получатель заблокирован"
+        db.make_transfer(uuid.uuid4().hex[:16], sender["user_id"],
+                         int(recipient["user_id"]), amount)
+        name = (recipient.get("username") or recipient.get("first_name")
+                or str(recipient["user_id"]))
+        balance = db.user(sender["user_id"])["balance"]
+        return ("💸 <b>Перевод отправлен</b>\n\n"
+                f"Кому: <b>{name}</b> · ID {recipient['user_id']}\n"
+                f"Сумма: <b>{num(amount)}</b> mCoin\n"
+                f"💰 Баланс: {num(balance)} mCoin")
+
+    def promo_text(user: dict, code: str) -> str:
+        status, amount = db.claim_promo(code.strip().upper(), user["user_id"],
+                                        int(time.time()))
+        errors = {
+            "not_found": "Такого промокода нет",
+            "inactive": "Промокод больше не действует",
+            "expired": "Срок действия промокода истёк",
+            "already": "Вы уже активировали этот промокод",
+            "exhausted": "Промокод закончился",
+        }
+        if status != "ok":
+            return "⚠️ " + errors.get(status, "Не удалось активировать промокод")
+        balance = db.user(user["user_id"])["balance"]
+        return ("🎁 <b>Промокод активирован</b>\n\n"
+                f"Начислено: <b>+{num(amount)}</b> mCoin\n"
+                f"💰 Баланс: {num(balance)} mCoin")
+
     def tasks_view(user: dict) -> tuple[str, InlineKeyboardMarkup]:
         refs = db.referrals(user["user_id"])
         claimed = db.invite_claims(user["user_id"])
@@ -1456,6 +1504,36 @@ def build_dispatcher(db: Database) -> Dispatcher:
         await message.answer(play_basket(user, bet, shot.dice.value, pick),
                              reply_markup=basket_hint_keyboard())
 
+    @dp.message(Command("pay", "transfer"))
+    async def pay_cmd(message: Message) -> None:
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer(
+                "💸 <b>Перевод игроку</b>\n\n"
+                "Напиши: <code>/pay 100 @ник</code> или <code>/pay 100 123456789</code>\n"
+                "Свой ID видно в /balance.")
+            return
+        raw_amount = parts[1].replace(" ", "")
+        if not raw_amount.isdigit():
+            await message.answer("Сумма должна быть числом. Пример: "
+                                 "<code>/pay 100 @ник</code>")
+            return
+        user = get_user(message)
+        await message.answer(transfer_text(user, parts[2], int(raw_amount)))
+
+    @dp.message(Command("promo"))
+    async def promo_cmd(message: Message) -> None:
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.answer("🎁 Введи код: <code>/promo КОД</code>")
+            return
+        user = get_user(message)
+        await message.answer(promo_text(user, parts[1]))
+
+    @dp.message(Command("updates", "news"))
+    async def updates_cmd(message: Message) -> None:
+        await message.answer(updates.full_text(), disable_web_page_preview=True)
+
     @dp.message(Command("duel", "duels"))
     async def duel_cmd(message: Message) -> None:
         user = get_user(message)
@@ -1703,10 +1781,13 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "/slots 100 — слоты (тройки до ×200)\n"
             "/crash 100 2.5 — краш с целью ×1,20–×10\n"
             "/coin 100 орёл — орёл и решка, ×1,96\n"
+            "/basket 100 попадёт — баскет: забросит мяч или нет\n"
             "/duel 100 @username — дуэль 1×1 на бросок\n"
             "/spin — колесо дня раз в 12 часов\n\n"
             "<b>Баланс и бонусы</b>\n"
-            "/balance — профиль и статистика\n"
+            "/balance — профиль, ID и статистика\n"
+            "/pay 100 @ник — перевод другому игроку\n"
+            "/promo КОД — активировать промокод\n"
             "/bonus — часовой и ежедневный бонусы\n"
             "/deposit — вклады под процент\n"
             "/tasks — приглашения и спонсоры\n"
@@ -1738,6 +1819,115 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "• Настройки — лимиты ставки, число мин, бонус, игры, техработы",
             reply_markup=keyboard,
         )
+
+    @dp.message(Command("promo_new"))
+    async def promo_new_cmd(message: Message) -> None:
+        user = get_user(message)
+        if not is_admin(user):
+            await message.answer("Команда доступна только администратору.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 4:
+            await message.answer(
+                "Формат: <code>/promo_new 500 100 50000 [КОД]</code>\n"
+                "500 — сумма на игрока, 100 — сколько активаций (0 — без лимита),\n"
+                "50000 — общий бюджет (0 — без лимита). Код можно не указывать.")
+            return
+        try:
+            amount = int(parts[1])
+            uses = int(parts[2])
+            budget = int(parts[3])
+        except ValueError:
+            await message.answer("Сумма, активации и бюджет должны быть числами.")
+            return
+        if amount < 1 or max(amount * uses, amount) > 100_000_000:
+            await message.answer("Проверьте сумму и лимиты.")
+            return
+        code = parts[4].strip().upper() if len(parts) > 4 else uuid.uuid4().hex[:8].upper()
+        if db.promo(code):
+            await message.answer("Такой промокод уже есть. Выберите другой.")
+            return
+        db.create_promo(code, amount, max(0, uses), max(0, budget), 1, None, "")
+        await message.answer(
+            f"🎁 Промокод <code>{code}</code> создан\n"
+            f"На игрока: {num(amount)} mCoin\n"
+            f"Активаций: {uses if uses > 0 else 'без лимита'}\n"
+            f"Бюджет: {num(budget) if budget > 0 else 'без лимита'}\n\n"
+            f"Игроки вводят: <code>/promo {code}</code>")
+
+    @dp.message(Command("promo_list"))
+    async def promo_list_cmd(message: Message) -> None:
+        user = get_user(message)
+        if not is_admin(user):
+            await message.answer("Команда доступна только администратору.")
+            return
+        rows = db.promos(10)
+        if not rows:
+            await message.answer("Промокодов пока нет. Создайте: "
+                                 "<code>/promo_new 500 100 50000</code>")
+            return
+        lines = ["🎁 <b>Последние промокоды</b>", ""]
+        for promo in rows:
+            state = "активен" if int(promo["active"]) else "выключен"
+            uses = (f"{promo['used']}/{promo['max_uses']}"
+                    if int(promo["max_uses"]) else f"{promo['used']}/∞")
+            budget = (f"{num(int(promo['spent']))}/{num(int(promo['budget']))}"
+                      if int(promo["budget"]) else f"{num(int(promo['spent']))}/∞")
+            lines.append(f"<code>{promo['code']}</code> · {num(int(promo['amount']))} mCoin"
+                         f" · активаций {uses} · выплачено {budget} · {state}")
+        await message.answer("\n".join(lines))
+
+    @dp.message(Command("promo_off"))
+    async def promo_off_cmd(message: Message) -> None:
+        user = get_user(message)
+        if not is_admin(user):
+            await message.answer("Команда доступна только администратору.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.answer("Формат: <code>/promo_off КОД</code>")
+            return
+        code = parts[1].strip().upper()
+        if db.promo_deactivate(code):
+            await message.answer(f"Промокод <code>{code}</code> выключен.")
+        else:
+            await message.answer("Такого промокода нет.")
+
+    @dp.message(Command("promo_post"))
+    async def promo_post_cmd(message: Message) -> None:
+        user = get_user(message)
+        if not is_admin(user):
+            await message.answer("Команда доступна только администратору.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.answer("Формат: <code>/promo_post КОД</code>")
+            return
+        code = parts[1].strip().upper()
+        promo = db.promo(code)
+        if not promo:
+            await message.answer("Такого промокода нет.")
+            return
+        if not config.update_channel:
+            await message.answer("Канал не настроен: добавьте UPDATE_CHANNEL "
+                                 "вида @my_channel в переменные окружения.")
+            return
+        left = ("∞" if not int(promo["max_uses"])
+                else str(max(0, int(promo["max_uses"]) - int(promo["used"]))))
+        budget_left = ("∞" if not int(promo["budget"])
+                       else num(max(0, int(promo["budget"]) - int(promo["spent"]))))
+        text = (f"🎁 <b>Промокод {code}</b>\n\n"
+                f"+{num(int(promo['amount']))} mCoin каждому\n"
+                f"Осталось активаций: {left}\n"
+                f"Осталось в бюджете: {budget_left} mCoin\n\n"
+                f"Активировать: <code>/promo {code}</code>")
+        channel = config.update_channel
+        target = channel if channel.startswith("@") else "@" + channel
+        try:
+            await message.bot.send_message(target, text)
+            await message.answer("Промокод опубликован в канале.")
+        except Exception as exc:
+            await message.answer(f"Не удалось опубликовать: {exc}")
 
     @dp.callback_query(F.data == "top")
     async def top_cb(callback) -> None:
@@ -2423,6 +2613,9 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="crash", description="Краш"),
         BotCommand(command="coin", description="Орёл и решка"),
         BotCommand(command="basket", description="Баскет: бросок в кольцо"),
+        BotCommand(command="pay", description="Перевод другому игроку"),
+        BotCommand(command="promo", description="Активировать промокод"),
+        BotCommand(command="updates", description="Что нового"),
         BotCommand(command="duel", description="Дуэль 1×1"),
         BotCommand(command="spin", description="Колесо дня"),
         BotCommand(command="bonus", description="Бонусы"),

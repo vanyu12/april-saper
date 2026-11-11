@@ -661,6 +661,7 @@ function renderProfile() {
   const u = state.user;
   $("profileName").textContent = u.first_name || u.username || "Игрок";
   $("profileId").textContent = "id " + u.id;
+  if ($("myId")) $("myId").textContent = u.id;
   $("avatar").textContent = (u.first_name || u.username || "И").trim().charAt(0).toUpperCase();
   $("statGames").textContent = fmt(u.games_played);
   $("statWins").textContent = fmt(u.games_won);
@@ -1721,6 +1722,86 @@ async function playCrash() {
   }
 }
 
+function renderUpdates(force) {
+  const info = state.updates;
+  const modal = $("updateModal");
+  if (!info || !modal) return;
+  if ($("updateVersion")) $("updateVersion").textContent = info.version || "";
+  if ($("updateList")) {
+    $("updateList").innerHTML = (info.notes || [])
+      .map((note) => `<li>${escapeHtml(note)}</li>`).join("");
+  }
+  let seen = "";
+  try { seen = localStorage.getItem("saper_seen_version") || ""; } catch (e) {}
+  if (force || seen !== info.version) {
+    modal.hidden = false;
+    requestAnimationFrame(() => modal.classList.add("show"));
+  }
+}
+
+function closeUpdates() {
+  const modal = $("updateModal");
+  if (!modal) return;
+  modal.classList.remove("show");
+  setTimeout(() => { modal.hidden = true; }, 200);
+  try {
+    if (state.updates && state.updates.version) {
+      localStorage.setItem("saper_seen_version", state.updates.version);
+    }
+  } catch (e) {}
+}
+
+async function sendTransfer() {
+  const to = ($("transferTo").value || "").trim();
+  const amount = parseInt($("transferAmount").value || "0", 10) || 0;
+  const hint = $("transferHint");
+  if (!to) {
+    hint.textContent = "Введите ID или @username получателя";
+    return;
+  }
+  if (amount < 1) {
+    hint.textContent = "Сумма должна быть больше нуля";
+    return;
+  }
+  try {
+    const data = await api("/api/transfer", { to, amount });
+    state.user.balance = data.balance;
+    const name = data.to.username ? "@" + data.to.username : "ID " + data.to.id;
+    hint.textContent = `Отправлено ${fmt(data.amount)} mCoin игроку ${name}`;
+    $("transferTo").value = "";
+    sfx.coin();
+    haptic("success");
+    renderAll();
+  } catch (e) {
+    hint.textContent = e.message;
+    haptic("error");
+  }
+}
+
+async function applyPromo() {
+  const input = $("promoInput");
+  const code = (input.value || "").trim();
+  const hint = $("promoHint");
+  if (!code) {
+    hint.textContent = "Введите промокод";
+    return;
+  }
+  try {
+    const data = await api("/api/promo", { code });
+    state.user.balance = data.balance;
+    state.quests = data.quests || state.quests;
+    hint.textContent = `Промокод принят: +${fmt(data.amount)} mCoin`;
+    input.value = "";
+    sfx.cash();
+    haptic("success");
+    confetti();
+    renderAll();
+  } catch (e) {
+    hint.textContent = e.message;
+    haptic("error");
+  }
+}
+
 function renderAll() {
   renderBalance();
   renderDaily();
@@ -1787,6 +1868,7 @@ async function loadState() {
   state.fair = data.fair;
   state.round = data.active_round;
   state.bj = data.active_bj || null;
+  state.updates = data.updates || state.updates;
   if (state.round) {
     state.bet = state.round.bet;
     state.mines = state.round.mines;
@@ -2021,6 +2103,23 @@ function bind() {
     $("soundBtn").textContent = state.sound ? "🔊" : "🔇";
     if (state.sound) sfx.open();
     toast(state.sound ? "Звук включён" : "Звук выключен");
+  });
+
+  if ($("updateClose")) $("updateClose").addEventListener("click", closeUpdates);
+  if ($("updatesOpen")) $("updatesOpen").addEventListener("click", () => renderUpdates(true));
+  if ($("transferSend")) $("transferSend").addEventListener("click", sendTransfer);
+  if ($("promoApply")) $("promoApply").addEventListener("click", applyPromo);
+  if ($("copyId")) $("copyId").addEventListener("click", async () => {
+    const id = state.user ? String(state.user.id) : "";
+    try {
+      await navigator.clipboard.writeText(id);
+      toast("ID скопирован");
+    } catch (e) {
+      toast(id);
+    }
+  });
+  if ($("updateModal")) $("updateModal").addEventListener("click", (e) => {
+    if (e.target === $("updateModal")) closeUpdates();
   });
 
   if ($("modalBtn")) {
@@ -2315,6 +2414,7 @@ async function init() {
   renderControls();
   try {
     await loadState();
+    renderUpdates(false);
   } catch (e) {
     if (String(e.message).toLowerCase().includes("unauthorized")) {
       if (!(tg && tg.initData) ) showAuthGate();

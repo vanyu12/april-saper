@@ -342,8 +342,21 @@
           <button class="quick-btn" data-goto="bank"><span>🏦</span>Банк</button>
           <button class="quick-btn" data-goto="history"><span>📜</span>История</button>
           <button class="quick-btn" data-goto="fair"><span>🔐</span>Честность</button>
+          <button class="quick-btn" id="updatesOpen" type="button"><span>✨</span>Что нового</button>
           <button class="quick-btn" id="chatLink" hidden><span>💬</span>Чат игроков</button>
         </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Перевод игроку</div>
+        <div class="hint transfer-id">Ваш ID: <b id="myId">—</b>
+          <button class="chip-btn" id="copyId" type="button">Копировать</button>
+        </div>
+        <input class="account-input" id="transferTo" placeholder="ID или @username получателя">
+        <input class="account-input" id="transferAmount" type="number" inputmode="numeric"
+               min="1" step="10" value="100" placeholder="Сумма">
+        <button class="cta" id="transferSend" type="button">Перевести</button>
+        <div class="hint" id="transferHint">Без комиссии. Перевод получает игрок сразу.</div>
       </div>
 
       <div class="card level-card">
@@ -452,6 +465,12 @@
       <div class="card" id="sponsorCard" hidden>
         <div class="card-title">Спонсоры</div>
         <div class="list" id="sponsorList"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Промокод</div>
+        <input class="account-input" id="promoInput" placeholder="Например, APRILE2026">
+        <button class="secondary" id="promoApply" type="button">Активировать</button>
+        <div class="hint" id="promoHint">Коды публикуем в канале обновлений.</div>
       </div>
     </section>
 
@@ -610,6 +629,15 @@
   </div>
 
 </div>
+<div class="update-modal" id="updateModal" hidden>
+  <div class="update-card">
+    <div class="update-badge">Обновление <span id="updateVersion">—</span></div>
+    <div class="update-title" id="updateTitle">Что нового</div>
+    <ul class="update-list" id="updateList"></ul>
+    <button class="cta" id="updateClose" type="button">Понятно</button>
+  </div>
+</div>
+
 <script src="/static/app.js"></script>
 </body>
 </html>
