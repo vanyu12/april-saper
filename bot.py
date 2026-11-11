@@ -241,6 +241,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
             return "Недостаточно mCoin. Забери бонус: /bonus"
         return None
 
+    def prefix_bonus_payout(user: dict, payout: int) -> int:
+        rate = game.prefix_bonus(user.get("prefix"))
+        if rate <= 0 or payout <= 0:
+            return payout
+        return int(round(payout * (1 + rate)))
+
     def charm_bonus(user: dict, payout: int) -> int:
         if payout <= 0:
             return payout
@@ -306,6 +312,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         payout = charm_bonus(user, payout)
         payout = apply_relic(user, "mines", payout)
         payout = gold_pick_bonus(user, payout)
+        payout = prefix_bonus_payout(user, payout)
         db.update_round(round_id, opened, mult, "cashed", payout)
         db.add_balance(user["user_id"], payout)
         earned, xp_gain, level_before, level_after = finish_game(
@@ -335,6 +342,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "👤 <b>Профиль</b>",
             f"💰 Баланс: <b>{num(user['balance'])} mCoin</b>",
             f"🎁 GMPOINT: <b>{num(user.get('gmpoint') or 0)}</b>",
+            (f"🎩 Префикс: <b>{game.prefix_view(user.get('prefix'))['title']}</b>"
+             + (f" · +{int(round(game.prefix_bonus(user.get('prefix')) * 100))}% к выигрышу"
+                if game.prefix_bonus(user.get('prefix')) else ""))
+            if game.prefix_view(user.get("prefix")) else "🎩 Префикс: нет",
             f"⭐ Уровень {level['level']} — {level['title']}",
             f"🎖 XP: {level['into']} / {level['need']}",
             f"🎯 Партий: {user['games_played']} · побед: {user['games_won']}",
@@ -588,7 +599,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
         for index, row in enumerate(rows, 1):
             name = row["username"] or row["first_name"] or f"id{row['user_id']}"
             prefix = medals[index - 1] if index <= 3 else f"{index}."
-            lines.append(f"{prefix} {name} — {num(row['balance'])} mCoin")
+            pref = game.prefix_view(row.get("prefix"))
+            mark = f" [{pref['title']}]" if pref else ""
+            lines.append(f"{prefix} {name}{mark} — {num(row['balance'])} mCoin")
         if not rows:
             lines.append("Пока пусто")
         return "\n".join(lines)
@@ -955,11 +968,11 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     def games_hint_text() -> str:
         return ("🎰 <b>Игры в чате</b>\n\n"
-                "/roulette 100 красное — рулетка (×2, зеро ×36)\n"
-                "/slots 100 — слоты (пара ×1,2, тройка до ×200)\n"
-                "/crash 100 2.5 — краш, цель от ×1,20 до ×10\n"
-                "/coin 100 орёл — монета, выплата ×1,96\n"
-                "/basket 100 — бросок в кольцо, выплата ×2,4\n\n"
+                "🎡 /roulette 100 красное — рулетка (×2, зеро ×36)\n"
+                "🎰 /slots 100 — слоты (пара ×1,2, тройка до ×200)\n"
+                "💥 /crash 100 2.5 — краш, цель от ×1,20 до ×10\n"
+                "🪙 /coin 100 орёл — монета, выплата ×1,96\n"
+                "🏀 /basket 100 — бросок в кольцо, выплата ×2,4\n\n"
                 "Результат считается из твоего seed — проверить можно /fair.")
 
     def games_keyboard() -> InlineKeyboardMarkup:

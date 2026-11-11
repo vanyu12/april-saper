@@ -54,9 +54,39 @@ PREFIXES = (
      "level": 25, "color": "#c084fc"},
     {"key": "immortal_50", "title": "Бессмертный", "price": 0, "currency": "level",
      "level": 50, "color": "#ff6b6b"},
+    {"key": "dracula", "title": "Дракула", "price": 15, "currency": "gmpoint",
+     "level": 1, "color": "#e11d48", "bonus": 0.05,
+     "desc": "+5% к выигрышу во всех играх"},
+    {"key": "owner", "title": "Владелец", "price": 0, "currency": "role",
+     "level": 1, "color": "#ff3b30", "role": "owner", "bonus": 0.10,
+     "desc": "+10% к выигрышу · только для владельца"},
+    {"key": "admin_prefix", "title": "Админ", "price": 0, "currency": "role",
+     "level": 1, "color": "#ff9500", "role": "admin", "bonus": 0.07,
+     "desc": "+7% к выигрышу · только для админа"},
+    {"key": "moderator_prefix", "title": "Модератор", "price": 0, "currency": "role",
+     "level": 1, "color": "#34c759", "role": "moderator", "bonus": 0.05,
+     "desc": "+5% к выигрышу · только для модератора"},
+    {"key": "tester_prefix", "title": "Тестер", "price": 0, "currency": "role",
+     "level": 1, "color": "#64d2ff", "role": "tester", "bonus": 0.03,
+     "desc": "+3% к выигрышу · только для тестера"},
 )
 
 PREFIX_BY_KEY = {prefix["key"]: prefix for prefix in PREFIXES}
+
+
+def prefix_bonus(key: str | None) -> float:
+    prefix = PREFIX_BY_KEY.get((key or "").strip())
+    if not prefix:
+        return 0.0
+    return float(prefix.get("bonus") or 0.0)
+
+
+def role_prefix(role: str | None) -> str:
+    role = (role or "user").strip()
+    for prefix in PREFIXES:
+        if prefix.get("currency") == "role" and prefix.get("role") == role:
+            return prefix["key"]
+    return ""
 
 
 def xp_for_level(level: int) -> int:

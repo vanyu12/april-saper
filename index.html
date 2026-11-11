@@ -317,6 +317,7 @@
         </div>
         <div class="profile-rank" id="profileRank">#—</div>
       </div>
+      <div class="profile-prefix" id="profilePrefix" hidden></div>
 
       <div class="card account-card" id="accountCard">
         <div class="card-title">Аккаунт</div>
@@ -545,6 +546,7 @@
       <button class="tab active" data-atab="overview">Сводка</button>
       <button class="tab" data-atab="users">Игроки</button>
       <button class="tab" data-atab="promo">Промокоды</button>
+      <button class="tab" data-atab="roles">Роли</button>
       <button class="tab" data-atab="settings">Настройки</button>
     </div>
 
@@ -600,6 +602,76 @@
       </div>
     </div>
 
+    <div class="admin-pane" id="pane-roles">
+      <div class="card">
+        <div class="card-title">Роли и что они могут</div>
+        <details class="role-card role-owner">
+          <summary>👑 Владелец</summary>
+          <ul>
+            <li>Всё, что может админ</li>
+            <li>Выдавать и снимать роль «Владелец»</li>
+            <li>Удалять промокоды и менять любые настройки</li>
+            <li>Префикс «Владелец»: +10% к выигрышу</li>
+          </ul>
+        </details>
+        <details class="role-card role-admin">
+          <summary>🛠 Админ</summary>
+          <ul>
+            <li>Искать игроков, банить и разбанивать</li>
+            <li>Начислять и списывать mCoin и GMPOINT</li>
+            <li>Выдавать предметы и роли (кроме владельца)</li>
+            <li>Создавать промокоды, менять настройки игр</li>
+            <li>Префикс «Админ»: +7% к выигрышу</li>
+          </ul>
+        </details>
+        <details class="role-card role-mod">
+          <summary>🛡 Модератор</summary>
+          <ul>
+            <li>Искать игроков и смотреть сводку</li>
+            <li>Банить и разбанивать</li>
+            <li>Начислять mCoin</li>
+            <li>Без доступа к настройкам и ролям</li>
+            <li>Префикс «Модератор»: +5% к выигрышу</li>
+          </ul>
+        </details>
+        <details class="role-card role-tester">
+          <summary>🧪 Тестер</summary>
+          <ul>
+            <li>Смотреть сводку и список игроков</li>
+            <li>Без банов, начислений и настроек</li>
+            <li>Префикс «Тестер»: +3% к выигрышу</li>
+          </ul>
+        </details>
+        <details class="role-card role-user">
+          <summary>👤 Игрок</summary>
+          <ul>
+            <li>Играть во все игры и покупать в магазине</li>
+            <li>Активировать промокоды на GMPOINT</li>
+            <li>Копить уровни и получать награды</li>
+          </ul>
+        </details>
+      </div>
+      <div class="card">
+        <div class="card-title">Префиксы и бонусы</div>
+        <details class="role-card role-dracula">
+          <summary>🩸 Дракула · 15 GMPOINT</summary>
+          <ul>
+            <li>+5% к выигрышу во всех играх</li>
+            <li>Красный бейдж в профиле и топе</li>
+            <li>Покупается за GMPOINT в магазине</li>
+          </ul>
+        </details>
+        <details class="role-card">
+          <summary>🎩 Остальные префиксы</summary>
+          <ul>
+            <li>Сапёр, Ветеран, Легенда и другие — за mCoin или GMPOINT</li>
+            <li>Префиксы за уровень открываются автоматически</li>
+            <li>Служебные префиксы выдаются вместе с ролью</li>
+          </ul>
+        </details>
+      </div>
+    </div>
+
     <div class="admin-pane" id="pane-settings">
       <div class="card">
         <div class="admin-field"><span>Мин. ставка</span><input class="mini-input" id="setMinBet" type="number" min="1"></div>
@@ -632,6 +704,7 @@
     <button class="nav-btn" data-view="top"><span>🏆</span>Топ</button>
     <button class="nav-btn" data-view="profile"><span>👤</span>Профиль</button>
     <button class="nav-btn" id="adminNav" data-view="admin" hidden><span>🛠</span>Админ</button>
+    <button class="nav-btn" id="menuToggle" type="button"><span>☰</span>Ещё</button>
   </nav>
 
   <div class="game-menu" id="gameMenu" hidden>
@@ -652,6 +725,32 @@
   <canvas class="confetti" id="confetti" aria-hidden="true"></canvas>
 
   <div class="toast" id="toast"></div>
+
+  <div class="drawer" id="drawer" hidden>
+    <div class="drawer-backdrop" id="drawerBackdrop"></div>
+    <div class="drawer-card">
+      <div class="drawer-head">
+        <div class="drawer-title">Меню</div>
+        <button class="game-menu-close" id="drawerClose" type="button" aria-label="Закрыть">×</button>
+      </div>
+      <div class="quick-grid">
+        <button class="quick-btn" data-goto="profile"><span>👤</span>Профиль</button>
+        <button class="quick-btn" data-goto="top"><span>🏆</span>Топ</button>
+        <button class="quick-btn" data-goto="shop"><span>🛒</span>Магазин</button>
+        <button class="quick-btn" data-goto="tasks"><span>✅</span>Задания</button>
+        <button class="quick-btn" data-goto="bank"><span>🏦</span>Банк</button>
+        <button class="quick-btn" data-goto="history"><span>📜</span>История</button>
+        <button class="quick-btn" data-goto="fair"><span>🔐</span>Честность</button>
+        <button class="quick-btn" data-goto="games"><span>🎮</span>Все игры</button>
+      </div>
+      <div class="drawer-title drawer-subtitle">Темы</div>
+      <div class="quick-grid">
+        <button class="quick-btn" data-theme="default"><span>🌙</span>Тёмная</button>
+        <button class="quick-btn" data-theme="neon"><span>🎨</span>Неон</button>
+        <button class="quick-btn" data-theme="gold"><span>🏅</span>Золото</button>
+      </div>
+    </div>
+  </div>
 
   <div class="auth-gate" id="authGate" hidden>
     <div class="auth-gate-card">

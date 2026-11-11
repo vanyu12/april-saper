@@ -666,6 +666,18 @@ function renderProfile() {
   $("profileId").textContent = "id " + u.id;
   if ($("myId")) $("myId").textContent = u.id;
   $("avatar").textContent = (u.first_name || u.username || "И").trim().charAt(0).toUpperCase();
+  const prefBox = $("profilePrefix");
+  if (prefBox) {
+    if (u.prefix_title) {
+      const bonus = u.prefix_bonus ? ` · +${Math.round(u.prefix_bonus * 100)}% к выигрышу` : "";
+      prefBox.hidden = false;
+      prefBox.textContent = `${u.prefix_title}${bonus}`;
+      prefBox.style.color = u.prefix_color || "#e5e7eb";
+      prefBox.style.borderColor = (u.prefix_color || "#e5e7eb") + "66";
+    } else {
+      prefBox.hidden = true;
+    }
+  }
   $("statGames").textContent = fmt(u.games_played);
   $("statWins").textContent = fmt(u.games_won);
   $("statBest").textContent = fmtMult(u.best_multiplier || 1);
@@ -859,6 +871,19 @@ async function redeemPromo() {
   }
 }
 
+function toggleDrawer(show) {
+  const drawer = $("drawer");
+  if (!drawer) return;
+  drawer.hidden = !show;
+}
+
+function applyTheme(name) {
+  document.body.classList.remove("theme-neon", "theme-gold");
+  if (name === "neon") document.body.classList.add("theme-neon");
+  if (name === "gold") document.body.classList.add("theme-gold");
+  try { localStorage.setItem("saper_theme", name); } catch (e) {}
+}
+
 function renderHistory() {
   const list = $("historyList");
   if (!state.history.length) {
@@ -882,6 +907,29 @@ function renderHistory() {
     .join("");
 }
 
+const PREFIX_META = {
+  dracula: { title: "Дракула", color: "#e11d48" },
+  owner: { title: "Владелец", color: "#ff3b30" },
+  admin_prefix: { title: "Админ", color: "#ff9500" },
+  moderator_prefix: { title: "Модератор", color: "#34c759" },
+  tester_prefix: { title: "Тестер", color: "#64d2ff" },
+  legend: { title: "Легенда", color: "#ffb020" },
+  april: { title: "Апрель", color: "#ff5c8a" },
+  king: { title: "Король", color: "#f7c948" },
+  veteran: { title: "Ветеран", color: "#7c5cff" },
+  saper: { title: "Сапёр", color: "#2ee6a8" },
+  gmpoint: { title: "GMPOINT", color: "#ffd166" },
+  sapper_10: { title: "Взрывотехник", color: "#57c7ff" },
+  master_25: { title: "Гроссмейстер", color: "#c084fc" },
+  immortal_50: { title: "Бессмертный", color: "#ff6b6b" },
+};
+
+function prefixBadge(key) {
+  const meta = PREFIX_META[key];
+  if (!meta) return "";
+  return ` <span class="prefix-badge" style="color:${meta.color};border-color:${meta.color}55">${escapeHtml(meta.title)}</span>`;
+}
+
 function renderTop(tab) {
   const list = $("topList");
   let rows = [];
@@ -900,6 +948,7 @@ function renderTop(tab) {
       value: `⭐ ${u.level || 1} ур. · ${fmt(u.xp || 0)} XP`,
       id: u.user_id,
       photo: u.photo_url,
+      prefix: u.prefix,
     }));
   } else {
     rows = (state.leaderboard.by_balance || []).map((u, i) => ({
@@ -908,6 +957,7 @@ function renderTop(tab) {
       value: fmt(u.balance) + " mCoin",
       id: u.user_id,
       photo: u.photo_url,
+      prefix: u.prefix,
     }));
   }
   if (!rows.length) {
@@ -921,7 +971,7 @@ function renderTop(tab) {
         ${r.photo
           ? `<img class="row-avatar" src="${escapeHtml(r.photo)}" alt="">`
           : `<span class="row-avatar letter">${escapeHtml(String(r.name).replace("@", "").charAt(0).toUpperCase() || "?")}</span>`}
-        <div class="row-main"><div class="row-title"><span class="top-place">${medals[r.place - 1] || r.place}</span> ${escapeHtml(r.name)}</div></div>
+        <div class="row-main"><div class="row-title"><span class="top-place">${medals[r.place - 1] || r.place}</span> ${escapeHtml(r.name)}${prefixBadge(r.prefix)}</div></div>
         <div class="row-value">${r.value}</div>
       </div>`
     )
@@ -1090,11 +1140,15 @@ function renderAdminUsers() {
         <input class="mini-input" type="number" value="500" min="1">
         <button class="chip-btn" data-act="grant">Начислить</button>
         <button class="chip-btn" data-act="take">Списать</button>
+        <input class="mini-input" type="number" value="5" min="1" data-gmp>
+        <button class="chip-btn" data-act="gmp">+G</button>
+        <button class="chip-btn" data-act="gmp-minus">−G</button>
         <select class="mini-select" data-role="item">${ADMIN_ITEMS.map(([k, t]) => `<option value="${k}">${t}</option>`).join("")}</select>
         <button class="chip-btn" data-act="item">Выдать</button>
         <button class="chip-btn" data-act="${u.is_banned ? "unban" : "ban"}">${u.is_banned ? "Разбан" : "Бан"}</button>
         ${state.isSuper ? `<select class="mini-select" data-role="role">
-          ${[["user", "Игрок"], ["moderator", "Модератор"], ["admin", "Админ"]]
+          ${[["user", "Игрок"], ["tester", "Тестер"], ["moderator", "Модератор"],
+             ["admin", "Админ"], ["owner", "Владелец"]]
             .map(([k, t]) => `<option value="${k}"${(u.role || "user") === k ? " selected" : ""}>${t}</option>`)
             .join("")}
         </select>
@@ -1166,6 +1220,16 @@ async function adminRole(userId, role) {
   try {
     await api("/api/admin/role", { user_id: userId, role });
     toast("Роль обновлена");
+    await adminSearch($("adminSearch").value.trim());
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+async function adminGmpoint(userId, value) {
+  try {
+    const data = await api("/api/admin/gmpoint", { user_id: userId, value });
+    toast(`GMPOINT: ${fmt(data.gmpoint)}`);
     await adminSearch($("adminSearch").value.trim());
   } catch (err) {
     toast(err.message);
@@ -2280,6 +2344,11 @@ function bind() {
       const select = row.querySelector('select[data-role="role"]');
       if (select) adminRole(userId, select.value);
     }
+    else if (act === "gmp" || act === "gmp-minus") {
+      const gmp = row.querySelector("[data-gmp]");
+      const value = Number((gmp && gmp.value) || 0);
+      if (value > 0) adminGmpoint(userId, act === "gmp" ? value : -value);
+    }
   });
 
   $("saveSettings").addEventListener("click", saveAdminSettings);
@@ -2437,7 +2506,31 @@ function bind() {
   if ($("gateSubmit")) $("gateSubmit").addEventListener("click", accountLogin);
 
   document.querySelectorAll("[data-goto]").forEach((btn) => {
-    btn.addEventListener("click", () => switchView(btn.dataset.goto));
+    btn.addEventListener("click", () => {
+      switchView(btn.dataset.goto);
+      toggleDrawer(false);
+    });
+  });
+  if ($("menuToggle")) $("menuToggle").addEventListener("click", () => toggleDrawer(true));
+  if ($("drawerClose")) $("drawerClose").addEventListener("click", () => toggleDrawer(false));
+  if ($("drawerBackdrop")) $("drawerBackdrop").addEventListener("click", () => toggleDrawer(false));
+  document.querySelectorAll("[data-theme]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const theme = btn.dataset.theme;
+      if (theme !== "default") {
+        const inv = (state.shop && state.shop.inventory) || {};
+        const need = theme === "neon" ? "theme_neon" : "theme_gold";
+        if (!inv[need]) {
+          toggleDrawer(false);
+          switchView("shop");
+          toast("Сначала купи тему в магазине");
+          return;
+        }
+      }
+      applyTheme(theme);
+      toggleDrawer(false);
+      toast("Тема применена");
+    });
   });
   if ($("chatLink")) $("chatLink").addEventListener("click", () => {
     if (state.chatUrl) window.open(state.chatUrl, "_blank");
@@ -2497,6 +2590,8 @@ async function init() {
   try {
     const saved = localStorage.getItem("saper_sound");
     if (saved !== null) state.sound = saved === "1";
+    const savedTheme = localStorage.getItem("saper_theme");
+    if (savedTheme) applyTheme(savedTheme);
   } catch (e) {}
   const soundBtn = $("soundBtn");
   if (soundBtn) soundBtn.textContent = state.sound ? "🔊" : "🔇";

@@ -742,7 +742,7 @@ class Database:
     def leaderboard(self, limit: int = 20) -> list[dict]:
         return self._rows(
             """SELECT user_id, username, first_name, photo_url, balance,
-                      best_multiplier, games_played
+                      best_multiplier, games_played, prefix
                FROM users ORDER BY balance DESC LIMIT ?""",
             (limit,),
         )

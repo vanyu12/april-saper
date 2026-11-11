@@ -97,13 +97,13 @@ class Api:
         username = (user.get("username") or "").lower()
         if username and username in config.admin_usernames:
             return True
-        return (user.get("role") or "user") == "admin"
+        return (user.get("role") or "user") in ("admin", "owner")
 
     @staticmethod
     def _is_staff(user: dict) -> bool:
         if Api._is_admin(user):
             return True
-        return (user.get("role") or "user") == "moderator"
+        return (user.get("role") or "user") in ("moderator", "tester")
 
     def _require_admin(self, request: web.Request):
         user = self._auth(request)
@@ -492,6 +492,7 @@ class Api:
             payout = self._apply_relic(user, "mines", payout)
             payout = self._gold_pick(user, payout)
         status = "won" if finished else ("cashed" if auto else "active")
+        payout = self._prefix_bonus(user, payout)
         self.db.update_round(rnd["id"], opened, mult, status, payout)
 
         balance = self.db.user(user["user_id"])["balance"]
@@ -530,6 +531,7 @@ class Api:
         payout = self._charm_bonus(user, payout)
         payout = self._apply_relic(user, "mines", payout)
         payout = self._gold_pick(user, payout)
+        payout = self._prefix_bonus(user, payout)
         self.db.update_round(rnd["id"], rnd["opened"], mult, "cashed", payout)
         balance = self.db.add_balance(user["user_id"], payout)
         self._finish(user, rnd["bet"], payout, mult)
@@ -703,6 +705,7 @@ class Api:
         if win:
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "dice", payout)
+            payout = self._prefix_bonus(user, payout)
         else:
             refund = self._insurance_refund(user, bet)
 
@@ -749,6 +752,7 @@ class Api:
         if win:
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "coinflip", payout)
+            payout = self._prefix_bonus(user, payout)
         else:
             refund = self._insurance_refund(user, bet)
 
@@ -807,6 +811,7 @@ class Api:
             if extra > 0:
                 payout += extra
                 self.db.add_balance(user["user_id"], extra)
+        payout = self._prefix_bonus(user, payout)
         self.db.add_balance(user["user_id"], payout)
         self.db.update_bj(rnd["id"], player, dealer, status, payout, doubled)
         self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "blackjack", stake,
@@ -970,6 +975,7 @@ class Api:
         if scored:
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "basket", payout)
+            payout = self._prefix_bonus(user, payout)
         else:
             refund = self._insurance_refund(user, bet)
 
@@ -1086,6 +1092,7 @@ class Api:
         if multiplier > 0:
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "wheel", payout)
+            payout = self._prefix_bonus(user, payout)
         else:
             refund = self._insurance_refund(user, bet)
 
@@ -1260,6 +1267,12 @@ class Api:
             self.db.add_balance(user["user_id"], refund)
         return refund
 
+    def _prefix_bonus(self, user: dict, payout: int) -> int:
+        rate = game.prefix_bonus(user.get("prefix"))
+        if rate <= 0 or payout <= 0:
+            return payout
+        return int(round(payout * (1 + rate)))
+
     def _charm_bonus(self, user: dict, payout: int) -> int:
         if payout <= 0:
             return payout
@@ -1316,6 +1329,7 @@ class Api:
         if win:
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "crash", payout)
+            payout = self._prefix_bonus(user, payout)
         else:
             refund = self._insurance_refund(user, bet)
 
@@ -1364,11 +1378,14 @@ class Api:
             entry = dict(prefix)
             entry["owned"] = prefix["key"] in owned_prefixes
             entry["active"] = (user.get("prefix") or "") == prefix["key"]
-            entry["available"] = (
-                prefix["currency"] == "level"
-                and level >= int(prefix["level"])
-            ) or (prefix["currency"] != "level"
-                  and level >= int(prefix["level"]))
+            if prefix.get("currency") == "role":
+                entry["available"] = (user.get("role") or "user") == prefix.get("role")
+            else:
+                entry["available"] = (
+                    prefix["currency"] == "level"
+                    and level >= int(prefix["level"])
+                ) or (prefix["currency"] != "level"
+                      and level >= int(prefix["level"]))
             prefixes.append(entry)
         return self._json({
             "ok": True,
@@ -1391,6 +1408,20 @@ class Api:
         key = str(body.get("key", ""))
         prefix = next((p for p in game.PREFIXES if p["key"] == key), None)
         if prefix:
+            if prefix["currency"] == "role":
+                if (user.get("role") or "user") != prefix.get("role"):
+                    return self._fail("Этот префикс доступен только с этой ролью")
+                self.db.add_prefix(user["user_id"], key)
+                self.db.set_prefix(user["user_id"], key)
+                fresh = self.db.user(user["user_id"])
+                return self._json({
+                    "ok": True,
+                    "balance": fresh["balance"],
+                    "gmpoint": fresh["gmpoint"],
+                    "bought": f"префикс «{prefix['title']}»",
+                    "prefix": key,
+                    "inventory": self._inventory_view(fresh),
+                })
             if prefix["currency"] == "level":
                 return self._fail("Этот префикс выдаётся за уровень")
             if self.db.has_prefix(user["user_id"], key):
@@ -1799,15 +1830,42 @@ class Api:
         if not self.db.user(target):
             return self._fail("Игрок не найден", 404)
         role = str(body.get("role", "user")).strip().lower()
-        if role not in ("user", "moderator", "admin"):
+        if role not in ("user", "tester", "moderator", "admin", "owner"):
             return self._fail("Неизвестная роль")
-        if target == admin["user_id"] and role != "admin":
+        if role == "owner" and (admin.get("role") or "user") != "owner" \
+                and admin["user_id"] not in config.admin_ids:
+            return self._fail("Роль владельца может выдать только владелец")
+        if target == admin["user_id"] and role not in ("admin", "owner"):
             return self._fail("Нельзя снять роль с самого себя")
-        if target in config.admin_ids and role != "admin":
+        if target in config.admin_ids and role not in ("admin", "owner"):
             return self._fail("Этот игрок админ из настроек бота")
         self.db.admin_set_role(target, role)
+        prefix_key = game.role_prefix(role)
+        if prefix_key:
+            self.db.add_prefix(target, prefix_key)
+            self.db.set_prefix(target, prefix_key)
         self.db.admin_log(admin["user_id"], target, "role", {"role": role})
         return self._json({"ok": True, "user_id": target, "role": role})
+
+    async def admin_gmpoint(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err:
+            return err
+        body = await self._body(request)
+        try:
+            target = int(body.get("user_id", 0))
+            value = int(body.get("value", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректные данные")
+        if not self.db.user(target):
+            return self._fail("Игрок не найден", 404)
+        if value == 0 or abs(value) > 100000:
+            return self._fail("Сумма GMPOINT: от 1 до 100000")
+        result = self.db.add_gmpoint(target, value)
+        if result is None:
+            return self._fail("Недостаточно GMPOINT у игрока")
+        self.db.admin_log(admin["user_id"], target, "gmpoint", {"delta": value})
+        return self._json({"ok": True, "user_id": target, "gmpoint": result})
 
     async def admin_promo_create(self, request: web.Request) -> web.Response:
         admin, err = self._require_admin(request)
@@ -1988,6 +2046,7 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/admin/ban", api.admin_ban)
     app.router.add_post("/api/admin/grant", api.admin_grant)
     app.router.add_post("/api/admin/role", api.admin_role)
+    app.router.add_post("/api/admin/gmpoint", api.admin_gmpoint)
     app.router.add_post("/api/admin/promo/create", api.admin_promo_create)
     app.router.add_post("/api/admin/promo/list", api.admin_promo_list)
     app.router.add_post("/api/admin/promo/delete", api.admin_promo_delete)
