@@ -8,7 +8,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from api import build_app
-from bot import build_dispatcher, setup_bot
+from bot import announce_update, build_dispatcher, setup_bot
 from config import config
 from db import Database
 
@@ -70,10 +70,12 @@ async def main() -> None:
         log.warning("PUBLIC_URL не задан — кнопка WebApp будет вести на заглушку.")
 
     reminder = asyncio.create_task(renewal_loop(bot))
+    announcement = asyncio.create_task(announce_update(bot, db))
     try:
         await dp.start_polling(bot)
     finally:
         reminder.cancel()
+        announcement.cancel()
         await bot.session.close()
         await runner.cleanup()
 

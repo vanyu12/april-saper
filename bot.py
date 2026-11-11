@@ -1,6 +1,8 @@
+import asyncio
 import math
 import time
 import uuid
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest
@@ -16,6 +18,7 @@ from aiogram.types import (
 
 import awards
 import game
+import updates
 from config import config
 from db import Database
 
@@ -2011,6 +2014,40 @@ def build_dispatcher(db: Database) -> Dispatcher:
         await callback.answer(f"+{num(game.SPONSOR_REWARD)} mCoin")
 
     return dp
+
+
+async def announce_update(bot: Bot, db: Database) -> None:
+    try:
+        current = str(db.settings().get("update_version", "0"))
+        if current == updates.VERSION:
+            return
+        image_path = Path(__file__).with_name(updates.IMAGE)
+        if not image_path.exists():
+            return
+        text = updates.full_text()
+        long_text = len(text) > 1000
+        caption = updates.short_text() if long_text else text
+        if config.update_channel:
+            channel = config.update_channel
+            targets = [channel if channel.startswith("@") else "@" + channel]
+        else:
+            targets = db.broadcast_ids()
+        sent = 0
+        for target in targets:
+            try:
+                await bot.send_photo(target, str(image_path), caption=caption,
+                                     parse_mode="HTML")
+                if long_text:
+                    await bot.send_message(target, text, parse_mode="HTML",
+                                           disable_web_page_preview=True)
+                sent += 1
+            except Exception:
+                continue
+            await asyncio.sleep(0.05)
+        if sent:
+            db.set_settings({"update_version": updates.VERSION})
+    except Exception:
+        pass
 
 
 async def setup_bot(bot: Bot) -> None:

@@ -182,6 +182,7 @@ DEFAULT_SETTINGS = {
     "game_slots": "1",
     "game_coinflip": "1",
     "game_blackjack": "1",
+    "update_version": "0",
 }
 
 
@@ -789,6 +790,10 @@ class Database:
         order = ["mines", "dice", "wheel", "crash"]
         rows.sort(key=lambda item: order.index(item["game"]) if item["game"] in order else 99)
         return rows
+
+    def broadcast_ids(self) -> list[int]:
+        rows = self._rows("SELECT user_id FROM users WHERE is_banned = 0")
+        return [int(row["user_id"]) for row in rows]
 
     def admin_economy(self) -> dict:
         players = self._row("SELECT COUNT(*) AS c FROM users")

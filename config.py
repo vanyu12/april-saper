@@ -54,6 +54,7 @@ class Config:
     renewal_remind_hours: int = _int("RENEWAL_REMIND_HOURS", 96)
     sponsor_channels: list[str] = field(
         default_factory=lambda: _name_list("SPONSOR_CHANNELS"))
+    update_channel: str = os.getenv("UPDATE_CHANNEL", "").strip()
     bot_username: str = ""
 
 
