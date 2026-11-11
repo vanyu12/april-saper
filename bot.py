@@ -36,6 +36,7 @@ WELCOME = (
     "Играть можно и в приложении, и прямо здесь — в чате.\n\n"
     "• /mines 100 5 — поле 5×5, ставка 100, пять мин\n"
     "• /dice 100 чёт — кости, выплата ×1,96\n"
+    "• /basket 100 — бросок в кольцо, выплата ×2,4\n"
     "• /spin — колесо дня раз в 12 часов\n"
     "• /bonus — часовой и ежедневный бонусы\n"
     "• /deposit — вклады под процент\n\n"
@@ -890,7 +891,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 "/roulette 100 красное — рулетка (×2, зеро ×36)\n"
                 "/slots 100 — слоты (пара ×1,2, тройка до ×200)\n"
                 "/crash 100 2.5 — краш, цель от ×1,20 до ×10\n"
-                "/coin 100 орёл — монета, выплата ×1,96\n\n"
+                "/coin 100 орёл — монета, выплата ×1,96\n"
+                "/basket 100 — бросок в кольцо, выплата ×2,4\n\n"
                 "Результат считается из твоего seed — проверить можно /fair.")
 
     def games_keyboard() -> InlineKeyboardMarkup:
@@ -899,6 +901,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
              InlineKeyboardButton(text="🎰 Слоты", callback_data="menu:slots")],
             [InlineKeyboardButton(text="💥 Краш", callback_data="menu:crash"),
              InlineKeyboardButton(text="🪙 Орёл и решка", callback_data="menu:coin")],
+            [InlineKeyboardButton(text="🏀 Баскет", callback_data="menu:basket")],
             [webapp_button()],
         ])
 
@@ -1096,6 +1099,64 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if refund:
             lines.append(f"🛡 Страховка вернула {num(refund)} mCoin")
         lines.append(xp_line(xp_gain, before, after))
+        lines.extend(awards_lines(earned))
+        lines.append(f"💰 Баланс: {num(db.user(user['user_id'])['balance'])} mCoin")
+        return "\n".join(lines)
+
+    def basket_hint_text() -> str:
+        settings = db.settings()
+        return ("🏀 <b>Баскет</b>\n\n"
+                "Выбери, что будет: мяч попадёт или промахнётся.\n"
+                "Напиши: <code>/basket 100 попадёт</code>\n"
+                "или: <code>/basket 100 промах</code>\n\n"
+                "Бот отправляет анимацию 🏀 из Telegram — она и решает.\n"
+                "Попадание платит ×2,4 · промах ×1,6.\n\n"
+                f"Ставка: от {num(settings.get('min_bet', game.MIN_BET))} "
+                f"до {num(settings.get('max_bet', game.MAX_BET))} mCoin.\n\n"
+                "Или просто жми кнопку 👇")
+
+    def basket_hint_keyboard() -> InlineKeyboardMarkup:
+        rows = []
+        for bet in (100, 500):
+            rows.append([
+                InlineKeyboardButton(text=f"{num(bet)} · попадёт",
+                                     callback_data=f"bs:{bet}:hit"),
+                InlineKeyboardButton(text=f"{num(bet)} · промах",
+                                     callback_data=f"bs:{bet}:miss"),
+            ])
+        rows.append([InlineKeyboardButton(text="⬅️ Игры", callback_data="menu:games")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def play_basket(user: dict, bet: int, dice_value: int, pick: str = "hit") -> str:
+        error = bet_error(user, bet, "basket")
+        if error:
+            return "⚠️ " + error
+        scored = dice_value >= game.BASKET_SCORE_MIN
+        win = (scored and pick == "hit") or (not scored and pick == "miss")
+        multiplier = (game.BASKET_MULTIPLIER if scored
+                      else game.BASKET_MISS_MULTIPLIER) if win else 0.0
+        payout = int(math.floor(bet * multiplier)) if win else 0
+        refund = 0
+        if win:
+            payout = charm_bonus(user, payout)
+            payout = apply_relic(user, "basket", payout)
+        else:
+            refund = insurance_refund(user, bet)
+        earned, xp_gain, level_before, level_after = settle_play(
+            user, "basket", bet, payout, multiplier or 1.0,
+            {"dice": dice_value, "scored": scored, "pick": pick, "chat": True})
+        pick_title = "попадание" if pick == "hit" else "промах"
+        lines = ["🏀 <b>Баскет</b>", "",
+                 f"Бросок: <b>{dice_value}</b> из 5 — "
+                 f"{'попал' if scored else 'мимо'}",
+                 f"Ставка: {num(bet)} mCoin на {pick_title}"]
+        if win:
+            lines.append(f"✅ Угадал! Выигрыш: <b>+{num(payout)}</b> mCoin")
+        else:
+            lines.append("❌ Не угадал — ставка сгорела")
+        if refund:
+            lines.append(f"🛡 Страховка вернула {num(refund)} mCoin")
+        lines.append(xp_line(xp_gain, level_before, level_after))
         lines.extend(awards_lines(earned))
         lines.append(f"💰 Баланс: {num(db.user(user['user_id'])['balance'])} mCoin")
         return "\n".join(lines)
@@ -1362,6 +1423,38 @@ def build_dispatcher(db: Database) -> Dispatcher:
             return
         user = get_user(message)
         await message.answer(play_coin(user, int(raw_bet), pick))
+
+    @dp.message(Command("basket", "basketball", "bask"))
+    async def basket_cmd(message: Message) -> None:
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.answer(basket_hint_text(), reply_markup=basket_hint_keyboard())
+            return
+        raw_bet = parts[1].replace(" ", "")
+        if not raw_bet.isdigit():
+            await message.answer("Ставка должна быть числом. Пример: "
+                                 "<code>/basket 100 попадёт</code>")
+            return
+        pick = "hit"
+        if len(parts) >= 3:
+            word = parts[2].lower()
+            if word in ("промах", "промахнётся", "промахнется", "мимо", "miss", "нет"):
+                pick = "miss"
+            elif word in ("попадёт", "попадет", "попадание", "попал", "hit", "да"):
+                pick = "hit"
+            else:
+                await message.answer("Выбери: попадёт или промах. Пример: "
+                                     "<code>/basket 100 промах</code>")
+                return
+        user = get_user(message)
+        bet = int(raw_bet)
+        error = bet_error(user, bet, "basket")
+        if error:
+            await message.answer("⚠️ " + error)
+            return
+        shot = await message.answer_dice(emoji="🏀")
+        await message.answer(play_basket(user, bet, shot.dice.value, pick),
+                             reply_markup=basket_hint_keyboard())
 
     @dp.message(Command("duel", "duels"))
     async def duel_cmd(message: Message) -> None:
@@ -1999,6 +2092,28 @@ def build_dispatcher(db: Database) -> Dispatcher:
         await callback.message.answer(play_coin(user, int(bet_raw), pick))
         await callback.answer("Готово")
 
+    @dp.callback_query(F.data == "menu:basket")
+    async def menu_basket(callback) -> None:
+        await callback.message.answer(basket_hint_text(),
+                                      reply_markup=basket_hint_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("bs:"))
+    async def basket_quick(callback) -> None:
+        parts_cb = callback.data.split(":")
+        bet_raw = parts_cb[1]
+        pick = parts_cb[2] if len(parts_cb) > 2 else "hit"
+        user = get_user(callback)
+        bet = int(bet_raw)
+        error = bet_error(user, bet, "basket")
+        if error:
+            await callback.answer(error[:60], show_alert=True)
+            return
+        shot = await callback.message.answer_dice(emoji="🏀")
+        await callback.message.answer(play_basket(user, bet, shot.dice.value, pick),
+                                      reply_markup=basket_hint_keyboard())
+        await callback.answer("Бросок!")
+
     @dp.callback_query(F.data.startswith("d:"))
     async def dice_quick(callback) -> None:
         _, bet_raw, pick_raw = callback.data.split(":")
@@ -2307,6 +2422,7 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="slots", description="Слоты"),
         BotCommand(command="crash", description="Краш"),
         BotCommand(command="coin", description="Орёл и решка"),
+        BotCommand(command="basket", description="Баскет: бросок в кольцо"),
         BotCommand(command="duel", description="Дуэль 1×1"),
         BotCommand(command="spin", description="Колесо дня"),
         BotCommand(command="bonus", description="Бонусы"),

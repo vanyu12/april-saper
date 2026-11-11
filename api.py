@@ -142,6 +142,7 @@ class Api:
                 "slots": int(raw.get("game_slots", 1)) == 1,
                 "coinflip": int(raw.get("game_coinflip", 1)) == 1,
                 "blackjack": int(raw.get("game_blackjack", 1)) == 1,
+                "basket": int(raw.get("game_basket", 1)) == 1,
             },
         }
 
@@ -926,6 +927,46 @@ class Api:
                     "doubled": True, "payout": payout})
         return self._json(self._bj_payload(user, rnd, payout, multiplier))
 
+    async def basket(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        body = await self._body(request)
+        try:
+            bet = int(body.get("bet", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректная ставка")
+        error = self._bet_error(user, bet, "basket")
+        if error:
+            return self._fail(error, 403 if user.get("is_banned") else 400)
+
+        nonce = self.db.bump_nonce(user["user_id"])
+        scored = game.basket_shot(user["server_seed"], user["client_seed"], nonce)
+        multiplier = game.BASKET_MULTIPLIER if scored else 0.0
+        payout = int(math.floor(bet * multiplier)) if scored else 0
+        refund = 0
+        if scored:
+            payout = self._charm_bonus(user, payout)
+            payout = self._apply_relic(user, "basket", payout)
+        else:
+            refund = self._insurance_refund(user, bet)
+
+        self.db.add_balance(user["user_id"], payout - bet)
+        self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "basket", bet, scored,
+                         payout, {"scored": scored, "nonce": nonce})
+        self._finish(user, bet, payout, multiplier or 1.0)
+        self._settle_referral(user["user_id"])
+
+        return self._json({
+            "ok": True,
+            "scored": scored,
+            "multiplier": multiplier,
+            "payout": payout,
+            "refund": refund,
+            "balance": self.db.user(user["user_id"])["balance"],
+            "quests": self._quests_view(user),
+        })
+
     async def wheel(self, request: web.Request) -> web.Response:
         user = self._auth(request)
         if not user:
@@ -1691,7 +1732,8 @@ class Api:
         allowed = ("min_bet", "max_bet", "min_mines", "max_mines",
                    "daily_bonus", "maintenance",
                    "game_mines", "game_dice", "game_wheel", "game_crash",
-                   "game_roulette", "game_slots", "game_coinflip", "game_blackjack")
+                   "game_roulette", "game_slots", "game_coinflip", "game_blackjack",
+                   "game_basket")
         updates: dict[str, int] = {}
         for key in allowed:
             if key not in body:
@@ -1718,7 +1760,8 @@ class Api:
         if merged["maintenance"] not in (0, 1):
             return self._fail("Техработы: 0 или 1")
         for key in ("game_mines", "game_dice", "game_wheel", "game_crash",
-                    "game_roulette", "game_slots", "game_coinflip", "game_blackjack"):
+                    "game_roulette", "game_slots", "game_coinflip", "game_blackjack",
+                    "game_basket"):
             if merged.get(key, 1) not in (0, 1):
                 return self._fail(f"Флаг игры {key}: только 0 или 1")
 
@@ -1748,6 +1791,7 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/games/wheel", api.wheel)
     app.router.add_post("/api/games/crash", api.crash)
     app.router.add_post("/api/games/coinflip", api.coinflip)
+    app.router.add_post("/api/games/basket", api.basket)
     app.router.add_post("/api/games/bj/start", api.bj_start)
     app.router.add_post("/api/games/bj/hit", api.bj_hit)
     app.router.add_post("/api/games/bj/stand", api.bj_stand)

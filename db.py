@@ -234,12 +234,7 @@ DEFAULT_SETTINGS = {
     "game_slots": "1",
     "game_coinflip": "1",
     "game_blackjack": "1",
-    "update_version": "0",
-    "chat_url": "",
-    "chat_id": "",
-    "chat_title": "",
-    "chat_rules": "Будь вежлив, без спама, рекламы и оскорблений.",
-    "chat_welcome": "Добро пожаловать в чат «Апрельского сапёра»!",
+    "game_basket": "1",
 }
 
 

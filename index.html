@@ -272,6 +272,37 @@
           <div class="hint" id="bjHint">Соберите 21 или ближе к 21, чем дилер. Блэкджек платит ×2,5.</div>
         </div>
       </div>
+
+      <div class="game-pane" id="game-pane-basket">
+        <div class="panel">
+          <div class="field-row">
+            <label class="field-label" for="basketBet">Ставка</label>
+            <div class="bet-controls">
+              <button class="chip-btn" data-kbet="half">½</button>
+              <button class="chip-btn" data-kbet="double">2×</button>
+              <button class="chip-btn" data-kbet="max">MAX</button>
+            </div>
+          </div>
+          <div class="bet-input-wrap">
+            <span class="coin">◈</span>
+            <input id="basketBet" type="number" inputmode="numeric" min="10" step="10" value="50">
+            <span class="bet-unit">mCoin</span>
+          </div>
+
+          <div class="basket-stage" id="basketStage">
+            <div class="basket-glow"></div>
+            <div class="basket-board"></div>
+            <div class="basket-ring"></div>
+            <div class="basket-net"></div>
+            <div class="basket-ball" id="basketBall">🏀</div>
+            <div class="basket-flash" id="basketFlash">🏀</div>
+          </div>
+
+          <div class="basket-result" id="basketResult">Один бросок — попадание ×2,4</div>
+          <button class="cta" id="basketShoot">Бросить</button>
+          <div class="hint" id="basketHint">Шанс попадания 40%. Попал — выплата ×2,4.</div>
+        </div>
+      </div>
     </section>
 
     <section class="view" id="view-profile">
@@ -529,6 +560,7 @@
         <label class="admin-check"><input type="checkbox" id="setGameSlots"> Слоты</label>
         <label class="admin-check"><input type="checkbox" id="setGameCoinflip"> Орёл и решка</label>
         <label class="admin-check"><input type="checkbox" id="setGameBlackjack"> 21</label>
+        <label class="admin-check"><input type="checkbox" id="setGameBasket"> Баскет</label>
         <button class="secondary" id="saveSettings">Сохранить настройки</button>
       </div>
     </div>

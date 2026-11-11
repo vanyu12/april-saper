@@ -145,6 +145,10 @@ function toast(text) {
 }
 
 function modal(emoji, title, text, btnText) {
+  if (!$("modal")) {
+    toast(`${title} — ${text}`);
+    return;
+  }
   $("modalEmoji").textContent = emoji;
   $("modalTitle").textContent = title;
   $("modalText").textContent = text;
@@ -349,6 +353,7 @@ const HUB_GAMES = [
   ["crash", "📈", "Краш", "Забери до краша"],
   ["coinflip", "🪙", "Орёл и решка", "Монета 50/50 ×1,96"],
   ["blackjack", "♠️", "21", "Блэкджек против дилера"],
+  ["basket", "🏀", "Баскет", "Один бросок в кольцо ×2,4"],
 ];
 
 function renderGamesHub() {
@@ -1036,6 +1041,7 @@ function fillSettingsForm(settings) {
   $("setGameSlots").checked = games.slots !== false;
   $("setGameCoinflip").checked = games.coinflip !== false;
   $("setGameBlackjack").checked = games.blackjack !== false;
+  $("setGameBasket").checked = games.basket !== false;
 }
 
 async function loadAdmin() {
@@ -1122,6 +1128,7 @@ async function saveAdminSettings() {
       game_slots: $("setGameSlots").checked ? 1 : 0,
       game_coinflip: $("setGameCoinflip").checked ? 1 : 0,
       game_blackjack: $("setGameBlackjack").checked ? 1 : 0,
+    game_basket: $("setGameBasket").checked ? 1 : 0,
     };
     const data = await api("/api/admin/settings", payload);
     state.settings = data.settings;
@@ -1141,6 +1148,7 @@ const GAMES = [
   { key: "crash", icon: "📈", title: "Краш", desc: "Цель до ×10" },
   { key: "coinflip", icon: "🟡", title: "Орёл и решка", desc: "Монета 50/50, ×1,96" },
   { key: "blackjack", icon: "♠️", title: "21", desc: "Против дилера" },
+  { key: "basket", icon: "🏀", title: "Баскет", desc: "Бросок в кольцо, ×2,4" },
 ];
 
 function renderGameMenu() {
@@ -1160,6 +1168,7 @@ function renderGameSwitch() {
   const game = GAMES.find((item) => item.key === state.game) || GAMES[0];
   if ($("gameEmoji")) $("gameEmoji").textContent = game.icon;
   if ($("gameName")) $("gameName").textContent = game.title;
+  if ($("gameCount")) $("gameCount").textContent = `${GAMES.length} режимов`;
   renderGameMenu();
 }
 
@@ -1330,6 +1339,50 @@ async function playCoinflip(pick) {
     renderAll();
   } catch (e) {
     toast(e.message);
+  }
+}
+
+/* ---------- баскет ---------- */
+
+async function playBasket() {
+  const input = $("basketBet");
+  const bet = clampBet(parseInt(input.value || "0", 10));
+  input.value = bet;
+  const stage = $("basketStage");
+  const result = $("basketResult");
+  const btn = $("basketShoot");
+  btn.disabled = true;
+  stage.classList.remove("shoot-score", "shoot-miss", "scored");
+  result.className = "basket-result";
+  result.textContent = "Бросок…";
+  try {
+    const data = await api("/api/games/basket", { bet });
+    state.user.balance = data.balance;
+    state.quests = data.quests || state.quests;
+    void stage.offsetWidth;
+    stage.classList.add(data.scored ? "shoot-score" : "shoot-miss");
+    if (data.scored) stage.classList.add("scored");
+    await new Promise((resolve) => setTimeout(resolve, 1150));
+    if (data.scored) {
+      result.textContent = `Попал! +${fmt(data.payout)} mCoin`;
+      result.className = "basket-result win";
+      sfx.cash();
+      haptic("success");
+      toast(`+${fmt(data.payout)} mCoin`);
+      confetti();
+    } else {
+      result.textContent = "Мимо — ставка сгорела";
+      result.className = "basket-result lose";
+      sfx.boom();
+      haptic("error");
+    }
+    renderAll();
+  } catch (e) {
+    result.textContent = e.message;
+    result.className = "basket-result lose";
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -1970,11 +2023,13 @@ function bind() {
     toast(state.sound ? "Звук включён" : "Звук выключен");
   });
 
-  $("modalBtn").addEventListener("click", () => {
-    $("modal").classList.remove("show");
-    state.round = null;
-    renderAll();
-  });
+  if ($("modalBtn")) {
+    $("modalBtn").addEventListener("click", () => {
+      $("modal").classList.remove("show");
+      state.round = null;
+      renderAll();
+    });
+  }
 
   $("copyRef").addEventListener("click", async () => {
     const link = $("refLink").textContent;
@@ -2162,6 +2217,20 @@ function bind() {
   if ($("bjHit")) $("bjHit").addEventListener("click", () => bjAction("hit"));
   if ($("bjStand")) $("bjStand").addEventListener("click", () => bjAction("stand"));
   if ($("bjDouble")) $("bjDouble").addEventListener("click", () => bjAction("double"));
+
+  document.querySelectorAll("[data-kbet]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const input = $("basketBet");
+      let v = parseInt(input.value, 10) || 0;
+      const mode = btn.dataset.kbet;
+      if (mode === "half") v = Math.floor(v / 2);
+      if (mode === "double") v = v * 2;
+      if (mode === "max") v = state.user ? state.user.balance : 1000;
+      input.value = clampBet(v);
+      haptic();
+    }));
+
+  if ($("basketShoot")) $("basketShoot").addEventListener("click", playBasket);
 
   $("view-shop").addEventListener("click", (e) => {
     const btn = e.target.closest(".shop-buy");

@@ -30,6 +30,34 @@ LEVEL_TITLES = (
     (25, "Гроссмейстер"),
 )
 
+GMPOINT_NAME = "GMPOINT"
+GMPOINT_ICON = "G"
+
+PREFIXES = (
+    {"key": "novice", "title": "Новобранец", "price": 0, "currency": "mcoin",
+     "level": 1, "color": "#9aa4b2"},
+    {"key": "saper", "title": "Сапёр", "price": 1500, "currency": "mcoin",
+     "level": 3, "color": "#2ee6a8"},
+    {"key": "veteran", "title": "Ветеран", "price": 5000, "currency": "mcoin",
+     "level": 8, "color": "#7c5cff"},
+    {"key": "legend", "title": "Легенда", "price": 25, "currency": "gmpoint",
+     "level": 18, "color": "#ffb020"},
+    {"key": "gmpoint", "title": "GMPOINT", "price": 50, "currency": "gmpoint",
+     "level": 1, "color": "#ffd166"},
+    {"key": "april", "title": "Апрель", "price": 100, "currency": "gmpoint",
+     "level": 25, "color": "#ff5c8a"},
+    {"key": "king", "title": "Король сапёров", "price": 250, "currency": "gmpoint",
+     "level": 40, "color": "#f7c948"},
+    {"key": "sapper_10", "title": "Взрывотехник", "price": 0, "currency": "level",
+     "level": 10, "color": "#57c7ff"},
+    {"key": "master_25", "title": "Гроссмейстер", "price": 0, "currency": "level",
+     "level": 25, "color": "#c084fc"},
+    {"key": "immortal_50", "title": "Бессмертный", "price": 0, "currency": "level",
+     "level": 50, "color": "#ff6b6b"},
+)
+
+PREFIX_BY_KEY = {prefix["key"]: prefix for prefix in PREFIXES}
+
 
 def xp_for_level(level: int) -> int:
     """Сколько всего XP нужно, чтобы достичь уровня."""
@@ -63,6 +91,37 @@ def level_view(xp: int) -> dict:
     percent = round(into / need * 100, 1) if need else 100.0
     return {"level": level, "title": level_title(level), "xp": xp,
             "into": into, "need": need, "percent": percent, "next": next_xp}
+
+
+def prefix_view(key: str | None) -> dict | None:
+    prefix = PREFIX_BY_KEY.get((key or "").strip())
+    if not prefix:
+        return None
+    return {
+        "key": prefix["key"],
+        "title": prefix["title"],
+        "color": prefix["color"],
+    }
+
+
+def level_reward(level: int) -> dict:
+    level = max(1, int(level))
+    coins = 100 + (level - 1) * 50
+    gmpoint = 5 if level % 10 == 0 else 0
+    lootbox = 1 if level % 5 == 0 else 0
+    prefix = next(
+        (item["key"] for item in PREFIXES
+         if item["currency"] == "level" and item["level"] == level),
+        "",
+    )
+    return {
+        "level": level,
+        "coins": coins,
+        "gmpoint": gmpoint,
+        "lootbox": lootbox,
+        "prefix": prefix,
+    }
+
 
 REF_LADDER = (
     {"step": 3, "reward": 350},
@@ -290,6 +349,18 @@ SHOP_BUNDLES = (
      "items": {"relic_mines": 1, "relic_crash": 1}},
 )
 
+DONATE_ITEMS = (
+    {"key": "gmp_lootbox", "title": "Премиум-кейс", "price": 20,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Пять кейсов удачи", "items": {"lootbox": 5}},
+    {"key": "gmp_insurance", "title": "Золотая страховка", "price": 15,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Пять страховок", "items": {"insurance": 5}},
+    {"key": "gmp_charm", "title": "Талисманы удачи", "price": 30,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Три талисмана по пять зарядов", "items": {"charm": 3}},
+)
+
 INSURANCE_REFUND = 0.25
 INSURANCE_CAP = 200
 CHARM_BONUS = 0.1
@@ -437,9 +508,21 @@ COINFLIP_MULTIPLIER = 1.96
 
 
 def coinflip(server_seed: str, client_seed: str, nonce: int) -> str:
-    """«Орёл» (heads) и «решка» (tails) из HMAC-потока."""
+    """«Орёл» (heads) или «решка» (tails) из HMAC-потока."""
     value = next(_floats(server_seed, client_seed, nonce, 0, 1))
     return "heads" if value < 0.5 else "tails"
+
+
+BASKET_CHANCE = 0.4
+BASKET_MULTIPLIER = 2.4
+BASKET_MISS_MULTIPLIER = 1.6
+BASKET_SCORE_MIN = 4
+
+
+def basket_shot(server_seed: str, client_seed: str, nonce: int) -> bool:
+    """Бросок в кольцо: попадание с шансом 40%, выплата ×2,4."""
+    value = next(_floats(server_seed, client_seed, nonce, 0, 1))
+    return value < BASKET_CHANCE
 
 
 def open_lootbox(server_seed: str, client_seed: str, nonce: int) -> dict:
