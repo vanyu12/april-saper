@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import math
 import time
 import uuid
@@ -1194,7 +1194,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 f"💰 Баланс: {num(balance)} mCoin")
 
     def promo_text(user: dict, code: str) -> str:
-        status, amount = db.claim_promo(code.strip().upper(), user["user_id"],
+        code = code.strip().upper()
+        promo = db.promo(code) or {}
+        currency = str(promo.get("currency") or "mcoin")
+        status, amount = db.claim_promo(code, user["user_id"],
                                         int(time.time()))
         errors = {
             "not_found": "Такого промокода нет",
@@ -1205,10 +1208,14 @@ def build_dispatcher(db: Database) -> Dispatcher:
         }
         if status != "ok":
             return "⚠️ " + errors.get(status, "Не удалось активировать промокод")
-        balance = db.user(user["user_id"])["balance"]
+        fresh = db.user(user["user_id"])
+        if currency == "gmpoint":
+            return ("🎁 <b>Промокод активирован</b>\n\n"
+                    f"Начислено: <b>+{num(amount)}</b> GMPOINT\n"
+                    f"🎁 Всего: {num(fresh['gmpoint'])} GMPOINT")
         return ("🎁 <b>Промокод активирован</b>\n\n"
                 f"Начислено: <b>+{num(amount)}</b> mCoin\n"
-                f"💰 Баланс: {num(balance)} mCoin")
+                f"💰 Баланс: {num(fresh['balance'])} mCoin")
 
     def tasks_view(user: dict) -> tuple[str, InlineKeyboardMarkup]:
         refs = db.referrals(user["user_id"])
@@ -1740,29 +1747,6 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "Плюс награды по лестнице: /tasks",
             disable_web_page_preview=True,
         )
-
-    @dp.message(Command("promo"))
-    async def promo_cmd(message: Message) -> None:
-        user = get_user(message)
-        parts = (message.text or "").split(maxsplit=1)
-        if len(parts) < 2 or not parts[1].strip():
-            await message.answer("🎁 Введи код: <code>/promo КОД</code>")
-            return
-        code = parts[1].strip().upper()
-        status, amount = db.promo_redeem(code, user["user_id"])
-        messages = {
-            "not_found": "Промокод не найден",
-            "expired": "Срок действия промокода истёк",
-            "limit": "Лимит активаций исчерпан",
-            "used": "Ты уже активировал этот промокод",
-        }
-        if status != "ok":
-            await message.answer("⚠️ " + messages.get(status, "Не удалось активировать"))
-            return
-        fresh = db.user(user["user_id"])
-        await message.answer(
-            f"🎁 <b>+{num(amount)} GMPOINT</b>\n"
-            f"Всего: {num(fresh['gmpoint'])} GMPOINT")
 
     @dp.message(Command("chat"))
     async def chat_cmd(message: Message) -> None:
@@ -2655,7 +2639,6 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="ref", description="Пригласить друга"),
         BotCommand(command="fair", description="Честность игры"),
         BotCommand(command="chat", description="Чат игроков"),
-        BotCommand(command="promo", description="Активировать промокод"),
         BotCommand(command="help", description="Помощь"),
     ]
     try:

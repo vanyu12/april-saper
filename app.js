@@ -796,10 +796,12 @@ function renderPromos() {
     const exp = p.expires_at
       ? new Date(p.expires_at * 1000).toLocaleDateString("ru-RU")
       : "бессрочно";
+    const cur = p.currency === "gmpoint" ? "G" : "◈";
+    const state = Number(p.active) ? "" : " · выключен";
     return `<div class="row" data-code="${escapeHtml(p.code)}">
       <div class="row-main">
-        <div class="row-title">${escapeHtml(p.code)} · +${fmt(p.amount)} G</div>
-        <div class="row-sub">Активаций: ${used} · до ${exp}</div>
+        <div class="row-title">${escapeHtml(p.code)} · +${fmt(p.amount)} ${cur}</div>
+        <div class="row-sub">Активаций: ${used} · до ${exp}${state}</div>
       </div>
       <button class="chip-btn" data-act="del-promo">Удалить</button>
     </div>`;

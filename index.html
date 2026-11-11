@@ -28,6 +28,9 @@
       <div class="balance-chip" id="balanceChip">
         <span class="coin">◈</span><span id="balanceValue">—</span>
       </div>
+      <div class="balance-chip gmp-chip" id="gmpChip" title="GMPOINT">
+        <span class="coin gmp-coin">G</span><span id="gmpValue">0</span>
+      </div>
     </div>
   </header>
 
@@ -359,6 +362,14 @@
         <div class="hint" id="transferHint">Без комиссии. Перевод получает игрок сразу.</div>
       </div>
 
+      <div class="card">
+        <div class="card-title">Промокод на GMPOINT</div>
+        <input class="account-input" id="promoRedeemInput" placeholder="Введите промокод">
+        <div class="account-actions">
+          <button class="secondary" id="promoRedeemBtn">Активировать</button>
+        </div>
+      </div>
+
       <div class="card level-card">
         <div class="level-head">
           <span class="level-badge" id="levelBadge">1</span>
@@ -377,6 +388,7 @@
 
       <div class="stats-grid">
         <div class="stat"><span class="stat-value" id="statBalance">0</span><span class="stat-label">mCoin</span></div>
+        <div class="stat"><span class="stat-value gmp-coin" id="statGmpoint">0</span><span class="stat-label">GMPOINT</span></div>
         <div class="stat"><span class="stat-value" id="statGames">0</span><span class="stat-label">партий</span></div>
         <div class="stat"><span class="stat-value" id="statWins">0</span><span class="stat-label">побед</span></div>
         <div class="stat"><span class="stat-value" id="statBest">×1,00</span><span class="stat-label">лучший</span></div>
@@ -532,6 +544,7 @@
     <div class="tabs" id="adminTabs">
       <button class="tab active" data-atab="overview">Сводка</button>
       <button class="tab" data-atab="users">Игроки</button>
+      <button class="tab" data-atab="promo">Промокоды</button>
       <button class="tab" data-atab="settings">Настройки</button>
     </div>
 
@@ -559,6 +572,22 @@
       <div class="card">
         <input class="text-input" id="adminSearch" placeholder="Поиск: username или ID">
         <div class="list" id="adminUsers"></div>
+      </div>
+    </div>
+
+    <div class="admin-pane" id="pane-promo">
+      <div class="card">
+        <div class="card-title">Новый промокод</div>
+        <div class="admin-field"><span>Код</span><input class="mini-input" id="promoCode" placeholder="APRIL2026"></div>
+        <div class="admin-field"><span>GMPOINT</span><input class="mini-input" id="promoAmount" type="number" value="10" min="1"></div>
+        <div class="admin-field"><span>Лимит активаций (0 — без лимита)</span><input class="mini-input" id="promoMax" type="number" value="0" min="0"></div>
+        <div class="admin-field"><span>Срок, дней (0 — бессрочно)</span><input class="mini-input" id="promoDays" type="number" value="0" min="0"></div>
+        <button class="cta" id="promoCreate">Создать промокод</button>
+        <div class="hint" id="promoHint"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Промокоды</div>
+        <div class="list" id="promoList"></div>
       </div>
     </div>
 

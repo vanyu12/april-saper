@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import sqlite3
 import threading
@@ -240,6 +240,7 @@ SCHEMA_STATEMENTS = [
         active     INTEGER NOT NULL DEFAULT 1,
         expires_at INTEGER,
         note       TEXT NOT NULL DEFAULT '',
+        currency   TEXT NOT NULL DEFAULT 'mcoin',
         created_at INTEGER NOT NULL
     )
     """,
@@ -261,6 +262,7 @@ DEFAULT_SETTINGS = {
     "max_mines": "24",
     "daily_bonus": "300",
     "maintenance": "0",
+    "update_version": "0",
     "game_mines": "1",
     "game_dice": "1",
     "game_wheel": "1",
@@ -385,6 +387,9 @@ class Database:
         if "auto_target" not in self._table_columns("rounds"):
             self._exec(
                 "ALTER TABLE rounds ADD COLUMN auto_target REAL NOT NULL DEFAULT 0")
+        if "currency" not in self._table_columns("promo_codes"):
+            self._exec(
+                "ALTER TABLE promo_codes ADD COLUMN currency TEXT NOT NULL DEFAULT 'mcoin'")
         for key, value in DEFAULT_SETTINGS.items():
             self._exec(
                 "INSERT INTO settings (key, value) VALUES (?, ?) "
@@ -1297,13 +1302,14 @@ class Database:
     # --- промокоды -------------------------------------------------------
     def create_promo(self, code: str, amount: int, max_uses: int = 0,
                      budget: int = 0, per_user: int = 1,
-                     expires_at: int | None = None, note: str = "") -> None:
+                     expires_at: int | None = None, note: str = "",
+                     currency: str = "mcoin") -> None:
         self._exec(
             """INSERT INTO promo_codes (code, amount, max_uses, used, budget, spent,
-                   per_user, active, expires_at, note, created_at)
-               VALUES (?, ?, ?, 0, ?, 0, ?, 1, ?, ?, ?)""",
+                   per_user, active, expires_at, note, currency, created_at)
+               VALUES (?, ?, ?, 0, ?, 0, ?, 1, ?, ?, ?, ?)""",
             (code, amount, max_uses, budget, per_user, expires_at, note,
-             int(time.time())))
+             currency, int(time.time())))
 
     def promo(self, code: str) -> dict | None:
         return self._row("SELECT * FROM promo_codes WHERE code = ?", (code,))
@@ -1315,6 +1321,10 @@ class Database:
     def promo_deactivate(self, code: str) -> bool:
         return bool(self._exec(
             "UPDATE promo_codes SET active = 0 WHERE code = ?", (code,)))
+
+    def delete_promo(self, code: str) -> bool:
+        self._exec("DELETE FROM promo_claims WHERE code = ?", (code,))
+        return bool(self._exec("DELETE FROM promo_codes WHERE code = ?", (code,)))
 
     def promo_user_claims(self, code: str, user_id: int) -> int:
         row = self._row(
@@ -1356,7 +1366,11 @@ class Database:
                 "WHERE code = ?", (amount, code))
             return "already", 0
 
-        self.add_balance(user_id, amount)
+        currency = str(promo.get("currency") or "mcoin")
+        if currency == "gmpoint":
+            self.add_gmpoint(user_id, amount)
+        else:
+            self.add_balance(user_id, amount)
         return "ok", amount
 
     # --- хаб игр ---------------------------------------------------------

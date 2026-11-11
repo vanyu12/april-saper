@@ -259,6 +259,8 @@ DAILY_SPIN = (
     {"kind": "coins", "amount": 800, "weight": 30},
     {"kind": "coins", "amount": 1000, "weight": 18},
     {"kind": "coins", "amount": 1500, "weight": 10},
+    {"kind": "gmpoint", "amount": 1, "weight": 14},
+    {"kind": "gmpoint", "amount": 3, "weight": 6},
     {"kind": "coins", "amount": 3000, "weight": 4},
     {"kind": "coins", "amount": 5000, "weight": 2},
     {"kind": "item", "item": "insurance", "weight": 60},

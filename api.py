@@ -154,6 +154,9 @@ class Api:
         if prize["kind"] == "coins":
             return {"kind": "coins", "title": "+" + str(prize["amount"]),
                     "amount": prize["amount"]}
+        if prize["kind"] == "gmpoint":
+            return {"kind": "gmpoint", "title": "+" + str(prize["amount"]) + " G",
+                    "amount": prize["amount"]}
         item = next((i for i in game.SHOP_ITEMS if i["key"] == prize["item"]), None)
         return {"kind": "item", "title": item["title"] if item else prize["item"],
                 "item": prize["item"]}
@@ -249,6 +252,7 @@ class Api:
             "first_name": user["first_name"],
             "photo_url": user.get("photo_url") or "",
             "balance": user["balance"],
+            "gmpoint": user.get("gmpoint") or 0,
             "games_played": user["games_played"],
             "games_won": user["games_won"],
             "total_wagered": user["total_wagered"],
@@ -567,10 +571,14 @@ class Api:
         self.db._exec("UPDATE users SET last_daily = ? WHERE user_id = ?",
                       (now, user["user_id"]))
         self.db.add_balance(user["user_id"], bonus)
+        gmpoint_bonus = 2
+        self.db.add_gmpoint(user["user_id"], gmpoint_bonus)
         earned = awards.evaluate(self.db, user["user_id"])
-        balance = self.db.user(user["user_id"])["balance"]
+        fresh = self.db.user(user["user_id"])
         return self._json({"ok": True, "amount": bonus, "doubled": doubled,
-                           "awards": earned, "balance": balance})
+                           "gmpoint": gmpoint_bonus,
+                           "awards": earned, "balance": fresh["balance"],
+                           "gmpoint_total": fresh["gmpoint"]})
 
     async def history(self, request: web.Request) -> web.Response:
         user = self._auth(request)
@@ -1526,6 +1534,8 @@ class Api:
         next_day = day + 1 if day < game.SPIN_STREAK_DAYS else 1
         if prize["kind"] == "coins":
             self.db.add_balance(user["user_id"], prize["amount"])
+        elif prize["kind"] == "gmpoint":
+            self.db.add_gmpoint(user["user_id"], prize["amount"])
         else:
             qty = game.CHARM_CHARGES if prize["item"] == "charm" else 1
             self.db.add_item(user["user_id"], prize["item"], qty)
@@ -1799,6 +1809,75 @@ class Api:
         self.db.admin_log(admin["user_id"], target, "role", {"role": role})
         return self._json({"ok": True, "user_id": target, "role": role})
 
+    async def admin_promo_create(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err:
+            return err
+        body = await self._body(request)
+        code = str(body.get("code", "")).strip().upper()
+        if not re.fullmatch(r"[A-Z0-9_-]{3,32}", code):
+            return self._fail("Код: 3–32 символа, латиница, цифры, _ и -")
+        try:
+            amount = int(body.get("amount", 0))
+            max_uses = int(body.get("max_uses", 0))
+            days = int(body.get("days", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректные числа")
+        if amount < 1 or amount > 100000:
+            return self._fail("Сумма GMPOINT: от 1 до 100000")
+        max_uses = max(0, min(100000, max_uses))
+        days = max(0, min(365, days))
+        expires = int(time.time()) + days * 86400 if days else None
+        if self.db.promo(code):
+            return self._fail("Такой промокод уже есть", 409)
+        self.db.create_promo(code, amount, max_uses, 0, 1, expires, "",
+                             "gmpoint")
+        self.db.admin_log(admin["user_id"], None, "promo_create",
+                          {"code": code, "amount": amount})
+        return self._json({"ok": True, "code": code, "amount": amount})
+
+    async def admin_promo_list(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err:
+            return err
+        return self._json({"ok": True, "items": self.db.promos(100)})
+
+    async def admin_promo_delete(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err:
+            return err
+        body = await self._body(request)
+        code = str(body.get("code", "")).strip().upper()
+        if not self.db.delete_promo(code):
+            return self._fail("Промокод не найден", 404)
+        return self._json({"ok": True, "code": code})
+
+    async def promo_redeem(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        code = str(body.get("code", "")).strip().upper()
+        if not code:
+            return self._fail("Введите промокод")
+        status, amount = self.db.claim_promo(code, user["user_id"],
+                                             int(time.time()))
+        messages = {
+            "not_found": "Промокод не найден",
+            "inactive": "Промокод больше не действует",
+            "expired": "Срок действия промокода истёк",
+            "already": "Вы уже активировали этот промокод",
+            "exhausted": "Лимит активаций исчерпан",
+        }
+        if status != "ok":
+            return self._fail(messages.get(status, "Не удалось активировать"))
+        fresh = self.db.user(user["user_id"])
+        return self._json({"ok": True, "amount": amount,
+                           "gmpoint": fresh["gmpoint"],
+                           "user": self._public_user(fresh)})
+
     async def admin_rounds(self, request: web.Request) -> web.Response:
         admin, err = self._require_staff(request)
         if err:
@@ -1909,6 +1988,10 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/admin/ban", api.admin_ban)
     app.router.add_post("/api/admin/grant", api.admin_grant)
     app.router.add_post("/api/admin/role", api.admin_role)
+    app.router.add_post("/api/admin/promo/create", api.admin_promo_create)
+    app.router.add_post("/api/admin/promo/list", api.admin_promo_list)
+    app.router.add_post("/api/admin/promo/delete", api.admin_promo_delete)
+    app.router.add_post("/api/promo/redeem", api.promo_redeem)
     app.router.add_post("/api/admin/rounds", api.admin_rounds)
     app.router.add_post("/api/admin/settings", api.admin_settings)
 
