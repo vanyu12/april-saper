@@ -148,6 +148,23 @@ SCHEMA_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_duels_status ON duels(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_duels_users ON duels(challenger_id, opponent_id)",
+    """
+    CREATE TABLE IF NOT EXISTS bj_rounds (
+        id          TEXT PRIMARY KEY,
+        user_id     INTEGER NOT NULL,
+        bet         INTEGER NOT NULL,
+        deck        TEXT NOT NULL,
+        player      TEXT NOT NULL,
+        dealer      TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'active',
+        doubled     INTEGER NOT NULL DEFAULT 0,
+        payout      INTEGER NOT NULL DEFAULT 0,
+        created_at  INTEGER NOT NULL,
+        finished_at INTEGER
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_bj_user ON bj_rounds(user_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_bj_status ON bj_rounds(status)",
 ]
 
 DEFAULT_SETTINGS = {
@@ -163,6 +180,8 @@ DEFAULT_SETTINGS = {
     "game_crash": "1",
     "game_roulette": "1",
     "game_slots": "1",
+    "game_coinflip": "1",
+    "game_blackjack": "1",
 }
 
 
@@ -771,6 +790,41 @@ class Database:
         rows.sort(key=lambda item: order.index(item["game"]) if item["game"] in order else 99)
         return rows
 
+    def admin_economy(self) -> dict:
+        players = self._row("SELECT COUNT(*) AS c FROM users")
+        balance = self._row("SELECT COALESCE(SUM(balance), 0) AS s FROM users")
+        banned = self._row(
+            "SELECT COUNT(*) AS c FROM users WHERE is_banned = 1")
+        deposits = self._row(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS s FROM deposits "
+            "WHERE status = 'active'")
+        duels = self._row("SELECT COUNT(*) AS c FROM duels")
+        duels_done = self._row(
+            "SELECT COUNT(*) AS c FROM duels WHERE status = 'finished'")
+        achievements = self._row("SELECT COUNT(*) AS c FROM user_achievements")
+        return {
+            "players": int(players["c"]) if players else 0,
+            "balance": int(balance["s"]) if balance else 0,
+            "banned": int(banned["c"]) if banned else 0,
+            "deposits_count": int(deposits["c"]) if deposits else 0,
+            "deposits_locked": int(deposits["s"]) if deposits else 0,
+            "duels": int(duels["c"]) if duels else 0,
+            "duels_finished": int(duels_done["c"]) if duels_done else 0,
+            "achievements": int(achievements["c"]) if achievements else 0,
+        }
+
+    def admin_duels(self, limit: int = 8) -> list[dict]:
+        rows = self._rows(
+            "SELECT * FROM duels ORDER BY created_at DESC LIMIT ?", (int(limit),))
+        for row in rows:
+            challenger = self.user(row["challenger_id"])
+            opponent = self.user(row["opponent_id"])
+            row["challenger"] = (challenger["username"] or challenger["first_name"]
+                                 if challenger else str(row["challenger_id"]))
+            row["opponent"] = (opponent["username"] or opponent["first_name"]
+                               if opponent else str(row["opponent_id"]))
+        return rows
+
     def admin_rounds(self, user_id: int | None = None, limit: int = 20) -> list[dict]:
         sql = (
             "SELECT r.id, r.user_id, u.username, u.first_name, r.bet, r.mines, r.opened, "
@@ -905,6 +959,43 @@ class Database:
                WHERE id = ? AND status = 'active'""",
             (payout, now, dep_id))
         return bool(changed)
+
+    # --- блэкджек --------------------------------------------------------
+    def create_bj(self, round_id: str, user_id: int, bet: int, deck: list[dict],
+                  player: list[dict], dealer: list[dict]) -> None:
+        self._exec(
+            """INSERT INTO bj_rounds (id, user_id, bet, deck, player, dealer,
+                   status, doubled, payout, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'active', 0, 0, ?)""",
+            (round_id, user_id, bet, json.dumps(deck), json.dumps(player),
+             json.dumps(dealer), int(time.time())))
+
+    def bj_round(self, round_id: str) -> dict | None:
+        return self._hydrate_bj(
+            self._row("SELECT * FROM bj_rounds WHERE id = ?", (round_id,)))
+
+    def active_bj(self, user_id: int) -> dict | None:
+        return self._hydrate_bj(self._row(
+            "SELECT * FROM bj_rounds WHERE user_id = ? AND status = 'active' "
+            "ORDER BY created_at DESC LIMIT 1", (user_id,)))
+
+    @staticmethod
+    def _hydrate_bj(row: dict | None) -> dict | None:
+        if not row:
+            return None
+        for key in ("deck", "player", "dealer"):
+            row[key] = json.loads(row[key])
+        row["doubled"] = bool(row.get("doubled"))
+        return row
+
+    def update_bj(self, round_id: str, player: list[dict], dealer: list[dict],
+                  status: str, payout: int, doubled: bool = False) -> None:
+        finished = int(time.time()) if status != "active" else None
+        self._exec(
+            """UPDATE bj_rounds SET player = ?, dealer = ?, status = ?, payout = ?,
+                   doubled = ?, finished_at = ? WHERE id = ?""",
+            (json.dumps(player), json.dumps(dealer), status, payout,
+             1 if doubled else 0, finished, round_id))
 
     # --- хаб игр ---------------------------------------------------------
     def game_players(self) -> dict[str, int]:

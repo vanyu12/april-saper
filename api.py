@@ -116,6 +116,8 @@ class Api:
                 "crash": int(raw.get("game_crash", 1)) == 1,
                 "roulette": int(raw.get("game_roulette", 1)) == 1,
                 "slots": int(raw.get("game_slots", 1)) == 1,
+                "coinflip": int(raw.get("game_coinflip", 1)) == 1,
+                "blackjack": int(raw.get("game_blackjack", 1)) == 1,
             },
         }
 
@@ -285,6 +287,8 @@ class Api:
         }
         if active:
             payload["active_round"] = self._round_view(active, user, reveal=False)
+        active_bj = self.db.active_bj(user["user_id"])
+        payload["active_bj"] = self._bj_view(active_bj) if active_bj else None
         return self._json(payload)
 
     def _round_view(self, rnd: dict, user: dict, reveal: bool) -> dict:
@@ -425,6 +429,7 @@ class Api:
         if finished or auto:
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "mines", payout)
+            payout = self._gold_pick(user, payout)
         status = "won" if finished else ("cashed" if auto else "active")
         self.db.update_round(rnd["id"], opened, mult, status, payout)
 
@@ -463,6 +468,7 @@ class Api:
         payout = game.payout_for(rnd["bet"], mult)
         payout = self._charm_bonus(user, payout)
         payout = self._apply_relic(user, "mines", payout)
+        payout = self._gold_pick(user, payout)
         self.db.update_round(rnd["id"], rnd["opened"], mult, "cashed", payout)
         balance = self.db.add_balance(user["user_id"], payout)
         self._finish(user, rnd["bet"], payout, mult)
@@ -504,10 +510,10 @@ class Api:
         self.db._exec("UPDATE users SET last_daily = ? WHERE user_id = ?",
                       (now, user["user_id"]))
         self.db.add_balance(user["user_id"], bonus)
-        awards.evaluate(self.db, user["user_id"])
+        earned = awards.evaluate(self.db, user["user_id"])
         balance = self.db.user(user["user_id"])["balance"]
         return self._json({"ok": True, "amount": bonus, "doubled": doubled,
-                           "balance": balance})
+                           "awards": earned, "balance": balance})
 
     async def history(self, request: web.Request) -> web.Response:
         user = self._auth(request)
@@ -652,6 +658,231 @@ class Api:
             "quests": self._quests_view(user),
         })
 
+    async def coinflip(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        body = await self._body(request)
+        try:
+            bet = int(body.get("bet", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректная ставка")
+        pick = str(body.get("pick", "heads")).lower()
+        if pick not in ("heads", "tails"):
+            return self._fail("Выберите «орёл» или «решку»")
+        error = self._bet_error(user, bet, "coinflip")
+        if error:
+            return self._fail(error, 403 if user.get("is_banned") else 400)
+
+        nonce = self.db.bump_nonce(user["user_id"])
+        side = game.coinflip(user["server_seed"], user["client_seed"], nonce)
+        win = side == pick
+        multiplier = game.COINFLIP_MULTIPLIER if win else 0.0
+        payout = int(math.floor(bet * multiplier)) if win else 0
+        refund = 0
+        if win:
+            payout = self._charm_bonus(user, payout)
+            payout = self._apply_relic(user, "coinflip", payout)
+        else:
+            refund = self._insurance_refund(user, bet)
+
+        self.db.add_balance(user["user_id"], payout - bet)
+        self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "coinflip", bet, win,
+                         payout, {"side": side, "pick": pick, "nonce": nonce})
+        self._finish(user, bet, payout, multiplier or 1.0)
+        self._settle_referral(user["user_id"])
+
+        return self._json({
+            "ok": True,
+            "side": side,
+            "pick": pick,
+            "win": win,
+            "multiplier": multiplier,
+            "payout": payout,
+            "refund": refund,
+            "balance": self.db.user(user["user_id"])["balance"],
+            "quests": self._quests_view(user),
+        })
+
+    # --- блэкджек --------------------------------------------------------
+    def _bj_view(self, rnd: dict) -> dict:
+        player = rnd["player"]
+        dealer = rnd["dealer"]
+        finished = rnd["status"] != "active"
+        dealer_view = dealer if finished else dealer[:1]
+        multiplier = game.bj_multiplier(player, dealer) if finished else 0.0
+        return {
+            "id": rnd["id"],
+            "bet": rnd["bet"],
+            "doubled": bool(rnd.get("doubled")),
+            "player": player,
+            "dealer": dealer_view,
+            "player_value": game.bj_value(player),
+            "dealer_value": game.bj_value(dealer_view),
+            "dealer_hidden": not finished and len(dealer) > 1,
+            "status": rnd["status"],
+            "payout": rnd["payout"],
+            "multiplier": multiplier,
+            "blackjack": game.bj_blackjack(player),
+        }
+
+    def _bj_settle(self, user: dict, rnd: dict, player: list[dict],
+                   dealer: list[dict], doubled: bool, status: str = "finished") -> tuple[int, float]:
+        stake = rnd["bet"] * (2 if doubled else 1)
+        multiplier = game.bj_multiplier(player, dealer) if status == "finished" else 0.0
+        payout = int(math.floor(stake * multiplier)) if multiplier > 0 else 0
+        if payout > 0:
+            extra = 0
+            relic = game.GAME_RELICS.get("blackjack")
+            if relic and self.db.item_qty(user["user_id"], relic) > 0:
+                extra += int(payout * game.RELIC_BONUS)
+            if self.db.take_item(user["user_id"], "charm"):
+                extra += int(payout * game.CHARM_BONUS)
+            if extra > 0:
+                payout += extra
+                self.db.add_balance(user["user_id"], extra)
+        self.db.add_balance(user["user_id"], payout)
+        self.db.update_bj(rnd["id"], player, dealer, status, payout, doubled)
+        self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "blackjack", stake,
+                         payout > 0, payout, {"status": status, "doubled": doubled})
+        self._finish(user, stake, payout, multiplier or 1.0)
+        self._settle_referral(user["user_id"])
+        return payout, multiplier
+
+    def _bj_payload(self, user: dict, rnd: dict, payout: int, multiplier: float) -> dict:
+        balance = self.db.user(user["user_id"])["balance"]
+        view = self._bj_view(rnd)
+        view["payout"] = payout
+        view["multiplier"] = multiplier
+        return {
+            "ok": True,
+            "round": view,
+            "balance": balance,
+            "quests": self._quests_view(user),
+        }
+
+    async def bj_start(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        body = await self._body(request)
+        try:
+            bet = int(body.get("bet", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректная ставка")
+        error = self._bet_error(user, bet, "blackjack")
+        if error:
+            return self._fail(error, 403 if user.get("is_banned") else 400)
+        if self.db.active_bj(user["user_id"]):
+            return self._fail("Сначала завершите текущую партию в «21»")
+        if self.db.active_round(user["user_id"]):
+            return self._fail("Сначала завершите текущую игру в «Сапёре»")
+
+        nonce = self.db.bump_nonce(user["user_id"])
+        deck = game.bj_deck(user["server_seed"], user["client_seed"], nonce)
+        player = [deck[0], deck[2]]
+        dealer = [deck[1], deck[3]]
+        round_id = uuid.uuid4().hex[:16]
+        balance = self.db.add_balance(user["user_id"], -bet)
+        self.db.create_bj(round_id, user["user_id"], bet, deck, player, dealer)
+        rnd = {"id": round_id, "bet": bet, "doubled": False, "status": "active",
+               "payout": 0, "player": player, "dealer": dealer}
+        if game.bj_blackjack(player) or game.bj_blackjack(dealer):
+            payout, multiplier = self._bj_settle(user, rnd, player, dealer, False)
+            rnd["status"] = "finished"
+            rnd["payout"] = payout
+            payload = self._bj_payload(user, rnd, payout, multiplier)
+            payload["instant"] = True
+            return self._json(payload)
+        payload = self._bj_payload(user, rnd, 0, 0.0)
+        payload["balance"] = balance
+        return self._json(payload)
+
+    async def bj_hit(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        body = await self._body(request)
+        rnd = self.db.bj_round(str(body.get("id", "")))
+        if not rnd or rnd["user_id"] != user["user_id"]:
+            return self._fail("Партия не найдена", 404)
+        if rnd["status"] != "active":
+            return self._fail("Партия уже завершена")
+        if rnd["doubled"]:
+            return self._fail("После удвоения карты больше не берутся")
+
+        player = list(rnd["player"])
+        dealer = list(rnd["dealer"])
+        index = len(player) + len(dealer)
+        if index >= len(rnd["deck"]):
+            return self._fail("Колода закончилась")
+        player.append(rnd["deck"][index])
+
+        if game.bj_value(player) > game.BJ_TARGET:
+            payout, multiplier = self._bj_settle(user, rnd, player, dealer, False, "bust")
+            rnd.update({"status": "bust", "player": player, "payout": payout})
+            return self._json(self._bj_payload(user, rnd, payout, 0.0))
+
+        self.db.update_bj(rnd["id"], player, dealer, "active", 0)
+        rnd["player"] = player
+        return self._json(self._bj_payload(user, rnd, 0, 0.0))
+
+    async def bj_stand(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        body = await self._body(request)
+        rnd = self.db.bj_round(str(body.get("id", "")))
+        if not rnd or rnd["user_id"] != user["user_id"]:
+            return self._fail("Партия не найдена", 404)
+        if rnd["status"] != "active":
+            return self._fail("Партия уже завершена")
+
+        player = list(rnd["player"])
+        dealer = list(rnd["dealer"])
+        index = len(player) + len(dealer)
+        dealer = game.bj_dealer_play(rnd["deck"][index:], dealer)
+        payout, multiplier = self._bj_settle(user, rnd, player, dealer, rnd["doubled"])
+        rnd.update({"status": "finished", "player": player, "dealer": dealer,
+                    "payout": payout})
+        return self._json(self._bj_payload(user, rnd, payout, multiplier))
+
+    async def bj_double(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        body = await self._body(request)
+        rnd = self.db.bj_round(str(body.get("id", "")))
+        if not rnd or rnd["user_id"] != user["user_id"]:
+            return self._fail("Партия не найдена", 404)
+        if rnd["status"] != "active":
+            return self._fail("Партия уже завершена")
+        if len(rnd["player"]) != 2:
+            return self._fail("Удвоение доступно только на первых двух картах")
+        if user["balance"] < rnd["bet"]:
+            return self._fail("Недостаточно средств для удвоения")
+
+        self.db.add_balance(user["user_id"], -rnd["bet"])
+        player = list(rnd["player"])
+        dealer = list(rnd["dealer"])
+        index = len(player) + len(dealer)
+        if index >= len(rnd["deck"]):
+            return self._fail("Колода закончилась")
+        player.append(rnd["deck"][index])
+
+        if game.bj_value(player) > game.BJ_TARGET:
+            payout, multiplier = self._bj_settle(user, rnd, player, dealer, True, "bust")
+            rnd.update({"status": "bust", "player": player, "doubled": True,
+                        "payout": payout})
+            return self._json(self._bj_payload(user, rnd, payout, 0.0))
+
+        index = len(player) + len(dealer)
+        dealer = game.bj_dealer_play(rnd["deck"][index:], dealer)
+        payout, multiplier = self._bj_settle(user, rnd, player, dealer, True)
+        rnd.update({"status": "finished", "player": player, "dealer": dealer,
+                    "doubled": True, "payout": payout})
+        return self._json(self._bj_payload(user, rnd, payout, multiplier))
+
     async def wheel(self, request: web.Request) -> web.Response:
         user = self._auth(request)
         if not user:
@@ -761,7 +992,6 @@ class Api:
         extra = int(payout * game.CHARM_BONUS)
         if extra <= 0:
             return payout
-        self.db.add_balance(user["user_id"], extra)
         return payout + extra
 
     def _apply_relic(self, user: dict, game_key: str, payout: int) -> int:
@@ -773,7 +1003,16 @@ class Api:
         bonus = int(payout * game.RELIC_BONUS)
         if bonus <= 0:
             return payout
-        self.db.add_balance(user["user_id"], bonus)
+        return payout + bonus
+
+    def _gold_pick(self, user: dict, payout: int) -> int:
+        if payout <= 0:
+            return payout
+        if self.db.item_qty(user["user_id"], "gold_pick") <= 0:
+            return payout
+        bonus = int(payout * game.GOLD_PICK_BONUS)
+        if bonus <= 0:
+            return payout
         return payout + bonus
 
     async def crash(self, request: web.Request) -> web.Response:
@@ -863,7 +1102,7 @@ class Api:
             grant = dict(bundle["items"])
         price = int(entry["price"])
         unique = {"relic_mines", "relic_dice", "relic_wheel", "relic_crash",
-                  "theme_neon", "theme_gold"}
+                  "theme_neon", "theme_gold", "gold_pick"}
         for item_key in (grant or {}):
             if item_key in unique and self.db.item_qty(user["user_id"], item_key) > 0:
                 return self._fail("Этот предмет уже куплен")
@@ -879,6 +1118,39 @@ class Api:
             "balance": balance,
             "inventory": self._inventory_view(user),
             "bought": entry["title"],
+        })
+
+    async def shop_use(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        key = str(body.get("key", ""))
+        if key != "lootbox":
+            return self._fail("Этот предмет нельзя открыть")
+        if not self.db.take_item(user["user_id"], "lootbox"):
+            return self._fail("Кейса удачи нет")
+        nonce = self.db.bump_nonce(user["user_id"])
+        reward = game.open_lootbox(user["server_seed"], user["client_seed"], nonce)
+        if reward["kind"] == "coins":
+            self.db.add_balance(user["user_id"], int(reward["amount"]))
+            title = f"+{reward['amount']} mCoin"
+        else:
+            qty = int(reward.get("qty", 1))
+            self.db.add_item(user["user_id"], reward["item"], qty)
+            item = next((i for i in game.SHOP_ITEMS if i["key"] == reward["item"]),
+                        None)
+            title = f"{(item['title'] if item else reward['item'])} ×{qty}"
+        awards.evaluate(self.db, user["user_id"])
+        fresh = self.db.user(user["user_id"])
+        return self._json({
+            "ok": True,
+            "reward": reward,
+            "title": title,
+            "balance": fresh["balance"],
+            "inventory": self._inventory_view(fresh),
         })
 
     # --- admin -----------------------------------------------------------
@@ -900,9 +1172,10 @@ class Api:
                                       game.HOURLY_COOLDOWN, game.HOURLY_BONUS)
         if amount is None:
             return self._fail("Бонус ещё не готов", 429)
-        awards.evaluate(self.db, user["user_id"])
+        earned = awards.evaluate(self.db, user["user_id"])
         fresh = self.db.user(user["user_id"])
-        return self._json({"ok": True, "amount": amount, "balance": fresh["balance"],
+        return self._json({"ok": True, "amount": amount, "awards": earned,
+                           "balance": fresh["balance"],
                            "user": self._public_user(fresh)})
 
     async def spin(self, request: web.Request) -> web.Response:
@@ -924,10 +1197,11 @@ class Api:
             qty = game.CHARM_CHARGES if prize["item"] == "charm" else 1
             self.db.add_item(user["user_id"], prize["item"], qty)
         self.db.mark_spin(user["user_id"], now, next_day)
-        awards.evaluate(self.db, user["user_id"])
+        earned = awards.evaluate(self.db, user["user_id"])
         fresh = self.db.user(user["user_id"])
         return self._json({"ok": True, "index": index, "prize": self._prize_view(prize),
-                           "day": day, "next_day": next_day, "balance": fresh["balance"],
+                           "day": day, "next_day": next_day, "awards": earned,
+                           "balance": fresh["balance"],
                            "user": self._public_user(fresh)})
 
     async def invite_claim(self, request: web.Request) -> web.Response:
@@ -951,9 +1225,10 @@ class Api:
         if not self.db.invite_claim(user["user_id"], step):
             return self._fail("Награда уже получена")
         self.db.add_balance(user["user_id"], reward)
-        awards.evaluate(self.db, user["user_id"])
+        earned = awards.evaluate(self.db, user["user_id"])
         balance = self.db.user(user["user_id"])["balance"]
-        return self._json({"ok": True, "step": step, "reward": reward, "balance": balance})
+        return self._json({"ok": True, "step": step, "reward": reward,
+                           "awards": earned, "balance": balance})
 
     async def _channel_member(self, channel: str, user_id: int) -> bool:
         if not config.bot_token:
@@ -989,10 +1264,11 @@ class Api:
         if not self.db.sponsor_claim(user["user_id"], channel):
             return self._fail("Награда уже получена")
         self.db.add_balance(user["user_id"], game.SPONSOR_REWARD)
-        awards.evaluate(self.db, user["user_id"])
+        earned = awards.evaluate(self.db, user["user_id"])
         balance = self.db.user(user["user_id"])["balance"]
         return self._json({"ok": True, "channel": "@" + channel,
-                           "reward": game.SPONSOR_REWARD, "balance": balance})
+                           "reward": game.SPONSOR_REWARD, "awards": earned,
+                           "balance": balance})
 
     async def deposit_create(self, request: web.Request) -> web.Response:
         user = self._auth(request)
@@ -1025,9 +1301,10 @@ class Api:
                 self.db.create_deposit(dep_id, user["user_id"], "savings", amount,
                                        game.SAVINGS_RATE_BPS, now, None)
             self.db.add_balance(user["user_id"], -amount)
-            awards.evaluate(self.db, user["user_id"])
+            earned = awards.evaluate(self.db, user["user_id"])
             fresh = self.db.user(user["user_id"])
-            return self._json({"ok": True, "id": dep_id, "balance": fresh["balance"],
+            return self._json({"ok": True, "id": dep_id, "awards": earned,
+                               "balance": fresh["balance"],
                                "deposits": self._deposits_view(fresh)})
         try:
             days = int(body.get("days", 0))
@@ -1040,9 +1317,10 @@ class Api:
         self.db.add_balance(user["user_id"], -amount)
         self.db.create_deposit(dep_id, user["user_id"], "fixed", amount,
                                plan["rate_bps"], now, now + days * 86400)
-        awards.evaluate(self.db, user["user_id"])
+        earned = awards.evaluate(self.db, user["user_id"])
         fresh = self.db.user(user["user_id"])
-        return self._json({"ok": True, "id": dep_id, "balance": fresh["balance"],
+        return self._json({"ok": True, "id": dep_id, "awards": earned,
+                           "balance": fresh["balance"],
                            "deposits": self._deposits_view(fresh)})
 
     async def deposit_close(self, request: web.Request) -> web.Response:
@@ -1067,9 +1345,10 @@ class Api:
         if not self.db.close_deposit(dep_id, payout, now):
             return self._fail("Депозит уже закрыт")
         self.db.add_balance(user["user_id"], payout)
-        awards.evaluate(self.db, user["user_id"])
+        earned = awards.evaluate(self.db, user["user_id"])
         fresh = self.db.user(user["user_id"])
-        return self._json({"ok": True, "payout": payout, "balance": fresh["balance"],
+        return self._json({"ok": True, "payout": payout, "awards": earned,
+                           "balance": fresh["balance"],
                            "deposits": self._deposits_view(fresh)})
 
     async def admin_overview(self, request: web.Request) -> web.Response:
@@ -1080,6 +1359,8 @@ class Api:
             "ok": True,
             "stats": self.db.admin_stats(),
             "games": self.db.admin_game_stats(),
+            "economy": self.db.admin_economy(),
+            "duels": self.db.admin_duels(8),
             "settings": self._public_settings(),
             "recent": self.db.admin_recent(12),
         })
@@ -1187,7 +1468,7 @@ class Api:
         allowed = ("min_bet", "max_bet", "min_mines", "max_mines",
                    "daily_bonus", "maintenance",
                    "game_mines", "game_dice", "game_wheel", "game_crash",
-                   "game_roulette", "game_slots")
+                   "game_roulette", "game_slots", "game_coinflip", "game_blackjack")
         updates: dict[str, int] = {}
         for key in allowed:
             if key not in body:
@@ -1214,7 +1495,7 @@ class Api:
         if merged["maintenance"] not in (0, 1):
             return self._fail("Техработы: 0 или 1")
         for key in ("game_mines", "game_dice", "game_wheel", "game_crash",
-                    "game_roulette", "game_slots"):
+                    "game_roulette", "game_slots", "game_coinflip", "game_blackjack"):
             if merged.get(key, 1) not in (0, 1):
                 return self._fail(f"Флаг игры {key}: только 0 или 1")
 
@@ -1240,10 +1521,16 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/games/dice", api.dice)
     app.router.add_post("/api/games/wheel", api.wheel)
     app.router.add_post("/api/games/crash", api.crash)
+    app.router.add_post("/api/games/coinflip", api.coinflip)
+    app.router.add_post("/api/games/bj/start", api.bj_start)
+    app.router.add_post("/api/games/bj/hit", api.bj_hit)
+    app.router.add_post("/api/games/bj/stand", api.bj_stand)
+    app.router.add_post("/api/games/bj/double", api.bj_double)
     app.router.add_post("/api/quests", api.quests)
     app.router.add_post("/api/quests/claim", api.quest_claim)
     app.router.add_post("/api/shop", api.shop)
     app.router.add_post("/api/shop/buy", api.shop_buy)
+    app.router.add_post("/api/shop/use", api.shop_use)
     app.router.add_post("/api/bonus/hourly", api.hourly)
     app.router.add_post("/api/spin", api.spin)
     app.router.add_post("/api/invites/claim", api.invite_claim)

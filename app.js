@@ -31,6 +31,13 @@ const $ = (id) => document.getElementById(id);
 const fmt = (n) => new Intl.NumberFormat("ru-RU").format(Math.round(n));
 const fmtMult = (m) => "×" + Number(m).toFixed(2).replace(".", ",");
 
+function awardsNote(awards) {
+  if (!awards || !awards.length) return "";
+  const sum = awards.reduce((total, item) => total + (item.reward || 0), 0);
+  const titles = awards.map((item) => item.title).join(", ");
+  return ` · ${titles} +${fmt(sum)} mCoin`;
+}
+
 function haptic(type) {
   if (!tg || !tg.HapticFeedback) return;
   try {
@@ -332,6 +339,8 @@ const HUB_GAMES = [
   ["dice", "🎲", "Кости", "Чёт или нечёт ×1,96"],
   ["wheel", "🎡", "Колесо", "Шесть секторов до ×3,2"],
   ["crash", "📈", "Краш", "Забери до краша"],
+  ["coinflip", "🪙", "Орёл и решка", "Монета 50/50 ×1,96"],
+  ["blackjack", "♠️", "21", "Блэкджек против дилера"],
 ];
 
 function renderGamesHub() {
@@ -386,7 +395,7 @@ async function claimHourly() {
     sfx.coin();
     haptic("success");
     renderAll();
-    toast(`Бонус +${fmt(data.amount)} mCoin`);
+    toast(`Бонус +${fmt(data.amount)} mCoin${awardsNote(data.awards)}`);
   } catch (e) {
     toast(e.message);
   }
@@ -411,7 +420,7 @@ async function spinDaily() {
     sfx.cash();
     haptic("success");
     renderAll();
-    toast("Приз: " + data.prize.title);
+    toast("Приз: " + data.prize.title + awardsNote(data.awards));
   } catch (e) {
     toast(e.message);
   } finally {
@@ -437,7 +446,7 @@ async function claimSponsor(channel) {
     const data = await api("/api/sponsors/claim", { channel });
     sfx.cash();
     haptic("success");
-    toast(`Спонсор +${fmt(data.reward)} mCoin`);
+    toast(`Спонсор +${fmt(data.reward)} mCoin${awardsNote(data.awards)}`);
     await loadState();
   } catch (e) {
     toast(e.message);
@@ -457,7 +466,7 @@ async function depositCreate() {
     state.deposits = data.deposits;
     haptic("success");
     renderAll();
-    toast("Депозит открыт");
+    toast("Депозит открыт" + awardsNote(data.awards));
   } catch (e) {
     toast(e.message);
   }
@@ -471,7 +480,7 @@ async function savingsPut() {
     state.deposits = data.deposits;
     haptic("success");
     renderAll();
-    toast("Счёт пополнен");
+    toast("Счёт пополнен" + awardsNote(data.awards));
   } catch (e) {
     toast(e.message);
   }
@@ -489,7 +498,7 @@ async function depositClose(id) {
     state.deposits = data.deposits;
     haptic("success");
     renderAll();
-    toast(`Закрыто, +${fmt(data.payout)} mCoin`);
+    toast(`Закрыто, +${fmt(data.payout)} mCoin${awardsNote(data.awards)}`);
   } catch (e) {
     toast(e.message);
   }
@@ -758,6 +767,8 @@ const ADMIN_ITEMS = [
   ["relic_crash", "Краш-модуль"],
   ["theme_neon", "Неоновая тема"],
   ["theme_gold", "Золотые клетки"],
+  ["gold_pick", "Золотая кирка"],
+  ["lootbox", "Кейс удачи"],
 ];
 
 function renderAdminStats() {
@@ -776,6 +787,58 @@ function renderAdminStats() {
   $("adminStats").innerHTML = cards
     .map(([label, value]) =>
       `<div class="stat"><span class="stat-value">${value}</span><span class="stat-label">${label}</span></div>`)
+    .join("");
+}
+
+function renderAdminEconomy() {
+  const economy = state.admin && state.admin.economy;
+  if (!economy) return;
+  const cards = [
+    ["Игроков", fmt(economy.players)],
+    ["В обороте", fmt(economy.balance)],
+    ["В депозитах", fmt(economy.deposits_locked)],
+    ["Депозитов", fmt(economy.deposits_count)],
+    ["Дуэлей", fmt(economy.duels)],
+    ["Достижений", fmt(economy.achievements)],
+    ["Забанено", fmt(economy.banned)],
+    ["Дуэлей сыграно", fmt(economy.duels_finished)],
+  ];
+  $("adminEconomy").innerHTML = cards
+    .map(([label, value]) =>
+      `<div class="stat"><span class="stat-value">${value}</span><span class="stat-label">${label}</span></div>`)
+    .join("");
+}
+
+function renderAdminDuels() {
+  const box = $("adminDuels");
+  const items = (state.admin && state.admin.duels) || [];
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">Дуэлей пока нет</div>';
+    return;
+  }
+  const labels = {
+    pending: "ждёт ответа",
+    finished: "завершена",
+    declined: "отклонена",
+    cancelled: "отменена",
+    expired: "истекла",
+  };
+  box.innerHTML = items
+    .map((d) => {
+      const winner = d.winner_id
+        ? (Number(d.winner_id) === Number(d.challenger_id) ? d.challenger : d.opponent)
+        : "—";
+      const rolls = d.challenger_roll != null
+        ? ` · ${d.challenger_roll}:${d.opponent_roll}`
+        : "";
+      return `<div class="row">
+        <div class="row-main">
+          <div class="row-title">${escapeHtml(d.challenger)} vs ${escapeHtml(d.opponent)}</div>
+          <div class="row-sub">${fmt(d.bet)} mCoin · ${labels[d.status] || d.status}${rolls}</div>
+        </div>
+        <div class="row-value">${escapeHtml(winner)}</div>
+      </div>`;
+    })
     .join("");
 }
 
@@ -863,6 +926,10 @@ function fillSettingsForm(settings) {
   $("setGameDice").checked = games.dice !== false;
   $("setGameWheel").checked = games.wheel !== false;
   $("setGameCrash").checked = games.crash !== false;
+  $("setGameRoulette").checked = games.roulette !== false;
+  $("setGameSlots").checked = games.slots !== false;
+  $("setGameCoinflip").checked = games.coinflip !== false;
+  $("setGameBlackjack").checked = games.blackjack !== false;
 }
 
 async function loadAdmin() {
@@ -870,6 +937,8 @@ async function loadAdmin() {
     const data = await api("/api/admin/overview");
     state.admin = data;
     renderAdminStats();
+    renderAdminEconomy();
+    renderAdminDuels();
     renderAdminGames();
     renderAdminRecent();
     fillSettingsForm(data.settings);
@@ -933,6 +1002,10 @@ async function saveAdminSettings() {
       game_dice: $("setGameDice").checked ? 1 : 0,
       game_wheel: $("setGameWheel").checked ? 1 : 0,
       game_crash: $("setGameCrash").checked ? 1 : 0,
+      game_roulette: $("setGameRoulette").checked ? 1 : 0,
+      game_slots: $("setGameSlots").checked ? 1 : 0,
+      game_coinflip: $("setGameCoinflip").checked ? 1 : 0,
+      game_blackjack: $("setGameBlackjack").checked ? 1 : 0,
     };
     const data = await api("/api/admin/settings", payload);
     state.settings = data.settings;
@@ -953,6 +1026,7 @@ function switchGame(name) {
     pane.classList.toggle("active", pane.id === "game-pane-" + name));
   if (name === "wheel") renderWheel();
   if (name === "crash") renderCrashTarget();
+  if (name === "blackjack") renderBlackjack();
 }
 
 function clampBet(value) {
@@ -1063,8 +1137,129 @@ async function playDice(pick) {
   }
 }
 
-async function spinWheel() {
-  const input = $("wheelBet");
+async function playCoinflip(pick) {
+  const input = $("coinBet");
+  const bet = clampBet(parseInt(input.value || "0", 10));
+  input.value = bet;
+  const face = $("coinFace");
+  const hint = $("coinHint");
+  try {
+    const data = await api("/api/games/coinflip", { bet, pick });
+    state.user.balance = data.balance;
+    state.quests = data.quests || state.quests;
+    face.textContent = data.side === "heads" ? "О" : "Р";
+    face.classList.remove("flip");
+    void face.offsetWidth;
+    face.classList.add("flip");
+    if (data.win) {
+      sfx.coin();
+      haptic("success");
+      toast(`+${fmt(data.payout)} mCoin`);
+      hint.textContent = `Выпал ${data.side === "heads" ? "орёл" : "решка"} — угадали`;
+    } else {
+      sfx.boom();
+      haptic("error");
+      hint.textContent = `Выпала ${data.side === "heads" ? "орёл" : "решка"} — мимо`;
+    }
+    renderAll();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+/* ---------- блэкджек ---------- */
+
+function bjCardHtml(card) {
+  const red = card.suit === "♥" || card.suit === "♦";
+  return `<div class="bj-card${red ? " red" : ""}"><b>${card.rank}</b><i>${card.suit}</i></div>`;
+}
+
+function bjHint(round) {
+  if (!round) return "Соберите 21 или ближе к 21, чем дилер. Блэкджек платит ×2,5.";
+  if (round.status === "active") {
+    const shown = round.dealer_hidden ? `${round.dealer_value}+` : round.dealer_value;
+    return `Ваши очки: ${round.player_value}. У дилера: ${shown}.`;
+  }
+  if (round.status === "bust") return `Перебор — ${fmt(round.player_value)}. Ставка сгорела.`;
+  if (round.multiplier >= 2.5) return `Блэкджек! Выплата ${fmt(round.payout)} mCoin`;
+  if (round.multiplier >= 2) return `Победа ${round.player_value} : ${round.dealer_value} — ${fmt(round.payout)} mCoin`;
+  if (round.multiplier >= 1) return `Ничья ${round.player_value} : ${round.dealer_value} — ставка возвращена`;
+  return `Дилер сильнее: ${round.dealer_value} против ${round.player_value}`;
+}
+
+function renderBlackjack() {
+  const box = $("bjPlayer");
+  if (!box) return;
+  const round = state.bj;
+  const active = !!round && round.status === "active";
+  const dealerBox = $("bjDealer");
+  const playerBox = $("bjPlayer");
+  box.innerHTML = "";
+  dealerBox.innerHTML = "";
+  playerBox.innerHTML = "";
+  $("bjDeal").hidden = active;
+  $("bjHit").hidden = !active;
+  $("bjStand").hidden = !active;
+  $("bjDouble").hidden = !active || (round.player && round.player.length !== 2);
+  if (!round) {
+    $("bjDealerValue").textContent = "0";
+    $("bjPlayerValue").textContent = "0";
+    $("bjHint").textContent = bjHint(null);
+    return;
+  }
+  dealerBox.innerHTML = round.dealer.map(bjCardHtml).join("") +
+    (round.dealer_hidden ? '<div class="bj-card back">?</div>' : "");
+  playerBox.innerHTML = round.player.map(bjCardHtml).join("");
+  $("bjDealerValue").textContent = round.dealer_hidden
+    ? `${round.dealer_value}+` : round.dealer_value;
+  $("bjPlayerValue").textContent = round.player_value;
+  $("bjHint").textContent = bjHint(round);
+}
+
+function bjApply(data) {
+  state.bj = data.round || null;
+  state.user.balance = data.balance;
+  state.quests = data.quests || state.quests;
+  renderBlackjack();
+  renderBalance();
+  renderQuests();
+  const round = state.bj;
+  if (!round || round.status === "active") return;
+  if (round.payout > 0) {
+    sfx.cash();
+    haptic("success");
+    toast(`+${fmt(round.payout)} mCoin`);
+    if (round.multiplier >= 2.5) confetti();
+  } else {
+    sfx.boom();
+    haptic("error");
+  }
+}
+
+async function bjDeal() {
+  const input = $("bjBet");
+  const bet = clampBet(parseInt(input.value || "0", 10));
+  input.value = bet;
+  try {
+    const data = await api("/api/games/bj/start", { bet });
+    haptic();
+    bjApply(data);
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function bjAction(action) {
+  if (!state.bj || state.bj.status !== "active") return;
+  try {
+    const data = await api(`/api/games/bj/${action}`, { id: state.bj.id });
+    bjApply(data);
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function spinWheel() {  const input = $("wheelBet");
   const bet = clampBet(parseInt(input.value || "0", 10));
   input.value = bet;
   const btn = $("wheelSpin");
@@ -1121,6 +1316,8 @@ const INV_LABELS = {
   relic_crash: "📈 Краш-модуль",
   theme_neon: "🎨 Неон",
   theme_gold: "🏅 Золото",
+  gold_pick: "⛏ Золотая кирка",
+  lootbox: "🎁 Кейс удачи",
 };
 
 function renderShopInventory() {
@@ -1138,11 +1335,12 @@ function renderShopInventory() {
 const SHOP_SECTIONS = [
   { key: "items", title: "Расходники" },
   { key: "relics", title: "Реликвии" },
+  { key: "exclusive", title: "Эксклюзив" },
   { key: "cosmetics", title: "Косметика" },
 ];
 
 function shopCard(entry) {
-  const owned = !!entry.owned;
+  const owned = !!entry.owned && entry.key !== "lootbox";
   return `<div class="shop-card${owned ? " owned" : ""}">
     <div class="shop-meta">
       <div class="shop-title">${escapeHtml(entry.title)}${owned ? ' <span class="owned-mark">✓</span>' : ""}</div>
@@ -1170,6 +1368,9 @@ function renderShop() {
   }
   const bundles = $("shopBundles");
   if (bundles) bundles.innerHTML = (shop.bundles || []).map(shopCard).join("");
+  const lootbox = (shop.inventory && shop.inventory.lootbox) || 0;
+  const box = $("lootboxCard");
+  if (box) box.hidden = lootbox <= 0;
   renderShopInventory();
 }
 
@@ -1185,6 +1386,23 @@ async function loadShop() {
     state.shop = data;
     renderShop();
   } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function openLootbox() {
+  try {
+    const data = await api("/api/shop/use", { key: "lootbox" });
+    state.user.balance = data.balance;
+    state.shop.inventory = data.inventory || {};
+    sfx.cash();
+    haptic("success");
+    toast("Кейс: " + data.title);
+    if (data.reward && data.reward.kind === "coins") confetti();
+    renderAll();
+    renderShop();
+  } catch (e) {
+    haptic("error");
     toast(e.message);
   }
 }
@@ -1271,6 +1489,7 @@ function renderAll() {
   renderGamesHub();
   renderDailySpin();
   renderHistory();
+  renderBlackjack();
   applyCosmetics();
     const topTab = document.querySelector("#view-top .tab.active");
     renderTop(topTab ? topTab.dataset.tab : "balance");
@@ -1314,6 +1533,7 @@ async function loadState() {
   }
   state.fair = data.fair;
   state.round = data.active_round;
+  state.bj = data.active_bj || null;
   if (state.round) {
     state.bet = state.round.bet;
     state.mines = state.round.mines;
@@ -1423,7 +1643,7 @@ async function claimDaily() {
     state.user.daily_ready = false;
     haptic("success");
     renderAll();
-    toast(`Бонус +${fmt(data.amount)} mCoin`);
+    toast(`Бонус +${fmt(data.amount)} mCoin${awardsNote(data.awards)}`);
     await refreshMeta();
   } catch (e) {
     toast(e.message);
@@ -1696,11 +1916,45 @@ function bind() {
   $("crashSlider").addEventListener("input", renderCrashTarget);
   $("crashSpin").addEventListener("click", playCrash);
 
+  document.querySelectorAll("[data-flip]").forEach((btn) =>
+    btn.addEventListener("click", () => playCoinflip(btn.dataset.flip)));
+
+  document.querySelectorAll("[data-fbet]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const input = $("coinBet");
+      let v = parseInt(input.value, 10) || 0;
+      const mode = btn.dataset.fbet;
+      if (mode === "half") v = Math.floor(v / 2);
+      if (mode === "double") v = v * 2;
+      if (mode === "max") v = state.user ? state.user.balance : 1000;
+      input.value = clampBet(v);
+      haptic();
+    }));
+
+  document.querySelectorAll("[data-jbet]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const input = $("bjBet");
+      let v = parseInt(input.value, 10) || 0;
+      const mode = btn.dataset.jbet;
+      if (mode === "half") v = Math.floor(v / 2);
+      if (mode === "double") v = v * 2;
+      if (mode === "max") v = state.user ? state.user.balance : 1000;
+      input.value = clampBet(v);
+      haptic();
+    }));
+
+  if ($("bjDeal")) $("bjDeal").addEventListener("click", bjDeal);
+  if ($("bjHit")) $("bjHit").addEventListener("click", () => bjAction("hit"));
+  if ($("bjStand")) $("bjStand").addEventListener("click", () => bjAction("stand"));
+  if ($("bjDouble")) $("bjDouble").addEventListener("click", () => bjAction("double"));
+
   $("view-shop").addEventListener("click", (e) => {
     const btn = e.target.closest(".shop-buy");
     if (!btn || btn.disabled) return;
     buyItem(btn.dataset.key);
   });
+
+  if ($("openLootbox")) $("openLootbox").addEventListener("click", openLootbox);
 
   $("questsList").addEventListener("click", async (e) => {
     const btn = e.target.closest(".quest-claim");
@@ -1717,7 +1971,7 @@ function bind() {
   }
       state.user.balance = data.balance;
       sfx.cash();
-      toast(`Награда +${fmt(data.reward)} mCoin`);
+    toast(`Награда +${fmt(data.reward)} mCoin${awardsNote(data.awards)}`);
       renderAll();
     } catch (err) {
       toast(err.message);

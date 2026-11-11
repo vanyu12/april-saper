@@ -170,7 +170,6 @@ def build_dispatcher(db: Database) -> Dispatcher:
         extra = int(payout * game.CHARM_BONUS)
         if extra <= 0:
             return payout
-        db.add_balance(user["user_id"], extra)
         return payout + extra
 
     def apply_relic(user: dict, key: str, payout: int) -> int:
@@ -182,7 +181,16 @@ def build_dispatcher(db: Database) -> Dispatcher:
         bonus = int(payout * game.RELIC_BONUS)
         if bonus <= 0:
             return payout
-        db.add_balance(user["user_id"], bonus)
+        return payout + bonus
+
+    def gold_pick_bonus(user: dict, payout: int) -> int:
+        if payout <= 0:
+            return payout
+        if db.item_qty(user["user_id"], "gold_pick") <= 0:
+            return payout
+        bonus = int(payout * game.GOLD_PICK_BONUS)
+        if bonus <= 0:
+            return payout
         return payout + bonus
 
     def insurance_refund(user: dict, bet: int) -> int:
@@ -218,6 +226,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         payout = game.payout_for(rnd["bet"], mult)
         payout = charm_bonus(user, payout)
         payout = apply_relic(user, "mines", payout)
+        payout = gold_pick_bonus(user, payout)
         db.update_round(round_id, opened, mult, "cashed", payout)
         db.add_balance(user["user_id"], payout)
         earned, xp_gain, level_before, level_after = finish_game(
@@ -726,14 +735,16 @@ def build_dispatcher(db: Database) -> Dispatcher:
         return ("🎰 <b>Игры в чате</b>\n\n"
                 "/roulette 100 красное — рулетка (×2, зеро ×36)\n"
                 "/slots 100 — слоты (пара ×1,2, тройка до ×200)\n"
-                "/crash 100 2.5 — краш, цель от ×1,20 до ×10\n\n"
+                "/crash 100 2.5 — краш, цель от ×1,20 до ×10\n"
+                "/coin 100 орёл — монета, выплата ×1,96\n\n"
                 "Результат считается из твоего seed — проверить можно /fair.")
 
     def games_keyboard() -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎡 Рулетка", callback_data="menu:roulette"),
              InlineKeyboardButton(text="🎰 Слоты", callback_data="menu:slots")],
-            [InlineKeyboardButton(text="💥 Краш", callback_data="menu:crash")],
+            [InlineKeyboardButton(text="💥 Краш", callback_data="menu:crash"),
+             InlineKeyboardButton(text="🪙 Орёл и решка", callback_data="menu:coin")],
             [webapp_button()],
         ])
 
@@ -876,6 +887,58 @@ def build_dispatcher(db: Database) -> Dispatcher:
             lines.append(f"✅ Выигрыш: <b>+{num(payout)}</b> mCoin")
         else:
             lines.append("❌ Краш раньше цели")
+        if refund:
+            lines.append(f"🛡 Страховка вернула {num(refund)} mCoin")
+        lines.append(xp_line(xp_gain, before, after))
+        lines.extend(awards_lines(earned))
+        lines.append(f"💰 Баланс: {num(db.user(user['user_id'])['balance'])} mCoin")
+        return "\n".join(lines)
+
+    def coin_hint_text() -> str:
+        return ("🪙 <b>Орёл и решка</b>\n\n"
+                "Напиши: <code>/coin 100 орёл</code>\n"
+                "Выплата ×1,96 при победе.\n\n"
+                "Быстрый старт:")
+
+    def coin_hint_keyboard() -> InlineKeyboardMarkup:
+        rows = []
+        for bet in (100, 500):
+            rows.append([
+                InlineKeyboardButton(text=f"{num(bet)} орёл",
+                                     callback_data=f"cf:{bet}:heads"),
+                InlineKeyboardButton(text=f"{num(bet)} решка",
+                                     callback_data=f"cf:{bet}:tails"),
+            ])
+        rows.append([InlineKeyboardButton(text="⬅️ Игры", callback_data="menu:games")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def play_coin(user: dict, bet: int, pick: str) -> str:
+        error = bet_error(user, bet, "coinflip")
+        if error:
+            return "⚠️ " + error
+        nonce = db.bump_nonce(user["user_id"])
+        side = game.coinflip(user["server_seed"], user["client_seed"], nonce)
+        win = side == pick
+        multiplier = game.COINFLIP_MULTIPLIER if win else 0.0
+        payout = int(math.floor(bet * multiplier)) if win else 0
+        refund = 0
+        if win:
+            payout = charm_bonus(user, payout)
+            payout = apply_relic(user, "coinflip", payout)
+        else:
+            refund = insurance_refund(user, bet)
+        earned, xp_gain, before, after = settle_play(
+            user, "coinflip", bet, payout, multiplier or 1.0,
+            {"side": side, "pick": pick, "nonce": nonce, "chat": True})
+        side_title = "орёл" if side == "heads" else "решка"
+        pick_title = "орёл" if pick == "heads" else "решка"
+        lines = ["🪙 <b>Орёл и решка</b>", "",
+                 f"Выпало: <b>{side_title}</b>",
+                 f"Ставка: {num(bet)} mCoin на {pick_title}"]
+        if win:
+            lines.append(f"✅ Выигрыш: <b>+{num(payout)}</b> mCoin")
+        else:
+            lines.append("❌ Мимо")
         if refund:
             lines.append(f"🛡 Страховка вернула {num(refund)} mCoin")
         lines.append(xp_line(xp_gain, before, after))
@@ -1124,6 +1187,28 @@ def build_dispatcher(db: Database) -> Dispatcher:
         user = get_user(message)
         await message.answer(play_crash(user, int(raw_bet), target))
 
+    @dp.message(Command("coin", "flip"))
+    async def coin_cmd(message: Message) -> None:
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer(coin_hint_text(), reply_markup=coin_hint_keyboard())
+            return
+        raw_bet = parts[1].replace(" ", "")
+        if not raw_bet.isdigit():
+            await message.answer("Ставка должна быть числом. Пример: "
+                                 "<code>/coin 100 орёл</code>")
+            return
+        raw = parts[2].lower()
+        if raw in ("орёл", "орел", "о", "heads", "h"):
+            pick = "heads"
+        elif raw in ("решка", "р", "tails", "t"):
+            pick = "tails"
+        else:
+            await message.answer("Выбери: орёл или решка.")
+            return
+        user = get_user(message)
+        await message.answer(play_coin(user, int(raw_bet), pick))
+
     @dp.message(Command("duel", "duels"))
     async def duel_cmd(message: Message) -> None:
         user = get_user(message)
@@ -1310,6 +1395,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "/roulette 100 красное — рулетка (зеро ×36)\n"
             "/slots 100 — слоты (тройки до ×200)\n"
             "/crash 100 2.5 — краш с целью ×1,20–×10\n"
+            "/coin 100 орёл — орёл и решка, ×1,96\n"
             "/duel 100 @username — дуэль 1×1 на бросок\n"
             "/spin — колесо дня раз в 12 часов\n\n"
             "<b>Баланс и бонусы</b>\n"
@@ -1443,6 +1529,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             payout = game.payout_for(rnd["bet"], mult)
             payout = charm_bonus(user, payout)
             payout = apply_relic(user, "mines", payout)
+            payout = gold_pick_bonus(user, payout)
             db.update_round(round_id, opened, mult, "won", payout)
             db.add_balance(user["user_id"], payout)
             earned, xp_gain, level_before, level_after = finish_game(
@@ -1650,6 +1737,19 @@ def build_dispatcher(db: Database) -> Dispatcher:
         user = get_user(callback)
         await callback.message.answer(play_crash(user, int(bet_raw),
                                                  float(target_raw)))
+        await callback.answer("Готово")
+
+    @dp.callback_query(F.data == "menu:coin")
+    async def menu_coin(callback) -> None:
+        await callback.message.answer(coin_hint_text(),
+                                      reply_markup=coin_hint_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("cf:"))
+    async def coin_quick(callback) -> None:
+        _, bet_raw, pick = callback.data.split(":")
+        user = get_user(callback)
+        await callback.message.answer(play_coin(user, int(bet_raw), pick))
         await callback.answer("Готово")
 
     @dp.callback_query(F.data.startswith("d:"))
@@ -1925,6 +2025,7 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="roulette", description="Рулетка"),
         BotCommand(command="slots", description="Слоты"),
         BotCommand(command="crash", description="Краш"),
+        BotCommand(command="coin", description="Орёл и решка"),
         BotCommand(command="duel", description="Дуэль 1×1"),
         BotCommand(command="spin", description="Колесо дня"),
         BotCommand(command="bonus", description="Бонусы"),

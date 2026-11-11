@@ -274,6 +274,10 @@ SHOP_ITEMS = (
      "desc": "Бирюзовые акценты интерфейса"},
     {"key": "theme_gold", "title": "Золотые клетки", "price": 2000, "category": "cosmetics",
      "desc": "Золотая подсветка безопасных клеток"},
+    {"key": "gold_pick", "title": "Золотая кирка", "price": 6000, "category": "relics",
+     "desc": "Навсегда +3% к выплатам в «Сапёре»"},
+    {"key": "lootbox", "title": "Кейс удачи", "price": 800, "category": "exclusive",
+     "desc": "Случайная награда: mCoin, страховка или талисман"},
 )
 
 SHOP_BUNDLES = (
@@ -292,6 +296,7 @@ CHARM_BONUS = 0.1
 CHARM_CHARGES = 5
 
 RELIC_BONUS = 0.05
+GOLD_PICK_BONUS = 0.03
 GAME_RELICS = {
     "mines": "relic_mines",
     "dice": "relic_dice",
@@ -426,3 +431,93 @@ def deposit_interest(amount: int, rate_bps: int) -> int:
 def savings_interest(amount: int, rate_bps: int, seconds: int) -> int:
     seconds = max(0, int(seconds))
     return int(amount) * rate_bps * seconds // (10000 * 86400)
+
+
+COINFLIP_MULTIPLIER = 1.96
+
+
+def coinflip(server_seed: str, client_seed: str, nonce: int) -> str:
+    """«Орёл» (heads) и «решка» (tails) из HMAC-потока."""
+    value = next(_floats(server_seed, client_seed, nonce, 0, 1))
+    return "heads" if value < 0.5 else "tails"
+
+
+def open_lootbox(server_seed: str, client_seed: str, nonce: int) -> dict:
+    value = next(_floats(server_seed, client_seed, nonce, 0, 1))
+    if value < 0.40:
+        return {"kind": "coins", "amount": 200}
+    if value < 0.70:
+        return {"kind": "coins", "amount": 600}
+    if value < 0.88:
+        return {"kind": "coins", "amount": 1500}
+    if value < 0.96:
+        return {"kind": "coins", "amount": 3000}
+    if value < 0.99:
+        return {"kind": "item", "item": "insurance", "qty": 1}
+    return {"kind": "item", "item": "charm", "qty": CHARM_CHARGES}
+
+
+BJ_SUITS = ("♠", "♥", "♦", "♣")
+BJ_RANKS = ("2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A")
+BJ_BLACKJACK = 2.5
+BJ_TARGET = 21
+BJ_DEALER_STANDS = 17
+
+
+def bj_deck(server_seed: str, client_seed: str, nonce: int) -> list[dict]:
+    """Перемешанная колода 52 карты: тот же HMAC-поток, что и в остальных играх."""
+    deck = [{"rank": rank, "suit": suit} for suit in BJ_SUITS for rank in BJ_RANKS]
+    for i in range(len(deck) - 1, 0, -1):
+        r = next(_floats(server_seed, client_seed, nonce, i, 1))
+        j = int(r * (i + 1))
+        deck[i], deck[j] = deck[j], deck[i]
+    return deck
+
+
+def bj_rank_value(rank: str) -> int:
+    if rank == "A":
+        return 11
+    if rank in ("J", "Q", "K"):
+        return 10
+    return int(rank)
+
+
+def bj_value(cards: list[dict]) -> int:
+    """Стоимость руки: тузы считаются 11, пока перебор, иначе 1."""
+    total = sum(bj_rank_value(card["rank"]) for card in cards)
+    aces = sum(1 for card in cards if card["rank"] == "A")
+    while total > BJ_TARGET and aces:
+        total -= 10
+        aces -= 1
+    return total
+
+
+def bj_blackjack(cards: list[dict]) -> bool:
+    return len(cards) == 2 and bj_value(cards) == BJ_TARGET
+
+
+def bj_multiplier(player: list[dict], dealer: list[dict]) -> float:
+    """0 — проигрыш, 1 — ничья, 2 — победа, 2.5 — блэкджек."""
+    player_value = bj_value(player)
+    dealer_value = bj_value(dealer)
+    if player_value > BJ_TARGET:
+        return 0.0
+    if bj_blackjack(player) and not bj_blackjack(dealer):
+        return BJ_BLACKJACK
+    if dealer_value > BJ_TARGET:
+        return 2.0
+    if player_value > dealer_value:
+        return 2.0
+    if player_value == dealer_value:
+        return 1.0
+    return 0.0
+
+
+def bj_dealer_play(deck: list[dict], dealer: list[dict]) -> list[dict]:
+    """Дилер добирает до 17 включительно (мягкие 17 останавливают)."""
+    dealer = list(dealer)
+    index = len(dealer)
+    while bj_value(dealer) < BJ_DEALER_STANDS and index < len(deck):
+        dealer.append(deck[index])
+        index += 1
+    return dealer

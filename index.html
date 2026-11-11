@@ -51,6 +51,8 @@
         <button class="gs-btn" data-game="dice">🎲 Кости</button>
         <button class="gs-btn" data-game="wheel">🎡 Колесо</button>
         <button class="gs-btn" data-game="crash">📈 Краш</button>
+        <button class="gs-btn" data-game="coinflip">🪙 Орёл</button>
+        <button class="gs-btn" data-game="blackjack">♠️ 21</button>
       </div>
 
       <div class="game-pane active" id="game-pane-mines">
@@ -203,6 +205,69 @@
           <button class="cta" id="crashSpin">Запустить</button>
         </div>
       </div>
+
+      <div class="game-pane" id="game-pane-coinflip">
+        <div class="panel">
+          <div class="field-row">
+            <label class="field-label" for="coinBet">Ставка</label>
+            <div class="bet-controls">
+              <button class="chip-btn" data-fbet="half">½</button>
+              <button class="chip-btn" data-fbet="double">2×</button>
+              <button class="chip-btn" data-fbet="max">MAX</button>
+            </div>
+          </div>
+          <div class="bet-input-wrap">
+            <span class="coin">◈</span>
+            <input id="coinBet" type="number" inputmode="numeric" min="10" step="10" value="50">
+            <span class="bet-unit">mCoin</span>
+          </div>
+          <div class="coin-stage">
+            <div class="coin-face" id="coinFace">🪙</div>
+          </div>
+          <div class="pick-row">
+            <button class="pick" data-flip="heads">Орёл <span>×1,96</span></button>
+            <button class="pick" data-flip="tails">Решка <span>×1,96</span></button>
+          </div>
+          <div class="hint" id="coinHint">Монета 50/50. Выберите сторону и бросайте.</div>
+        </div>
+      </div>
+
+      <div class="game-pane" id="game-pane-blackjack">
+        <div class="panel">
+          <div class="field-row">
+            <label class="field-label" for="bjBet">Ставка</label>
+            <div class="bet-controls">
+              <button class="chip-btn" data-jbet="half">½</button>
+              <button class="chip-btn" data-jbet="double">2×</button>
+              <button class="chip-btn" data-jbet="max">MAX</button>
+            </div>
+          </div>
+          <div class="bet-input-wrap">
+            <span class="coin">◈</span>
+            <input id="bjBet" type="number" inputmode="numeric" min="10" step="10" value="50">
+            <span class="bet-unit">mCoin</span>
+          </div>
+
+          <div class="bj-table">
+            <div class="bj-side">
+              <div class="bj-label">Дилер <b id="bjDealerValue">0</b></div>
+              <div class="bj-cards" id="bjDealer"></div>
+            </div>
+            <div class="bj-side">
+              <div class="bj-label">Вы <b id="bjPlayerValue">0</b></div>
+              <div class="bj-cards" id="bjPlayer"></div>
+            </div>
+          </div>
+
+          <div class="bj-actions" id="bjActions">
+            <button class="cta" id="bjDeal">Раздать</button>
+            <button class="secondary" id="bjHit" hidden>Взять</button>
+            <button class="secondary" id="bjStand" hidden>Стоп</button>
+            <button class="secondary" id="bjDouble" hidden>Удвоить</button>
+          </div>
+          <div class="hint" id="bjHint">Соберите 21 или ближе к 21, чем дилер. Блэкджек платит ×2,5.</div>
+        </div>
+      </div>
     </section>
 
     <section class="view" id="view-profile">
@@ -275,6 +340,11 @@
       <div class="card">
         <div class="card-title">Наборы</div>
         <div class="shop-list" id="shopBundles"></div>
+      </div>
+      <div class="card" id="lootboxCard" hidden>
+        <div class="card-title">Кейс удачи</div>
+        <p class="muted">У тебя есть кейсы. Открой и получи награду.</p>
+        <button class="cta" id="openLootbox">Открыть кейс</button>
       </div>
     </section>
 
@@ -368,6 +438,14 @@
     <div class="admin-pane active" id="pane-overview">
       <div class="stats-grid" id="adminStats"></div>
       <div class="card">
+        <div class="card-title">Экономика</div>
+        <div class="stats-grid" id="adminEconomy"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Последние дуэли</div>
+        <div class="list" id="adminDuels"></div>
+      </div>
+      <div class="card">
         <div class="card-title">По играм</div>
         <div class="list" id="adminGames"></div>
       </div>
@@ -397,6 +475,10 @@
         <label class="admin-check"><input type="checkbox" id="setGameDice"> Кости</label>
         <label class="admin-check"><input type="checkbox" id="setGameWheel"> Колесо</label>
         <label class="admin-check"><input type="checkbox" id="setGameCrash"> Краш</label>
+        <label class="admin-check"><input type="checkbox" id="setGameRoulette"> Рулетка</label>
+        <label class="admin-check"><input type="checkbox" id="setGameSlots"> Слоты</label>
+        <label class="admin-check"><input type="checkbox" id="setGameCoinflip"> Орёл и решка</label>
+        <label class="admin-check"><input type="checkbox" id="setGameBlackjack"> 21</label>
         <button class="secondary" id="saveSettings">Сохранить настройки</button>
       </div>
     </div>
