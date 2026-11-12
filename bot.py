@@ -76,20 +76,35 @@ def date_text(timestamp: int) -> str:
     return time.strftime("%d.%m.%Y %H:%M", time.localtime(timestamp))
 
 
+def _plural_text(value: int, one: str, few: str, many: str) -> str:
+    n = abs(int(value)) % 100
+    if 11 <= n <= 14:
+        return many
+    n %= 10
+    if n == 1:
+        return one
+    if 2 <= n <= 4:
+        return few
+    return many
+
+
 def seen_text(timestamp: int | None, now: int | None = None) -> str:
     """Когда игрок последний раз заходил в игру."""
     if not timestamp:
         return "давно не заходил(а)"
     current = int(now or time.time())
     delta = max(0, current - int(timestamp))
-    if delta < 90:
+    if delta < 60:
         return "был(а) только что"
     if delta < 3600:
-        return f"был(а) {delta // 60} мин назад"
+        minutes = delta // 60
+        return f"был(а) {minutes} {_plural_text(minutes, 'минуту', 'минуты', 'минут')} назад"
     if delta < 86400:
-        return f"был(а) {delta // 3600} ч назад"
-    if delta < 7 * 86400:
-        return f"был(а) {max(1, delta // 86400)} дн. назад"
+        hours = delta // 3600
+        return f"был(а) {hours} {_plural_text(hours, 'час', 'часа', 'часов')} назад"
+    if delta < 30 * 86400:
+        days = max(1, delta // 86400)
+        return f"был(а) {days} {_plural_text(days, 'день', 'дня', 'дней')} назад"
     return "заходил(а) " + date_text(timestamp)
 
 

@@ -679,13 +679,31 @@ function prefixClass(entry) {
   return `prefix-badge prefix-style-${style}`;
 }
 
+function pluralText(value, one, few, many) {
+  const n = Math.abs(Math.trunc(value)) % 100;
+  if (n >= 11 && n <= 14) return many;
+  const last = n % 10;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
+}
+
 function seenLabel(ts) {
   if (!ts) return "давно не заходил";
   const delta = Math.max(0, Math.floor(Date.now() / 1000) - Number(ts));
-  if (delta < 90) return "был(а) только что";
-  if (delta < 3600) return `был(а) ${Math.floor(delta / 60)} мин назад`;
-  if (delta < 86400) return `был(а) ${Math.floor(delta / 3600)} ч назад`;
-  if (delta < 7 * 86400) return `был(а) ${Math.max(1, Math.floor(delta / 86400))} дн. назад`;
+  if (delta < 60) return "был(а) только что";
+  if (delta < 3600) {
+    const minutes = Math.floor(delta / 60);
+    return `был(а) ${minutes} ${pluralText(minutes, "минуту", "минуты", "минут")} назад`;
+  }
+  if (delta < 86400) {
+    const hours = Math.floor(delta / 3600);
+    return `был(а) ${hours} ${pluralText(hours, "час", "часа", "часов")} назад`;
+  }
+  if (delta < 30 * 86400) {
+    const days = Math.max(1, Math.floor(delta / 86400));
+    return `был(а) ${days} ${pluralText(days, "день", "дня", "дней")} назад`;
+  }
   const date = new Date(Number(ts) * 1000);
   return "заходил(а) " + date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
 }
