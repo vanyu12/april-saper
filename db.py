@@ -288,6 +288,7 @@ DEFAULT_SETTINGS = {
 class Database:
     def __init__(self, path: str = "data/saper.db", dsn: str | None = None):
         self._lock = threading.RLock()
+        self._settings_cache: tuple[float, dict] = (0.0, {})
         self._dsn = (dsn if dsn is not None else os.getenv("DATABASE_URL", "")).strip()
         self.backend = "postgres" if self._dsn else "sqlite"
 
@@ -992,6 +993,9 @@ class Database:
 
     # --- settings --------------------------------------------------------
     def settings(self) -> dict:
+        cached_at, cached = self._settings_cache
+        if cached and time.time() - cached_at < 5:
+            return dict(cached)
         values = dict(DEFAULT_SETTINGS)
         for row in self._rows("SELECT key, value FROM settings"):
             values[row["key"]] = row["value"]
@@ -1001,6 +1005,7 @@ class Database:
                 result[key] = int(raw)
             except (TypeError, ValueError):
                 result[key] = raw
+        self._settings_cache = (time.time(), dict(result))
         return result
 
     def set_settings(self, updates: dict) -> dict:
@@ -1009,6 +1014,7 @@ class Database:
                 if key not in DEFAULT_SETTINGS:
                     continue
                 self._exec("UPDATE settings SET value = ? WHERE key = ?", (str(value), key))
+            self._settings_cache = (0.0, {})
         return self.settings()
 
     # --- admin -----------------------------------------------------------
@@ -1591,6 +1597,14 @@ class Database:
         return self._rows(
             "SELECT * FROM fish WHERE user_id = ? AND sold = ? "
             "ORDER BY created_at DESC", (user_id, sold))
+
+    def fish_stats(self, user_id: int) -> dict:
+        self._fish_table()
+        row = self._row(
+            "SELECT COUNT(*) AS c, COALESCE(MAX(weight_g), 0) AS w "
+            "FROM fish WHERE user_id = ?", (user_id,))
+        return {"count": int(row["c"]) if row else 0,
+                "best_weight": int(row["w"]) if row else 0}
 
     def sell_fish(self, user_id: int, fish_id: str) -> int | None:
         self._fish_table()

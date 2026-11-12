@@ -2228,3 +2228,38 @@ body.theme-gold .cell.safe {
   object-fit: cover;
   border-radius: 10px;
 }
+
+/* ---------- инвентарь ---------- */
+.inv-sections { display: flex; flex-direction: column; gap: 10px; }
+.inv-section-title { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+.inv-items { display: flex; flex-wrap: wrap; gap: 6px; }
+.inv-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 12px;
+}
+.inv-item b { color: var(--mint); font-size: 11px; }
+.inv-icon { font-size: 16px; line-height: 1; }
+img.inv-icon { width: 20px; height: 20px; border-radius: 6px; object-fit: cover; }
+
+/* ---------- motion: панели, карты, краш ---------- */
+.game-pane.active { animation: pane-in 0.22s ease; }
+@keyframes pane-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.bj-card { animation: deal-in 0.25s ease backwards; }
+@keyframes deal-in {
+  from { opacity: 0; transform: translateY(-8px) rotate(-3deg) scale(0.92); }
+  to { opacity: 1; transform: none; }
+}
+.crash-result.win { animation: pop 0.32s ease; }
+.crash-result.lose { animation: shake 0.32s ease; }
+.cashout-btn:active { transform: scale(0.98); }
+.game-menu-item, .hub-card { transition: transform 0.15s ease, border-color 0.15s ease; }
+.game-menu-item:active, .hub-card:active { transform: scale(0.985); }

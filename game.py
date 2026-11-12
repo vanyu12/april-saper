@@ -9,6 +9,7 @@ RTP = 0.99
 MIN_BET = 10
 MAX_BET = 100_000
 START_BALANCE = 1000
+REGISTER_BONUS = 1000
 DAILY_BONUS = 1000
 DAILY_COOLDOWN = 24 * 60 * 60
 HOURLY_BONUS = 500
@@ -369,44 +370,103 @@ DAILY_QUESTS = (
      "reward": 700},
 )
 
-ACHIEVEMENTS = (
-    {"key": "first_game", "icon": "🎯", "title": "Первая партия",
-     "desc": "Сыграть одну партию", "metric": "games_played", "target": 1,
-     "reward": 100, "xp": 20},
-    {"key": "games_10", "icon": "🔟", "title": "Десятка",
-     "desc": "Сыграть 10 партий", "metric": "games_played", "target": 10,
-     "reward": 200, "xp": 30},
-    {"key": "games_50", "icon": "🎖", "title": "Полсотни",
-     "desc": "Сыграть 50 партий", "metric": "games_played", "target": 50,
-     "reward": 500, "xp": 60},
-    {"key": "win_1", "icon": "🏅", "title": "Первая победа",
-     "desc": "Выиграть один раз", "metric": "games_won", "target": 1,
-     "reward": 100, "xp": 20},
-    {"key": "win_10", "icon": "🥇", "title": "Десять побед",
-     "desc": "Выиграть 10 раз", "metric": "games_won", "target": 10,
-     "reward": 400, "xp": 50},
-    {"key": "mult_3", "icon": "🔥", "title": "Кэшаут ×3",
-     "desc": "Забрать выигрыш на множителе ×3", "metric": "best_multiplier", "target": 3,
-     "reward": 250, "xp": 40},
-    {"key": "mult_10", "icon": "💎", "title": "Кэшаут ×10",
-     "desc": "Забрать выигрыш на множителе ×10", "metric": "best_multiplier", "target": 10,
-     "reward": 1000, "xp": 100},
-    {"key": "balance_5000", "icon": "🪙", "title": "Пять тысяч",
-     "desc": "Накопить 5 000 mCoin", "metric": "balance", "target": 5000,
-     "reward": 300, "xp": 50},
-    {"key": "deposit_first", "icon": "🏦", "title": "Первый вклад",
-     "desc": "Открыть депозит", "metric": "deposits_count", "target": 1,
-     "reward": 150, "xp": 25},
-    {"key": "duel_win_1", "icon": "⚔️", "title": "Первая дуэль",
-     "desc": "Выиграть дуэль 1×1", "metric": "duels_won", "target": 1,
-     "reward": 300, "xp": 50},
-    {"key": "invite_3", "icon": "👥", "title": "Три друга",
-     "desc": "Пригласить трёх друзей", "metric": "referrals", "target": 3,
-     "reward": 300, "xp": 40},
-    {"key": "spin_7", "icon": "🎡", "title": "Неделя удачи",
-     "desc": "Дойти до 7-го дня серии колеса", "metric": "spin_day", "target": 7,
-     "reward": 500, "xp": 60},
+_ACH_REWARDS = (1000, 1500, 2000, 3000, 5000, 7500, 10000, 15000, 20000,
+                30000, 50000, 75000, 100000)
+
+_ACH_CHAINS = (
+    {"key": "games_played", "icon": "🎯", "title": "Партии",
+     "metric": "games_played",
+     "targets": (1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500),
+     "desc": "Сыграть {value} партий"},
+    {"key": "games_won", "icon": "🏅", "title": "Победы",
+     "metric": "games_won",
+     "targets": (1, 5, 10, 25, 50, 100, 250, 500, 1000),
+     "desc": "Выиграть {value} раз"},
+    {"key": "total_wagered", "icon": "🎲", "title": "Оборот",
+     "metric": "total_wagered",
+     "targets": (100, 500, 1000, 5000, 10000, 50000, 100000, 500000,
+                 1000000, 5000000),
+     "desc": "Поставить {value} mCoin"},
+    {"key": "balance", "icon": "💰", "title": "Баланс",
+     "metric": "balance",
+     "targets": (5000, 10000, 25000, 50000, 100000, 250000, 500000,
+                 1000000),
+     "desc": "Накопить {value} mCoin"},
+    {"key": "best_multiplier", "icon": "🔥", "title": "Множитель",
+     "metric": "best_multiplier",
+     "targets": (2, 3, 5, 10, 25, 50, 100, 250),
+     "desc": "Забрать выигрыш на множителе ×{value}"},
+    {"key": "duels_won", "icon": "⚔️", "title": "Дуэли",
+     "metric": "duels_won",
+     "targets": (1, 3, 10, 30, 100),
+     "desc": "Выиграть {value} дуэлей"},
+    {"key": "referrals", "icon": "👥", "title": "Друзья",
+     "metric": "referrals",
+     "targets": (1, 3, 5, 10, 25, 50),
+     "desc": "Пригласить {value} друзей"},
+    {"key": "deposits_count", "icon": "🏦", "title": "Вклады",
+     "metric": "deposits_count",
+     "targets": (1, 3, 10, 25),
+     "desc": "Открыть {value} вкладов"},
+    {"key": "spin_day", "icon": "🎡", "title": "Серия колеса",
+     "metric": "spin_day",
+     "targets": (3, 7, 14, 30),
+     "desc": "Дойти до {value}-го дня серии колеса"},
+    {"key": "fish_count", "icon": "🐟", "title": "Улов",
+     "metric": "fish_count",
+     "targets": (1, 10, 50, 100, 500, 1000),
+     "desc": "Поймать {value} рыб"},
+    {"key": "fish_weight", "icon": "🐋", "title": "Трофей",
+     "metric": "fish_weight",
+     "targets": (5000, 20000, 100000, 500000, 1000000),
+     "desc": "Поймать рыбу весом {value} г"},
+    {"key": "user_level", "icon": "⭐", "title": "Уровень",
+     "metric": "user_level",
+     "targets": (5, 10, 20, 30, 40, 50, 75, 100),
+     "desc": "Достичь {value} уровня"},
+    {"key": "daily_streak", "icon": "📅", "title": "Серия входов",
+     "metric": "daily_streak",
+     "targets": (3, 7, 14, 30),
+     "desc": "Заходить {value} дней подряд"},
 )
+
+
+def _ach_display(value: int) -> str:
+    return f"{int(value):,}".replace(",", " ")
+
+
+def _achievement(chain: dict, target: int, index: int, levels: int) -> dict:
+    value = _ach_display(target)
+    metric = chain["metric"]
+    if metric == "best_multiplier":
+        title = f"{chain['title']} ×{target}"
+    elif metric == "fish_weight":
+        title = f"{chain['title']} {value} г"
+    elif metric == "user_level":
+        title = f"{chain['title']} {target}"
+    else:
+        title = f"{chain['title']} {value}"
+    span = len(_ACH_REWARDS) - 1
+    position = round(index / max(1, levels - 1) * span) if levels > 1 else 0
+    return {
+        "key": f"{chain['key']}_{target}",
+        "icon": chain["icon"],
+        "title": title,
+        "desc": chain["desc"].format(value=value),
+        "metric": metric,
+        "target": target,
+        "reward": int(_ACH_REWARDS[max(0, min(span, position))]),
+        "xp": 20 + index * 15,
+    }
+
+
+ACHIEVEMENTS = tuple(
+    _achievement(chain, target, index, len(chain["targets"]))
+    for chain in _ACH_CHAINS
+    for index, target in enumerate(chain["targets"])
+)
+
+ACHIEVEMENT_BY_KEY = {ach["key"]: ach for ach in ACHIEVEMENTS}
 
 SHOP_ITEMS = (
     {"key": "insurance", "title": "Страховка", "price": 120, "category": "items",

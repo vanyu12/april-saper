@@ -1916,6 +1916,35 @@ function renderProfilePrefixList() {
   }).join("");
 }
 
+function inventoryIcon(icon) {
+  if (!icon) return "";
+  if (/\.(jpg|png|webp)$/i.test(icon)) {
+    return `<img class="inv-icon" src="/static/${icon}" alt="">`;
+  }
+  return `<span class="inv-icon">${icon}</span>`;
+}
+
+function renderInventory() {
+  const box = $("inventorySections");
+  if (!box) return;
+  const sections = state.inventorySections || [];
+  box.innerHTML = sections.map((section) => {
+    const items = (section.items || []).map((item) => {
+      const qty = item.key === "fish_value" ? `◈ ${fmt(item.qty)}` : `×${item.qty}`;
+      return `<span class="inv-item">${inventoryIcon(item.icon)}<span>${escapeHtml(item.title)}</span><b>${qty}</b></span>`;
+    }).join("");
+    return `<div class="inv-section"><div class="inv-section-title">${escapeHtml(section.title)}</div><div class="inv-items">${items || '<span class="muted">Пусто</span>'}</div></div>`;
+  }).join("") || '<div class="muted">Загрузка…</div>';
+}
+
+async function loadInventory() {
+  try {
+    const data = await api("/api/inventory", {});
+    state.inventorySections = data.sections || [];
+    renderInventory();
+  } catch (e) {}
+}
+
 function applyCosmetics() {
   const inv = (state.shop && state.shop.inventory) || {};
   document.body.classList.toggle("theme-neon", !!inv.theme_neon);
@@ -2609,6 +2638,7 @@ function switchView(name) {
   if (name === "profile") {
     renderProfile();
     loadCosmetics();
+    loadInventory();
     if (!(state.shop && (state.shop.prefixes || []).length)) loadShop();
     else renderProfilePrefixList();
   }

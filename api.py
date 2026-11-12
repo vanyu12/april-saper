@@ -62,6 +62,8 @@ class Api:
         self._last_click: dict[int, float] = {}
         self._last_action: dict[int, float] = {}
         self._last_fish: dict[int, float] = {}
+        self._lb_cache: tuple[float, dict | None] = (0.0, None)
+        self._inflight = 0
 
     def _auth(self, request: web.Request) -> dict | None:
         init_data = request.headers.get("X-Init-Data", "")
@@ -681,13 +683,16 @@ class Api:
         user = self._auth(request)
         if not user:
             return self._fail("unauthorized", 401)
-        return self._json({
-            "ok": True,
+        cached_at, cached = self._lb_cache
+        if cached and time.time() - cached_at < 10:
+            return self._json({"ok": True, **cached, "me": user["user_id"]})
+        payload = {
             "by_balance": self._top_rows(self.db.leaderboard(20)),
             "by_multiplier": self._top_rows(self.db.top_multiplier(10)),
             "by_level": self._level_rows(self.db.top_by_level(20)),
-            "me": user["user_id"],
-        })
+        }
+        self._lb_cache = (time.time(), payload)
+        return self._json({"ok": True, **payload, "me": user["user_id"]})
 
     async def fairness(self, request: web.Request) -> web.Response:
         user = self._auth(request)
@@ -1465,9 +1470,16 @@ class Api:
         existing = self.db.account_by_login(login)
         if existing and int(existing["user_id"]) != int(user["user_id"]):
             return self._fail("Логин уже занят")
+        had_account = bool(self.db.account(user["user_id"]))
         digest, salt = auth.hash_password(password)
         self.db.set_account(user["user_id"], login, digest, salt)
-        return self._json({"ok": True, "login": login})
+        bonus = 0
+        if not had_account:
+            bonus = int(game.REGISTER_BONUS)
+            self.db.add_balance(user["user_id"], bonus)
+        fresh = self.db.user(user["user_id"])
+        return self._json({"ok": True, "login": login, "bonus": bonus,
+                           "balance": fresh["balance"] if fresh else 0})
 
     async def auth_login(self, request: web.Request) -> web.Response:
         body = await self._body(request)
@@ -1507,7 +1519,84 @@ class Api:
         keys.update({"insurance", "double_daily", "charm"})
         return {key: int(inv.get(key, 0)) for key in sorted(keys)}
 
-    # --- оформление профиля ---------------------------------------------
+    def _inventory_sections(self, user: dict) -> dict:
+        uid = user["user_id"]
+        inv = self.db.inventory(uid)
+        titles = {item["key"]: item["title"] for item in game.SHOP_ITEMS}
+        icons = {item["key"]: item.get("icon", "") for item in game.SHOP_ITEMS}
+
+        def make_items(keys) -> list[dict]:
+            result = []
+            for key in keys:
+                qty = int(inv.get(key, 0))
+                if qty <= 0:
+                    continue
+                result.append({"key": key, "title": titles.get(key, key),
+                               "icon": icons.get(key, ""), "qty": qty})
+            return result
+
+        consumables = make_items(("insurance", "double_daily", "charm",
+                                  "boost_win", "boost_loss", "lootbox"))
+        relics = make_items(("relic_mines", "relic_dice", "relic_wheel",
+                             "relic_crash", "gold_pick", "theme_neon",
+                             "theme_gold"))
+        prefixes = []
+        for key in sorted(self.db.user_prefixes(uid)):
+            view = game.prefix_view(key)
+            if view:
+                prefixes.append({"key": "prefix_" + key, "title": view["title"],
+                                 "icon": "🎩", "qty": 1})
+        avatars = [item for item in game.AVATARS
+                   if int(item["price"]) == 0
+                   or self.db.item_qty(
+                       uid, game.cosmetic_item_key("avatar", item["key"])) > 0]
+        backgrounds = [item for item in game.BACKGROUNDS
+                       if int(item["price"]) == 0
+                       or self.db.item_qty(
+                           uid, game.cosmetic_item_key("background",
+                                                       item["key"])) > 0]
+        game_bgs = [item for item in game.GAME_BACKGROUNDS
+                    if int(item["price"]) == 0
+                    or self.db.item_qty(uid, "gbg_" + item["key"]) > 0]
+        cosmetics = [
+            {"key": "avatars", "title": "Аватарки", "icon": "🦊",
+             "qty": len(avatars)},
+            {"key": "backgrounds", "title": "Фоны профиля", "icon": "🎨",
+             "qty": len(backgrounds)},
+            {"key": "game_bg", "title": "Фоны игры", "icon": "🏞",
+             "qty": len(game_bgs) + (1 if self.db.user_background(uid) else 0)},
+        ]
+        rods = [{"key": "rod_" + rod["key"], "title": rod["title"],
+                 "icon": "🎣", "qty": 1}
+                for rod in game.RODS
+                if int(rod["price"]) == 0
+                or self.db.item_qty(uid, "rod_" + rod["key"]) > 0]
+        fish = self.db.fish_list(uid, 0)
+        fishing = rods + [
+            {"key": "fish", "title": "Улов в садке", "icon": "🐟",
+             "qty": len(fish)},
+            {"key": "fish_value", "title": "Стоимость улова", "icon": "◈",
+             "qty": sum(int(item["price"]) for item in fish)},
+        ]
+        return {
+            "sections": [
+                {"key": "consumables", "title": "Расходники",
+                 "items": consumables},
+                {"key": "relics", "title": "Реликвии", "items": relics},
+                {"key": "prefixes", "title": "Префиксы", "items": prefixes},
+                {"key": "cosmetics", "title": "Косметика",
+                 "items": cosmetics},
+                {"key": "fishing", "title": "Рыболовное",
+                 "items": fishing},
+            ],
+            "inventory": self._inventory_view(user),
+        }
+
+    async def inventory(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        return self._json({"ok": True, **self._inventory_sections(user)})
     def _cosmetics_view(self, user: dict) -> dict:
         uid = user["user_id"]
         avatar_key = user.get("avatar_key") or "letter"
@@ -2445,7 +2534,21 @@ class Api:
 
 def build_app(db: Database) -> web.Application:
     api = Api(db)
-    app = web.Application(client_max_size=1024 * 1024)
+
+    @web.middleware
+    async def overload_guard(request: web.Request, handler):
+        if api._inflight >= 300:
+            return web.json_response(
+                {"ok": False, "error": "Сервер перегружен — попробуйте через минуту"},
+                status=503)
+        api._inflight += 1
+        try:
+            return await handler(request)
+        finally:
+            api._inflight -= 1
+
+    app = web.Application(client_max_size=1024 * 1024,
+                          middlewares=[overload_guard])
     app["api"] = api
 
     app.router.add_post("/api/state", api.state)
@@ -2483,6 +2586,7 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/quests/claim", api.quest_claim)
     app.router.add_post("/api/levels/claim", api.level_claim)
     app.router.add_post("/api/shop", api.shop)
+    app.router.add_post("/api/inventory", api.inventory)
     app.router.add_post("/api/shop/buy", api.shop_buy)
     app.router.add_post("/api/shop/use", api.shop_use)
     app.router.add_post("/api/prefix/equip", api.prefix_equip)
