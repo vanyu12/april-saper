@@ -2198,6 +2198,45 @@ def build_dispatcher(db: Database) -> Dispatcher:
                      {"sent": sent, "failed": failed})
         await message.answer(f"📣 Рассылка: отправлено {sent}, ошибок {failed}.")
 
+    @dp.message(Command("treasury", "kazna"))
+    async def treasury_cmd(message: Message) -> None:
+        await message.answer(
+            "💰 <b>Казна игры</b>\n\n"
+            f"Сейчас в казне: <b>{num(db.treasury())}</b> mCoin\n\n"
+            "Сюда идёт 1% с каждой проигранной ставки.\n"
+            "Видна всем, распоряжается только владелец.")
+
+    @dp.message(Command("treasury_give"))
+    async def treasury_give_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not is_owner(actor):
+            await message.answer("Распоряжаться казной может только владелец.")
+            return
+        total = db.take_treasury()
+        if total <= 0:
+            await message.answer("Казна пуста.")
+            return
+        ids = db.broadcast_ids()
+        if not ids:
+            db.add_treasury(total)
+            await message.answer("Нет игроков для раздачи.")
+            return
+        share = total // len(ids)
+        if share <= 0:
+            db.add_treasury(total)
+            await message.answer("В казне слишком мало для раздачи.")
+            return
+        for user_id in ids:
+            db.add_balance(user_id, share)
+        spent = share * len(ids)
+        if total - spent > 0:
+            db.add_treasury(total - spent)
+        db.admin_log(actor["user_id"], None, "treasury_give",
+                     {"total": total, "share": share, "players": len(ids)})
+        await message.answer(
+            f"💰 Казна раздана: по <b>{num(share)}</b> mCoin "
+            f"на {len(ids)} игроков.\nВсего роздано: {num(spent)} mCoin.")
+
     @dp.message(Command("admin"))
     async def admin_cmd(message: Message) -> None:
         user = get_user(message)
@@ -3029,6 +3068,7 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="promo_list", description="Админ: список промокодов"),
         BotCommand(command="promo_post", description="Админ: промокод в канал"),
         BotCommand(command="promo_off", description="Админ: выключить промокод"),
+        BotCommand(command="treasury", description="Казна игры"),
         BotCommand(command="duel", description="Дуэль 1×1"),
         BotCommand(command="spin", description="Колесо дня"),
         BotCommand(command="bonus", description="Бонусы"),

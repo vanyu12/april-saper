@@ -338,6 +338,7 @@ class Api:
         payload["active_bj"] = self._bj_view(active_bj) if active_bj else None
         payload["updates"] = self._updates_view()
         payload["transfers"] = self.db.transfers(user["user_id"], 10)
+        payload["treasury"] = self.db.treasury()
         return self._json(payload)
 
     async def updates_list(self, request: web.Request) -> web.Response:

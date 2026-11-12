@@ -1134,6 +1134,33 @@ class Database:
             (play_id, user_id, game_name, bet, 1 if win else 0, payout,
              json.dumps(detail, ensure_ascii=False), int(time.time())),
         )
+        if payout <= 0 and bet > 0:
+            self.add_treasury(max(1, bet // 100))
+
+    # --- казна -----------------------------------------------------------
+    def treasury(self) -> int:
+        row = self._row("SELECT value FROM settings WHERE key = 'treasury'")
+        try:
+            return int(row["value"]) if row else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def add_treasury(self, delta: int) -> int:
+        if delta == 0:
+            return self.treasury()
+        self._exec(
+            "INSERT INTO settings (key, value) VALUES ('treasury', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = "
+            "CAST(CAST(settings.value AS INTEGER) + ? AS TEXT)",
+            (str(max(0, delta)), delta))
+        return self.treasury()
+
+    def take_treasury(self) -> int:
+        total = self.treasury()
+        if total <= 0:
+            return 0
+        self._exec("UPDATE settings SET value = '0' WHERE key = 'treasury'")
+        return total
 
     def plays(self, user_id: int, limit: int = 20) -> list[dict]:
         return self._rows(
