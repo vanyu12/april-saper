@@ -1,5 +1,6 @@
 ﻿import asyncio
 import math
+import random
 import time
 import uuid
 from pathlib import Path
@@ -2212,6 +2213,92 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "Для анонсов обновлений добавьте бота админом в канал и укажите\n"
             "<code>UPDATE_CHANNEL=@username</code> в переменных окружения.")
 
+    @dp.message(Command("giveaway", "rozysh"))
+    async def giveaway_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not is_owner(actor):
+            await message.answer("Запускать розыгрыш может только владелец.")
+            return
+        try:
+            amount = int((message.text or "").split()[1])
+        except (IndexError, ValueError):
+            amount = 0
+        total = db.treasury()
+        if amount <= 0:
+            amount = total
+        if amount <= 0:
+            await message.answer("В казне пусто — нечего разыгрывать. "
+                                 "Игроки пополняют её, проигрывая ставки.")
+            return
+        if amount > total:
+            amount = total
+        participants = db.broadcast_ids()
+        if not participants:
+            await message.answer("Пока нет активных игроков для розыгрыша.")
+            return
+        winner_id = random.choice(participants)
+        winner = db.user(winner_id)
+        db.take_treasury()
+        db.add_treasury(total - amount)
+        db.add_balance(winner_id, amount)
+        db.treasury_log("giveaway", winner_id, amount)
+        try:
+            await message.bot.send_message(
+                winner["user_id"],
+                f"🏆 <b>Ты выиграл розыгрыш!</b>\n\n"
+                f"+{num(amount)} mCoin из казны начислены.")
+        except Exception:
+            pass
+        announcement = (
+            f"🎁 <b>Розыгрыш казны!</b>\n\n"
+            f"Приз: <b>{num(amount)}</b> mCoin\n"
+            f"Участников: {len(participants)}\n"
+            f"Победитель: @{winner.get('username') or ('#' + str(winner['user_id']))}\n\n"
+            f"Остаток в казне: {num(db.treasury())} mCoin")
+        await message.answer(announcement)
+        if config.giveaway_channel:
+            try:
+                channel = config.giveaway_channel
+                target = channel if channel.startswith("@") else "@" + channel
+                await message.bot.send_message(target, announcement)
+            except Exception:
+                pass
+
+    @dp.message(Command("bind"))
+    async def bind_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not is_owner(actor):
+            await message.answer("Привязывать канал и чат может только владелец.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.answer("Формат:\n"
+                                 "/bind channel <b>@ChannelAprilMines</b>\n"
+                                 "/bind chat <b>@AprilMines</b>")
+            return
+        what = parts[1].lower()
+        if what == "channel":
+            target = "@ChannelAprilMines"
+            try:
+                chat = await message.bot.get_chat(target)
+                config.giveaway_channel = target
+                config.channel_id = chat.id
+                await message.answer(f"✅ Канал привязан: {target} (id {chat.id}). "
+                                     "Теперь здесь можно запускать /giveaway.")
+            except Exception as exc:
+                await message.answer(f"Не удалось получить канал: {exc}")
+        elif what == "chat":
+            target = config.chat_url.replace("https://t.me/", "@")
+            try:
+                chat = await message.bot.get_chat(target)
+                config.chat_id = chat.id
+                await message.answer(f"✅ Чат привязан: {target} (id {chat.id}). "
+                                     "Команды бота работают в чате.")
+            except Exception as exc:
+                await message.answer(f"Не удалось получить чат: {exc}")
+        else:
+            await message.answer("Неизвестно: используй <b>channel</b> или <b>chat</b>.")
+
     @dp.message(Command("stats"))
     async def stats_cmd(message: Message) -> None:
         user = get_user(message)
@@ -2508,11 +2595,29 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     @dp.message(Command("treasury", "kazna"))
     async def treasury_cmd(message: Message) -> None:
-        await message.answer(
-            "💰 <b>Казна игры</b>\n\n"
-            f"Сейчас в казне: <b>{num(db.treasury())}</b> mCoin\n\n"
-            "Сюда идёт 1% с каждой проигранной ставки.\n"
-            "Видна всем, распоряжается только владелец.")
+        contributors = db.treasury_contributors(10)
+        losers = db.treasury_losers(10)
+        contrib_lines = []
+        for c in contributors:
+            nm = c.get("username") or c.get("first_name") or ("#" + str(c["user_id"]))
+            contrib_lines.append(f"• {nm} — {num(c['total'])} mCoin")
+        loser_lines = []
+        for i, l in enumerate(losers, 1):
+            nm = l.get("username") or l.get("first_name") or ("#" + str(l["user_id"]))
+            loser_lines.append(f"{i}. {nm} — {num(l['total_lost'])} mCoin "
+                               f"({l['plays']} проигрышей)")
+        blocks = [
+            "💰 <b>Казна игры</b>\n",
+            f"Сейчас в казне: <b>{num(db.treasury())}</b> mCoin\n",
+            "Сюда идёт 1% с каждой проигранной ставки.",
+        ]
+        if contrib_lines:
+            blocks.append("\n<b>Кто пополнил казну:</b>\n" + "\n".join(contrib_lines))
+        else:
+            blocks.append("\nКазну пока никто не пополнял.")
+        if loser_lines:
+            blocks.append("\n<b>Кто больше всех проиграл:</b>\n" + "\n".join(loser_lines))
+        await message.answer("\n".join(blocks))
 
     @dp.message(Command("treasury_give"))
     async def treasury_give_cmd(message: Message) -> None:
@@ -3357,6 +3462,9 @@ async def announce_update(bot: Bot, db: Database) -> None:
         if config.update_channel:
             channel = config.update_channel
             targets = [channel if channel.startswith("@") else "@" + channel]
+        elif config.giveaway_channel:
+            channel = config.giveaway_channel
+            targets = [channel if channel.startswith("@") else "@" + channel]
         else:
             targets = db.broadcast_ids()
         sent = 0
@@ -3402,6 +3510,9 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="promo_post", description="Админ: промокод в канал"),
         BotCommand(command="promo_off", description="Админ: выключить промокод"),
         BotCommand(command="treasury", description="Казна игры"),
+        BotCommand(command="treasury_top", description="Кто внёс и кто проиграл"),
+        BotCommand(command="giveaway", description="Владелец: розыгрыш казны"),
+        BotCommand(command="bind", description="Владелец: привязать канал и чат"),
         BotCommand(command="duel", description="Дуэль 1×1"),
         BotCommand(command="spin", description="Колесо дня"),
         BotCommand(command="bonus", description="Бонусы"),

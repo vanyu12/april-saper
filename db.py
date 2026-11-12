@@ -173,6 +173,23 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS treasury_history (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind      TEXT NOT NULL,
+        user_id   INTEGER,
+        amount    INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS giveaway_entries (
+        user_id INTEGER NOT NULL,
+        amount  INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS inventory (
         user_id INTEGER NOT NULL,
         item    TEXT NOT NULL,
@@ -1363,7 +1380,9 @@ class Database:
              json.dumps(detail, ensure_ascii=False), int(time.time())),
         )
         if payout <= 0 and bet > 0:
-            self.add_treasury(max(1, bet // 100))
+            loss_amt = max(1, bet // 100)
+            self.add_treasury(loss_amt)
+            self.treasury_log("loss", user_id, loss_amt)
 
     # --- казна -----------------------------------------------------------
     def treasury(self) -> int:
@@ -1389,6 +1408,45 @@ class Database:
             return 0
         self._exec("UPDATE settings SET value = '0' WHERE key = 'treasury'")
         return total
+
+    def treasury_log(self, kind: str, user_id: int | None, amount: int) -> None:
+        self._exec(
+            "INSERT INTO treasury_history (kind, user_id, amount, created_at) "
+            "VALUES (?, ?, ?, ?)", (kind, user_id, amount, int(time.time())))
+
+    def treasury_history(self, limit: int = 30) -> list[dict]:
+        return self._rows(
+            "SELECT th.kind, th.user_id, th.amount, th.created_at, "
+            "u.username, u.first_name "
+            "FROM treasury_history th LEFT JOIN users u ON u.user_id = th.user_id "
+            "ORDER BY th.id DESC LIMIT ?", (int(limit),))
+
+    def treasury_contributors(self, limit: int = 10) -> list[dict]:
+        return self._rows(
+            "SELECT th.user_id, SUM(th.amount) AS total, "
+            "MAX(u.username) AS username, MAX(u.first_name) AS first_name "
+            "FROM treasury_history th LEFT JOIN users u ON u.user_id = th.user_id "
+            "WHERE th.kind = 'loss' AND th.user_id IS NOT NULL "
+            "GROUP BY th.user_id ORDER BY total DESC LIMIT ?", (int(limit),))
+
+    def treasury_losers(self, limit: int = 10) -> list[dict]:
+        return self._rows(
+            "SELECT user_id, SUM(bet) AS total_lost, COUNT(*) AS plays, "
+            "MAX(username) AS username, MAX(first_name) AS first_name "
+            "FROM plays WHERE win = 0 GROUP BY user_id "
+            "ORDER BY total_lost DESC LIMIT ?", (int(limit),))
+
+    def giveaways(self) -> list[dict]:
+        return self._rows("SELECT user_id, amount, created_at "
+                          "FROM giveaway_entries ORDER BY amount DESC")
+
+    def giveaway_add(self, user_id: int, amount: int) -> bool:
+        changed = self._exec(
+            """INSERT INTO giveaway_entries (user_id, amount, created_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT (user_id) DO UPDATE SET amount = amount + ?""",
+            (user_id, amount, int(time.time()), amount))
+        return bool(changed)
 
     def plays(self, user_id: int, limit: int = 20) -> list[dict]:
         return self._rows(
