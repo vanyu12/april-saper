@@ -1253,6 +1253,37 @@ body.game-menu-open { overflow: hidden; }
 }
 .fish-hint { color: var(--muted); font-size: 13px; text-align: center; padding: 0 20px; }
 
+.shop-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 10px 2px;
+  margin-bottom: 6px;
+  scrollbar-width: none;
+}
+
+.shop-tabs::-webkit-scrollbar { display: none; }
+
+.shop-tab {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.shop-tab.active {
+  background: var(--mint);
+  border-color: var(--mint);
+  color: #08131a;
+}
+
 .fish-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);

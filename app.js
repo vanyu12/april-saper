@@ -1810,6 +1810,8 @@ function renderShopInventory() {
     : '<span class="muted">Инвентарь пуст — купи предмет ниже.</span>';
 }
 
+let shopCat = "";
+
 const SHOP_SECTIONS = [
   { key: "boosts", title: "Бусты" },
   { key: "items", title: "Расходники" },
@@ -1855,19 +1857,27 @@ function shopCard(entry, opts) {
   </div>`;
 }
 
+function renderShopTabs() {
+  const box = $("shopTabs");
+  if (!box) return;
+  if (!shopCat) shopCat = (SHOP_SECTIONS[0] || {}).key || "";
+  box.innerHTML = SHOP_SECTIONS.map((section) =>
+    `<button class="shop-tab${section.key === shopCat ? " active" : ""}" data-shop-cat="${section.key}">${section.title}</button>`
+  ).join("");
+}
+
 function renderShop() {
   const shop = state.shop || {};
   const items = $("shopItems");
   if (items) {
-    const groups = [];
-    SHOP_SECTIONS.forEach((section) => {
-      const list = (shop.items || []).filter((item) => item.category === section.key);
-      if (!list.length) return;
-      groups.push(`<div class="shop-section">${section.title}</div>`);
-      groups.push(list.map((item) => shopCard(item)).join(""));
-    });
-    items.innerHTML = groups.join("") || '<div class="empty">Магазин пуст</div>';
+    const active = SHOP_SECTIONS.find((section) => section.key === shopCat)
+      || SHOP_SECTIONS[0] || { key: "", title: "" };
+    const list = (shop.items || []).filter((item) => item.category === active.key);
+    items.innerHTML = list.length
+      ? list.map((item) => shopCard(item)).join("")
+      : '<div class="empty">В этой категории пока пусто</div>';
   }
+  renderShopTabs();
   const bundles = $("shopBundles");
   if (bundles) bundles.innerHTML = (shop.bundles || []).map((item) => shopCard(item)).join("");
   const donate = $("shopDonate");
@@ -3130,6 +3140,18 @@ function bind() {
     if (btn.dataset.act === "equip") equipPrefix(btn.dataset.key);
     else buyItem(btn.dataset.key);
   });
+
+  const shopTabs = $("shopTabs");
+  if (shopTabs) {
+    shopTabs.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-shop-cat]");
+      if (!btn || btn.dataset.shopCat === shopCat) return;
+      shopCat = btn.dataset.shopCat;
+      haptic();
+      renderShop();
+      if ($("shopItems")) $("shopItems").scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+  }
 
   const prefixList = $("profilePrefixList");
   if (prefixList) {

@@ -608,6 +608,20 @@ SHOP_BUNDLES = (
     {"key": "relic_set", "title": "Набор реликвий", "price": 8000, "category": "bundles",
      "desc": "Реликвия сапёра и краш-модуль со скидкой",
      "items": {"relic_mines": 1, "relic_crash": 1}},
+    {"key": "boost_pack", "title": "Набор бустов", "price": 4500, "category": "bundles",
+     "desc": "Пять бустов на выигрыш и пять на кэшбэк",
+     "items": {"boost_win": 5, "boost_loss": 5}},
+    {"key": "loot_pack", "title": "Ящик удачи", "price": 15000, "category": "bundles",
+     "desc": "Десять кейсов удачи одним набором",
+     "items": {"lootbox": 10}},
+    {"key": "mega_bundle", "title": "Мега-набор", "price": 45000, "category": "bundles",
+     "desc": "Реликвии, талисманы, кейсы и бусты — всё сразу",
+     "items": {"relic_mines": 1, "relic_crash": 1, "charm": 3,
+               "lootbox": 5, "boost_win": 3}},
+    {"key": "whale_bundle", "title": "Набор магната", "price": 150000, "category": "bundles",
+     "desc": "Для тех, кому девать mCoin уже некуда",
+     "items": {"relic_mines": 1, "relic_crash": 1, "charm": 10,
+               "lootbox": 25, "boost_win": 10, "boost_loss": 10}},
 )
 
 DONATE_ITEMS = (
@@ -620,6 +634,13 @@ DONATE_ITEMS = (
     {"key": "gmp_charm", "title": "Талисманы удачи", "price": 30,
      "currency": "gmpoint", "category": "donate",
      "desc": "Три талисмана по пять зарядов", "items": {"charm": 3}},
+    {"key": "gmp_booster", "title": "Донат-бустер", "price": 40,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "По десять бустов на выигрыш и кэшбэк",
+     "items": {"boost_win": 10, "boost_loss": 10}},
+    {"key": "gmp_mega_case", "title": "Мега-кейс", "price": 75,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Двадцать пять кейсов удачи", "items": {"lootbox": 25}},
 )
 
 # Картинки товаров (лежат в web/ и раздаются как /static/<файл>).
