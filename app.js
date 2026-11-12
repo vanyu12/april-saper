@@ -530,12 +530,22 @@ function renderGrid() {
   const round = state.round;
   const opened = round ? round.opened : [];
   const mineSet = round && round.mine_positions ? new Set(round.mine_positions) : null;
+  const cheat = state.cheat && state.cheat.enabled && state.isAdmin
+    ? state.cheat : null;
+  const cheatMines = cheat && cheat.mine_positions ? new Set(cheat.mine_positions) : null;
 
   for (let i = 0; i < 25; i++) {
     const cell = document.createElement("button");
     cell.className = "cell";
     cell.dataset.index = i;
     cell.type = "button";
+
+    if (cheat && cheatMines && round && round.status === "active" && !opened.includes(i)) {
+      if (cheatMines.has(i)) {
+        cell.classList.add("cheat-mine");
+        cell.title = "Мина (чит)";
+      }
+    }
 
     if (opened.includes(i)) {
       if (mineSet && mineSet.has(i)) {
@@ -664,8 +674,14 @@ function maxMultiplier(mines) {
 }
 
 function avatarFace(u) {
+  if (u.avatar_url) return `<img class="profile-avatar-img" src="${u.avatar_url}" alt="">`;
   if (u.avatar_icon) return u.avatar_icon;
   return (u.first_name || u.username || "И").trim().charAt(0).toUpperCase();
+}
+
+function avatarFaceHtml(u, cls) {
+  if (u.avatar_url) return `<img class="${cls || "avatar-img"}" src="${u.avatar_url}" alt="">`;
+  return null;
 }
 
 function prefixStyleCss(entry) {
@@ -714,7 +730,7 @@ function renderProfile() {
   $("profileName").textContent = u.first_name || u.username || "Игрок";
   $("profileId").textContent = "id " + u.id;
   if ($("myId")) $("myId").textContent = u.id;
-  $("avatar").textContent = avatarFace(u);
+  $("avatar").innerHTML = avatarFace(u);
   const card = document.querySelector("#view-profile .profile-card");
   if (card) {
     if (u.bg_css) {
@@ -1499,7 +1515,7 @@ function renderQuests() {
           const label = q.claimed
             ? "Получено"
             : q.ready
-              ? `Забрать +${fmt(q.reward)}`
+              ? `Забрать +${fmt(q.reward)} ${q.currency === "gmpoint" ? "GMPOINT" : ""}`
               : `${fmt(q.progress)} / ${fmt(q.target)}`;
           return `<div class="quest${q.ready ? " ready" : ""}${q.claimed ? " done" : ""}">
         <div class="quest-main">
@@ -1524,6 +1540,7 @@ async function playDice(pick) {
     const data = await api("/api/games/dice", { bet, pick });
     state.user.balance = data.balance;
     state.quests = data.quests || state.quests;
+    showCheatHint(data);
     const face = $("diceFace");
     face.textContent = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"][data.roll - 1] || "🎲";
     face.classList.remove("roll");
@@ -1593,6 +1610,7 @@ async function playBasket() {
     const data = await api("/api/games/basket", { bet });
     state.user.balance = data.balance;
     state.quests = data.quests || state.quests;
+    showCheatHint(data);
     void stage.offsetWidth;
     stage.classList.add(data.scored ? "shoot-score" : "shoot-miss");
     if (data.scored) stage.classList.add("scored");
@@ -1645,6 +1663,7 @@ async function playDarts() {
     const data = await api("/api/games/darts", { bet, pick });
     state.user.balance = data.balance;
     state.quests = data.quests || state.quests;
+    showCheatHint(data);
     void stage.offsetWidth;
     stage.classList.add("throw-" + (data.sector || "miss"));
     if (score) score.textContent = String(data.value);
@@ -1778,6 +1797,7 @@ async function spinWheel() {  const input = $("wheelBet");
     state.user.balance = data.balance;
     state.quests = data.quests || state.quests;
     state.wheelSegments = data.segments || state.wheelSegments;
+    showCheatHint(data);
     renderWheel();
 
     const mid = wheelMidAngle(data.segment);
@@ -1978,10 +1998,39 @@ function renderInventory() {
   box.innerHTML = sections.map((section) => {
     const items = (section.items || []).map((item) => {
       const qty = item.key === "fish_value" ? `◈ ${fmt(item.qty)}` : `×${item.qty}`;
-      return `<span class="inv-item">${inventoryIcon(item.icon)}<span>${escapeHtml(item.title)}</span><b>${qty}</b></span>`;
+      const actions = [];
+      if (item.use === "open") {
+        actions.push(`<button class="inv-act" data-inv="use" data-key="${item.key}">Открыть</button>`);
+      }
+      if (item.sell && item.sell > 0) {
+        actions.push(`<button class="inv-act inv-sell" data-inv="sell" data-key="${item.key}" title="Продать за ◈ ${fmt(item.sell)}">Продать</button>`);
+      }
+      const acts = actions.length ? `<span class="inv-actions">${actions.join("")}</span>` : "";
+      return `<span class="inv-item">${inventoryIcon(item.icon)}<span>${escapeHtml(item.title)}</span><b>${qty}</b>${acts}</span>`;
     }).join("");
     return `<div class="inv-section"><div class="inv-section-title">${escapeHtml(section.title)}</div><div class="inv-items">${items || '<span class="muted">Пусто</span>'}</div></div>`;
   }).join("") || '<div class="muted">Загрузка…</div>';
+}
+
+async function inventoryAction(act, key) {
+  try {
+    const data = await api(`/api/inventory/${act}`, { key, qty: 1 });
+    if (act === "sell") {
+      toast(`Продано: +${fmt(data.total)} mCoin`);
+      state.balance = data.balance;
+      state.shop.balance = data.balance;
+    } else if (act === "use") {
+      toast(`Открыто: ${data.title || "—"}`);
+      state.balance = data.balance;
+      state.shop.balance = data.balance;
+    }
+    state.inventorySections = data.sections || [];
+    state.shop.inventory = data.inventory || state.shop.inventory;
+    renderInventory();
+    renderBalance();
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
 async function loadInventory() {
@@ -2047,10 +2096,13 @@ function renderCosmetics() {
   if (av) {
     av.innerHTML = (data.avatars || []).map((item) => {
       const cls = `cos-item${item.active ? " active" : ""}${item.owned ? "" : " locked"}`;
-      const price = item.owned ? "" : `<span class="cos-price">◈ ${fmt(item.price)}</span>`;
-      return `<button class="${cls}" data-kind="avatar" data-key="${item.key}" data-act="${item.owned ? "equip" : "buy"}" title="${escapeHtml(item.title)}">
-        <span class="cos-emoji">${item.icon || "А"}</span>
-        <span class="cos-name">${escapeHtml(item.title)}</span>${price}
+      const act = item.key === "custom" && !item.owned ? "upload" : (item.owned ? "equip" : "buy");
+      const inner = item.url
+        ? `<img class="cos-avatar-img" src="${item.url}" alt="">`
+        : `<span class="cos-emoji">${item.icon || "А"}</span>`;
+      const price = item.key === "custom" && !item.owned ? "" : (item.owned ? "" : `<span class="cos-price">◈ ${fmt(item.price)}</span>`);
+      return `<button class="${cls}" data-kind="avatar" data-key="${item.key}" data-act="${act}" title="${escapeHtml(item.title)}">
+        ${inner}<span class="cos-name">${escapeHtml(item.title)}</span>${price}
       </button>`;
     }).join("") || '<span class="muted">Загрузка…</span>';
   }
@@ -2066,6 +2118,13 @@ function renderCosmetics() {
   }
   renderGameBgGallery();
   applyGameBackground();
+}
+
+function showCheatHint(data) {
+  if (!data || !data.cheat || !data.cheat.enabled || !state.isAdmin) return;
+  const c = data.cheat;
+  const text = c.hint || (c.correct ? `Правильно: ${c.correct}` : "");
+  if (text) toast(`👁 ${text}`);
 }
 
 function readFileAsDataUrl(file) {
@@ -2105,6 +2164,29 @@ async function compressBackground(file) {
     out = canvas.toDataURL("image/jpeg", quality);
   }
   return out;
+}
+
+async function uploadAvatar(file) {
+  try {
+    if (!file) return;
+    if (!file.type || file.type.indexOf("image/") !== 0) {
+      toast("Нужно изображение");
+      return;
+    }
+    toast("Готовим фото…");
+    const image = await compressBackground(file);
+    const data = await api("/api/profile/avatar/upload", { image });
+    state.cosmetics = data;
+    if (data.user) state.user = { ...state.user, ...data.user };
+    haptic("success");
+    toast("Аватар обновлён");
+    renderCosmetics();
+    renderProfile();
+    if (typeof loadLeaderboard === "function") loadLeaderboard();
+  } catch (e) {
+    haptic("error");
+    toast(e.message);
+  }
 }
 
 async function uploadBackground(file) {
@@ -2243,6 +2325,7 @@ async function playCrash() {
     const data = await api("/api/games/crash", { bet, target });
     state.user.balance = data.balance;
     state.quests = data.quests || state.quests;
+    showCheatHint(data);
     if (data.win) {
       hint.textContent = `Краш на ${fmtMult(data.point)} — забрал ${fmt(data.payout)}`;
       hint.className = "crash-result win";
@@ -2276,7 +2359,7 @@ function renderUpdates(force) {
   }
   let dismissed = "";
   try {
-    dismissed = sessionStorage.getItem("saper_updates_dismissed") || "";
+    dismissed = localStorage.getItem("saper_seen_version") || "";
   } catch (e) {}
   if (force || dismissed !== info.version) {
     modal.hidden = false;
@@ -2559,28 +2642,36 @@ function renderAll() {
   renderAllNow();
 }
 
+function currentViewName() {
+  const v = document.querySelector(".view.active");
+  return v ? v.id.replace("view-", "") : "game";
+}
+
 function renderAllNow() {
   renderBalance();
   renderDaily();
   renderBonus();
+  applyCosmetics();
+  applyGameBackground();
+  const v = currentViewName();
+  if (v === "profile") { renderProfile(); return; }
+  if (v === "tasks") { renderTasks(); renderDailySpin(); return; }
+  if (v === "bank") { renderBank(); return; }
+  if (v === "games") { renderGamesHub(); return; }
+  if (v === "history") { renderHistory(); return; }
+  if (v === "fair") { renderFair(); return; }
+  if (v === "top") {
+    const topTab = document.querySelector("#view-top .tab.active");
+    renderTop(topTab ? topTab.dataset.tab : "balance");
+    return;
+  }
+  if (v === "shop" || v === "admin") return;
   renderMines();
   renderGameSwitch();
   renderControls();
   renderGrid();
   renderLadder();
-  renderProfile();
-  renderQuests();
-  renderTasks();
-  renderBank();
-  renderGamesHub();
-  renderDailySpin();
-  renderHistory();
   renderBlackjack();
-  applyCosmetics();
-  applyGameBackground();
-  const topTab = document.querySelector("#view-top .tab.active");
-  renderTop(topTab ? topTab.dataset.tab : "balance");
-  renderFair();
 }
 
 document.addEventListener("visibilitychange", () => {
@@ -2652,6 +2743,7 @@ async function openCell(index) {
         mine_positions: data.mine_positions,
         multiplier: data.multiplier,
       };
+      if (data.cheat) state.cheat = data.cheat;
       state.user.balance = data.balance;
       renderAll();
       const grid = $("grid");
@@ -2672,6 +2764,7 @@ async function openCell(index) {
       next_chance: data.next_chance,
       mine_positions: data.mine_positions || state.round.mine_positions,
     };
+    if (data.cheat) state.cheat = data.cheat;
     state.user.balance = data.balance;
     if (data.finished) sfx.cash(); else sfx.open();
     renderAll();
@@ -2701,6 +2794,8 @@ async function startGame() {
   try {
     const data = await api("/api/game/start", { bet, mines: state.mines, auto_target: autoTarget });
     state.round = data.round;
+    if (data.cheat) state.cheat = data.cheat;
+    else delete state.cheat;
     state.user.balance = data.balance;
     haptic("success");
     renderAll();
@@ -3199,6 +3294,16 @@ function bind() {
     else buyItem(btn.dataset.key);
   });
 
+  const inventoryBox = $("inventorySections");
+  if (inventoryBox) {
+    inventoryBox.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-inv]");
+      if (!btn) return;
+      haptic();
+      inventoryAction(btn.dataset.inv, btn.dataset.key);
+    });
+  }
+
   const shopTabs = $("shopTabs");
   if (shopTabs) {
     shopTabs.addEventListener("click", (e) => {
@@ -3236,7 +3341,19 @@ function bind() {
     cosBlock.addEventListener("click", (e) => {
       const btn = e.target.closest(".cos-item");
       if (!btn) return;
+      if (btn.dataset.kind === "avatar" && btn.dataset.act === "upload") {
+        if ($("avatarUploadInput")) $("avatarUploadInput").click();
+        return;
+      }
       cosmeticAction(btn.dataset.kind, btn.dataset.key, btn.dataset.act);
+    });
+  }
+
+  const avatarUploadInput = $("avatarUploadInput");
+  if (avatarUploadInput) {
+    avatarUploadInput.addEventListener("change", (e) => {
+      const file = e.target.files && e.target.files[0];
+      uploadAvatar(file).finally(() => { e.target.value = ""; });
     });
   }
 
@@ -3332,7 +3449,10 @@ function bind() {
   }
       state.user.balance = data.balance;
       sfx.cash();
-    toast(`Награда +${fmt(data.reward)} mCoin${awardsNote(data.awards)}`);
+    toast(data.gmpoint != null && data.gmpoint !== state.user.gmpoint
+      ? `Награда +${fmt(data.reward)} GMPOINT${awardsNote(data.awards)}`
+      : `Награда +${fmt(data.reward)} mCoin${awardsNote(data.awards)}`);
+      if (data.gmpoint != null) state.user.gmpoint = data.gmpoint;
       renderAll();
     } catch (err) {
       toast(err.message);

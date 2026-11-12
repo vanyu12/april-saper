@@ -386,6 +386,12 @@ DAILY_QUESTS = (
     {"key": "wins3", "title": "Выиграть 3 раза", "metric": "wins", "target": 3, "reward": 500},
     {"key": "wager1000", "title": "Поставить 1000 mCoin", "metric": "wagered", "target": 1000,
      "reward": 700},
+    {"key": "games12", "title": "Сыграть 12 партий", "metric": "games", "target": 12,
+     "reward": 1000},
+    {"key": "gmp3", "title": "Выиграть 3 партии", "metric": "wins", "target": 3,
+     "reward": 3, "currency": "gmpoint"},
+    {"key": "gmp7", "title": "Поставить 3000 mCoin", "metric": "wagered", "target": 3000,
+     "reward": 4, "currency": "gmpoint"},
 )
 
 _ACH_REWARDS = (1000, 1500, 2000, 3000, 5000, 7500, 10000, 15000, 20000,
@@ -596,7 +602,10 @@ COSMETIC_PREFIX = {"avatar": "avatar_", "background": "bg_"}
 
 
 def avatar_view(key: str | None) -> dict:
-    item = AVATAR_BY_KEY.get((key or "").strip()) or AVATAR_BY_KEY["letter"]
+    key = (key or "").strip()
+    if key == "custom":
+        return {"key": "custom", "title": "Своё фото", "icon": ""}
+    item = AVATAR_BY_KEY.get(key) or AVATAR_BY_KEY["letter"]
     return {"key": item["key"], "title": item["title"], "icon": item["icon"]}
 
 
@@ -659,6 +668,23 @@ DONATE_ITEMS = (
     {"key": "gmp_mega_case", "title": "Мега-кейс", "price": 75,
      "currency": "gmpoint", "category": "donate",
      "desc": "Двадцать пять кейсов удачи", "items": {"lootbox": 25}},
+    {"key": "gmp_daily", "title": "Донат-бонус", "price": 10,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Три двойных ежедневных бонуса",
+     "items": {"double_daily": 3}},
+    {"key": "gmp_relics", "title": "Набор реликвий", "price": 120,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Реликвии сапёра, костей, колеса и краша — всё сразу",
+     "items": {"relic_mines": 1, "relic_dice": 1, "relic_wheel": 1,
+               "relic_crash": 1}},
+    {"key": "gmp_goldpick", "title": "Золотая кирка", "price": 50,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Навсегда +3% к выплатам в «Сапёре»",
+     "items": {"gold_pick": 1}},
+    {"key": "gmp_themes", "title": "Обе темы", "price": 35,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Неоновая тема и золотые клетки",
+     "items": {"theme_neon": 1, "theme_gold": 1}},
 )
 
 # Картинки товаров (лежат в web/ и раздаются как /static/<файл>).
@@ -684,6 +710,17 @@ INSURANCE_REFUND = 0.25
 INSURANCE_CAP = 200
 CHARM_BONUS = 0.1
 CHARM_CHARGES = 5
+
+# Продажа расходников: возврат 50% цены из магазина.
+SELL_REFUND_RATE = 0.5
+
+
+def sell_refund_price(item_key: str) -> int:
+    """Сколько mCoin вернётся за продажу одного расходника."""
+    for it in SHOP_ITEMS:
+        if it["key"] == item_key and item_key in CONSUMABLE_KEYS:
+            return max(1, int(int(it["price"]) * SELL_REFUND_RATE))
+    return 0
 
 RELIC_BONUS = 0.05
 GOLD_PICK_BONUS = 0.03

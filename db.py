@@ -61,6 +61,14 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS user_avatars (
+        user_id    INTEGER PRIMARY KEY,
+        mime       TEXT NOT NULL,
+        data       TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS accounts (
         user_id       INTEGER PRIMARY KEY,
         login         TEXT UNIQUE,
@@ -652,6 +660,30 @@ class Database:
         return self._row(
             "SELECT user_id, mime, data, updated_at FROM user_backgrounds "
             "WHERE user_id = ?", (user_id,))
+
+    def set_user_avatar(self, user_id: int, mime: str, data: str) -> None:
+        """Ставит пользовательское фото на место аватара."""
+        self._exec(
+            """INSERT INTO user_avatars (user_id, mime, data, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT (user_id) DO UPDATE SET
+                   mime = excluded.mime,
+                   data = excluded.data,
+                   updated_at = excluded.updated_at""",
+            (user_id, mime, data, int(time.time())))
+        self.set_custom_avatar_key(user_id)
+
+    def set_custom_avatar_key(self, user_id: int) -> None:
+        self._exec("UPDATE users SET avatar_key = ? WHERE user_id = ?",
+                   ("custom", user_id))
+
+    def user_avatar(self, user_id: int) -> dict | None:
+        return self._row(
+            "SELECT user_id, mime, data, updated_at FROM user_avatars "
+            "WHERE user_id = ?", (user_id,))
+
+    def delete_user_avatar(self, user_id: int) -> None:
+        self._exec("DELETE FROM user_avatars WHERE user_id = ?", (user_id,))
 
     def delete_user_background(self, user_id: int) -> None:
         self._exec("DELETE FROM user_backgrounds WHERE user_id = ?", (user_id,))
