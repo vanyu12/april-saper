@@ -272,6 +272,7 @@ DEFAULT_SETTINGS = {
     "game_coinflip": "1",
     "game_blackjack": "1",
     "game_basket": "1",
+    "game_fishing": "1",
 }
 
 
@@ -1411,3 +1412,63 @@ class Database:
             "SELECT game FROM plays WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
             (user_id,))
         return row["game"] if row else None
+
+    # --- рыбалка ---------------------------------------------------------
+    def _fish_table(self) -> None:
+        if getattr(self, "_fish_ready", False):
+            return
+        self._exec(
+            """CREATE TABLE IF NOT EXISTS fish (
+                   id         TEXT PRIMARY KEY,
+                   user_id    INTEGER NOT NULL,
+                   species    TEXT NOT NULL,
+                   name       TEXT NOT NULL,
+                   rarity     TEXT NOT NULL,
+                   weight_g   INTEGER NOT NULL,
+                   price      INTEGER NOT NULL,
+                   sold       INTEGER NOT NULL DEFAULT 0,
+                   created_at INTEGER NOT NULL
+               )""")
+        self._exec("CREATE INDEX IF NOT EXISTS idx_fish_user ON fish(user_id, sold)")
+        self._fish_ready = True
+
+    def add_fish(self, fish_id: str, user_id: int, fish: dict) -> None:
+        self._fish_table()
+        self._exec(
+            """INSERT INTO fish (id, user_id, species, name, rarity, weight_g,
+                   price, sold, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+            (fish_id, user_id, fish["key"], fish["name"], fish["rarity"],
+             int(fish["weight_g"]), int(fish["price"]), int(time.time())))
+
+    def fish_list(self, user_id: int, sold: int = 0) -> list[dict]:
+        self._fish_table()
+        return self._rows(
+            "SELECT * FROM fish WHERE user_id = ? AND sold = ? "
+            "ORDER BY created_at DESC", (user_id, sold))
+
+    def sell_fish(self, user_id: int, fish_id: str) -> int | None:
+        self._fish_table()
+        row = self._row(
+            "SELECT price FROM fish WHERE id = ? AND user_id = ? AND sold = 0",
+            (fish_id, user_id))
+        if not row:
+            return None
+        if not self._exec(
+                "UPDATE fish SET sold = 1 WHERE id = ? AND user_id = ? AND sold = 0",
+                (fish_id, user_id)):
+            return None
+        price = int(row["price"])
+        self.add_balance(user_id, price)
+        return price
+
+    def sell_all_fish(self, user_id: int) -> tuple[int, int]:
+        self._fish_table()
+        rows = self.fish_list(user_id, 0)
+        if not rows:
+            return 0, 0
+        total = sum(int(item["price"]) for item in rows)
+        self._exec("UPDATE fish SET sold = 1 WHERE user_id = ? AND sold = 0",
+                   (user_id,))
+        self.add_balance(user_id, total)
+        return total, len(rows)

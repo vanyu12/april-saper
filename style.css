@@ -1239,6 +1239,37 @@ body.game-menu-open { overflow: hidden; }
 .basket-result.win { color: var(--mint); }
 .basket-result.lose { color: var(--danger); }
 
+/* рыбалка */
+.fish-stage {
+  position: relative;
+  min-height: 220px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: radial-gradient(circle at 50% 120%, #123047, #0d1622 70%);
+  display: grid;
+  place-items: center;
+  margin: 8px 0 12px;
+  overflow: hidden;
+}
+.fish-hint { color: var(--muted); font-size: 13px; text-align: center; padding: 0 20px; }
+.fish-target {
+  border: 0;
+  background: transparent;
+  font-size: 64px;
+  cursor: pointer;
+  animation: fish-pop 0.35s ease;
+  filter: drop-shadow(0 0 14px rgba(46, 230, 168, 0.45));
+}
+.fish-target.small { font-size: 40px; }
+.fish-target.big { font-size: 92px; }
+.fish-target:active { transform: scale(0.94); }
+@keyframes fish-pop { from { transform: scale(0.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.fish-actions { margin: 10px 0 6px; }
+.fish-actions button { width: 100%; }
+.fish-result { font-size: 13px; line-height: 1.5; min-height: 20px; }
+.fish-result b { color: var(--text); }
+.fish-result .rarity { color: var(--mint); }
+
 /* перевод и промокоды */
 .transfer-id { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .transfer-id b { color: var(--text); font-size: 15px; }

@@ -1293,6 +1293,7 @@ const GAMES = [
   { key: "coinflip", icon: "🟡", title: "Орёл и решка", desc: "Монета 50/50, ×1,96" },
   { key: "blackjack", icon: "♠️", title: "21", desc: "Против дилера" },
   { key: "basket", icon: "🏀", title: "Баскет", desc: "Бросок в кольцо, ×2,4" },
+  { key: "fishing", icon: "🎣", title: "Рыбалка", desc: "Ждать поклёвку и продать" },
 ];
 
 function renderGameMenu() {
@@ -1344,6 +1345,7 @@ function switchGame(name) {
   if (name === "wheel") renderWheel();
   if (name === "crash") renderCrashTarget();
   if (name === "blackjack") renderBlackjack();
+  if (name === "fishing") loadFish();
   renderGameSwitch();
   closeGameMenu();
 }
@@ -1948,6 +1950,92 @@ async function applyPromo() {
   }
 }
 
+/* ---------- рыбалка ---------- */
+let fishCurrent = null;
+
+function renderFishSell() {
+  const total = (state.fishItems || []).reduce((sum, f) => sum + (f.price || 0), 0);
+  if ($("fishTotal")) $("fishTotal").textContent = fmt(total);
+}
+
+function fishCard(fish) {
+  const grams = fish.weight_g >= 1000
+    ? `${(fish.weight_g / 1000).toFixed(2)} кг` : `${fish.weight_g} г`;
+  $("fishResult").innerHTML =
+    `<div><b>${fish.name}</b> · <span class="rarity">${fish.rarity_title}</span></div>
+     <div>Вес: ${grams} · скупщик даёт <b>${fmt(fish.price)}</b> mCoin</div>
+     <div class="fish-actions"><button class="secondary" id="fishSellOne">
+       Продать за ${fmt(fish.price)}</button></div>`;
+  $("fishSellOne").addEventListener("click", () => sellFish(fish.id));
+}
+
+async function castFish() {
+  if ($("fishCast").disabled) return;
+  $("fishCast").disabled = true;
+  $("fishResult").textContent = "";
+  $("fishStage").innerHTML = '<div class="fish-hint">Ждём поклёвку…</div>';
+  try {
+    const data = await api("/api/fish/catch", {});
+    await new Promise((resolve) => setTimeout(resolve, 2000 + Math.random() * 2500));
+    fishCurrent = data;
+    const size = data.weight_g >= 20000 ? "big" : (data.weight_g <= 800 ? "small" : "");
+    $("fishStage").innerHTML =
+      `<button class="fish-target ${size}" id="fishTarget">${data.icon}</button>`;
+    $("fishTarget").addEventListener("click", () => {
+      if (!fishCurrent) return;
+      $("fishStage").innerHTML = `<div class="fish-hint">${fishCurrent.icon} Клюёт!</div>`;
+      fishCard(fishCurrent);
+      state.fishItems = (state.fishItems || []).concat([fishCurrent]);
+      fishCurrent = null;
+      renderFishSell();
+      sfx.coin();
+      haptic("success");
+    });
+  } catch (e) {
+    $("fishStage").innerHTML = `<div class="fish-hint">${e.message}</div>`;
+    toast(e.message);
+  } finally {
+    $("fishCast").disabled = false;
+  }
+}
+
+async function sellFish(id) {
+  try {
+    const data = await api("/api/fish/sell", { id });
+    state.user.balance = data.balance;
+    state.fishItems = (state.fishItems || []).filter((f) => f.id !== id);
+    $("fishResult").innerHTML = `Продано за <b>${fmt(data.amount)}</b> mCoin`;
+    renderFishSell();
+    renderBalance();
+    sfx.cash();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function sellAllFish() {
+  try {
+    const data = await api("/api/fish/sell", { all: true });
+    state.user.balance = data.balance;
+    state.fishItems = [];
+    $("fishResult").innerHTML =
+      `Скупщик забрал ${data.sold} шт. за <b>${fmt(data.amount)}</b> mCoin`;
+    renderFishSell();
+    renderBalance();
+    sfx.cash();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function loadFish() {
+  try {
+    const data = await api("/api/fish/list", {});
+    state.fishItems = data.items || [];
+    renderFishSell();
+  } catch (e) {}
+}
+
 function renderAll() {
   renderBalance();
   renderDaily();
@@ -2491,6 +2579,8 @@ function bind() {
     }));
 
   if ($("basketShoot")) $("basketShoot").addEventListener("click", playBasket);
+  if ($("fishCast")) $("fishCast").addEventListener("click", castFish);
+  if ($("fishSellAll")) $("fishSellAll").addEventListener("click", sellAllFish);
 
   $("view-shop").addEventListener("click", (e) => {
     const btn = e.target.closest(".shop-buy");

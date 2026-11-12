@@ -636,3 +636,63 @@ def bj_dealer_play(deck: list[dict], dealer: list[dict]) -> list[dict]:
         dealer.append(deck[index])
         index += 1
     return dealer
+
+
+FISH_RARITY = (
+    ("common", "Обычная", 0.55, (100, 700), "🐟"),
+    ("rare", "Редкая", 0.25, (700, 1500), "🐠"),
+    ("epic", "Эпическая", 0.12, (1500, 3000), "🐡"),
+    ("mythic", "Мифическая", 0.06, (3000, 5000), "🦈"),
+    ("legendary", "Легендарная", 0.02, (5000, 25000), "🐋"),
+)
+
+FISH_RARITY_MAP = {
+    code: {"title": title, "chance": chance, "price": price, "icon": icon}
+    for code, title, chance, price, icon in FISH_RARITY
+}
+
+FISH_SPECIES = (
+    {"key": "crucian", "name": "Карась", "rarity": "common", "weight": (100, 900)},
+    {"key": "perch", "name": "Окунь", "rarity": "common", "weight": (100, 1200)},
+    {"key": "roach", "name": "Плотва", "rarity": "common", "weight": (100, 600)},
+    {"key": "bream", "name": "Лещ", "rarity": "common", "weight": (300, 1500)},
+    {"key": "pike", "name": "Щука", "rarity": "rare", "weight": (500, 4000)},
+    {"key": "zander", "name": "Судак", "rarity": "rare", "weight": (700, 5000)},
+    {"key": "carp", "name": "Карп", "rarity": "rare", "weight": (1000, 8000)},
+    {"key": "catfish", "name": "Сом", "rarity": "epic", "weight": (3000, 20000)},
+    {"key": "sturgeon", "name": "Осётр", "rarity": "epic", "weight": (5000, 30000)},
+    {"key": "beluga", "name": "Белуга", "rarity": "mythic", "weight": (10000, 80000)},
+    {"key": "swordfish", "name": "Меч-рыба", "rarity": "mythic",
+     "weight": (20000, 120000)},
+    {"key": "goldfish", "name": "Золотая рыбка", "rarity": "legendary",
+     "weight": (100, 500)},
+    {"key": "leviathan", "name": "Левиафан", "rarity": "legendary",
+     "weight": (200000, 1000000)},
+)
+
+FISH_COOLDOWN = 4
+
+
+def fish_catch(server_seed: str, client_seed: str, nonce: int) -> dict:
+    """Пойманная рыба: вид, редкость, вес и цена скупщика."""
+    r1, r2, r3 = (next(_floats(server_seed, client_seed, nonce, i, 1))
+                  for i in range(3))
+    acc = 0.0
+    rarity = "common"
+    for code, _title, chance, _price, _icon in FISH_RARITY:
+        acc += chance
+        if r1 < acc:
+            rarity = code
+            break
+    species = [item for item in FISH_SPECIES if item["rarity"] == rarity] or \
+        [FISH_SPECIES[0]]
+    sp = species[min(len(species) - 1, int(r2 * len(species)))]
+    lo, hi = sp["weight"]
+    weight = int(lo + (hi - lo) * r3)
+    plo, phi = FISH_RARITY_MAP[rarity]["price"]
+    share = (weight - lo) / max(1, hi - lo)
+    price = int(plo + (phi - plo) * share)
+    return {"key": sp["key"], "name": sp["name"], "rarity": rarity,
+            "rarity_title": FISH_RARITY_MAP[rarity]["title"],
+            "icon": FISH_RARITY_MAP[rarity]["icon"], "weight_g": weight,
+            "price": max(1, price)}

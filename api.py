@@ -59,6 +59,7 @@ class Api:
         self.db = db
         self._last_click: dict[int, float] = {}
         self._last_action: dict[int, float] = {}
+        self._last_fish: dict[int, float] = {}
 
     def _auth(self, request: web.Request) -> dict | None:
         init_data = request.headers.get("X-Init-Data", "")
@@ -144,6 +145,7 @@ class Api:
                 "coinflip": int(raw.get("game_coinflip", 1)) == 1,
                 "blackjack": int(raw.get("game_blackjack", 1)) == 1,
                 "basket": int(raw.get("game_basket", 1)) == 1,
+                "fishing": int(raw.get("game_fishing", 1)) == 1,
             },
         }
 
@@ -1082,6 +1084,56 @@ class Api:
         balance = self.db.user(user["user_id"])["balance"]
         return self._json({"ok": True, "amount": amount, "balance": balance,
                            "quests": self._quests_view(user)})
+
+    async def fish_catch(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        settings = self._settings()
+        if not self._game_enabled(settings, "fishing"):
+            return self._fail("Рыбалка временно отключена")
+        now = time.time()
+        gap = float(__import__("os").environ.get("RATE_LIMIT_MIN", "1"))
+        if gap > 0 and now - self._last_fish.get(user["user_id"], 0.0) < game.FISH_COOLDOWN:
+            return self._fail("Рыба ещё не подошла — подождите")
+        self._last_fish[user["user_id"]] = now
+        nonce = self.db.bump_nonce(user["user_id"])
+        fish = game.fish_catch(user["server_seed"], user["client_seed"], nonce)
+        fish_id = uuid.uuid4().hex[:16]
+        self.db.add_fish(fish_id, user["user_id"], fish)
+        return self._json({"ok": True, "id": fish_id, **fish,
+                           "balance": self.db.user(user["user_id"])["balance"]})
+
+    async def fish_list(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        items = self.db.fish_list(user["user_id"], 0)
+        total = sum(int(item["price"]) for item in items)
+        return self._json({"ok": True, "items": items, "total": total,
+                           "balance": self.db.user(user["user_id"])["balance"]})
+
+    async def fish_sell(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        body = await self._body(request)
+        if body.get("all"):
+            total, count = self.db.sell_all_fish(user["user_id"])
+            if count == 0:
+                return self._fail("Сначала поймайте рыбу")
+            return self._json({"ok": True, "sold": count, "amount": total,
+                               "balance": self.db.user(user["user_id"])["balance"]})
+        fish_id = str(body.get("id", "")).strip()
+        if not fish_id:
+            return self._fail("Не указана рыба")
+        price = self.db.sell_fish(user["user_id"], fish_id)
+        if price is None:
+            return self._fail("Рыба не найдена или уже продана", 404)
+        return self._json({"ok": True, "sold": 1, "amount": price,
+                           "balance": self.db.user(user["user_id"])["balance"]})
 
     async def wheel(self, request: web.Request) -> web.Response:
         user = self._auth(request)
@@ -2031,6 +2083,9 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/games/crash", api.crash)
     app.router.add_post("/api/games/coinflip", api.coinflip)
     app.router.add_post("/api/games/basket", api.basket)
+    app.router.add_post("/api/fish/catch", api.fish_catch)
+    app.router.add_post("/api/fish/list", api.fish_list)
+    app.router.add_post("/api/fish/sell", api.fish_sell)
     app.router.add_post("/api/transfer", api.transfer)
     app.router.add_post("/api/transfers", api.transfers)
     app.router.add_post("/api/promo", api.promo)
