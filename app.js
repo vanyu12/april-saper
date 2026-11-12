@@ -1911,7 +1911,13 @@ function renderShop() {
     prefixes.innerHTML = (shop.prefixes || []).map((item) => {
       const levelOnly = item.currency === "level" || item.currency === "role";
       const style = item.style && item.style !== "solid" ? " · цветная обводка" : "";
-      const desc = `Цвет ${item.color}${style}${levelOnly ? ` · открывается на ${item.level} уровне` : ""}`;
+      const bonus = Number(item.bonus || 0);
+      const bonusPct = Math.round(bonus * 1000) / 10;
+      const bonusText = bonus > 0
+        ? ` · +${bonusPct % 1 === 0 ? bonusPct.toFixed(0) : bonusPct}% к выплате`
+        : "";
+      const base = item.desc ? `${item.desc} · ` : "";
+      const desc = `${base}Цвет ${item.color}${style}${bonusText}${levelOnly ? ` · открывается на ${item.level} уровне` : ""}`;
       return shopCard({ ...item, desc }, { levelOnly, equip: true });
     }).join("") || '<div class="empty">Пока пусто</div>';
   }

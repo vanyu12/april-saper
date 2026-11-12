@@ -100,6 +100,24 @@ PREFIXES = (
 
 PREFIX_BY_KEY = {prefix["key"]: prefix for prefix in PREFIXES}
 
+# Бонусы к выплатам для цветных префиксов: чем дороже префикс, тем выше бонус.
+PREFIX_PAYOUT_BONUS = {
+    "red_glow": 0.01,
+    "white_pure": 0.015,
+    "ice": 0.02,
+    "neon_cyan": 0.025,
+    "toxic": 0.03,
+    "sunset": 0.035,
+    "rainbow": 0.04,
+    "gold_dust": 0.05,
+}
+for _prefix in PREFIXES:
+    _bonus = PREFIX_PAYOUT_BONUS.get(_prefix["key"])
+    if _bonus and not _prefix.get("bonus"):
+        _prefix["bonus"] = _bonus
+        _base = _prefix.get("desc") or ""
+        _prefix["desc"] = f"+{round(_bonus * 100)}% к выплате" + (f" · {_base}" if _base else "")
+
 # Оформления без бонуса к выигрышу: только внешний вид.
 PREFIX_STYLES = ("solid", "outline", "glow", "neon", "gradient", "rainbow", "sparkle")
 
