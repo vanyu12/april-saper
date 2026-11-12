@@ -2376,6 +2376,39 @@ class Api:
         self.db.admin_set_ban(target, banned)
         return self._json({"ok": True, "user_id": target, "is_banned": 1 if banned else 0})
 
+    @staticmethod
+    def _catalog_keys(items) -> dict:
+        out = {}
+        for item in items:
+            if isinstance(item, dict) and item.get("key"):
+                out[item["key"]] = item.get("title") or item.get("name") or item["key"]
+        return out
+
+    def _grant_catalogs(self) -> dict:
+        return {
+            "item": self._catalog_keys(game.SHOP_ITEMS),
+            "prefix": self._catalog_keys(game.PREFIXES),
+            "avatar": self._catalog_keys(game.AVATARS),
+            "background": self._catalog_keys(game.GAME_BACKGROUNDS),
+            "rod": self._catalog_keys(game.RODS),
+            "achievement": {key: (ach.get("title") or key)
+                            for key, ach in game.ACHIEVEMENT_BY_KEY.items()},
+        }
+
+    async def admin_catalog(self, request: web.Request) -> web.Response:
+        admin, err = self._require_staff(request)
+        if err:
+            return err
+        catalogs = self._grant_catalogs()
+        return self._json({
+            "ok": True,
+            "kinds": ["item", "prefix", "avatar", "background", "rod",
+                      "achievement", "money", "gmpoint"],
+            "catalog": {kind: [{"key": key, "title": title}
+                               for key, title in items.items()]
+                        for kind, items in catalogs.items()},
+        })
+
     async def admin_grant(self, request: web.Request) -> web.Response:
         admin, err = self._require_staff(request)
         if err:
@@ -2385,25 +2418,77 @@ class Api:
             target = int(body.get("user_id", 0))
         except (TypeError, ValueError):
             return self._fail("Некорректные данные")
-        if not self.db.user(target):
+        user = self.db.user(target)
+        if not user:
             return self._fail("Игрок не найден", 404)
-        key = str(body.get("item", ""))
-        catalog = {item["key"]: item for item in game.SHOP_ITEMS}
-        if key not in catalog:
-            return self._fail("Неизвестный предмет", 404)
+        kind = str(body.get("kind", "item") or "item").lower()
+        key = str(body.get("item") or body.get("key") or "").strip()
         try:
             qty = int(body.get("qty", 1))
         except (TypeError, ValueError):
             return self._fail("Некорректное количество")
-        qty = max(1, min(50, qty))
-        if key == "charm":
-            qty *= game.CHARM_CHARGES
-        total = self.db.add_item(target, key, qty)
+
+        if kind == "money":
+            try:
+                amount = int(body.get("amount", qty))
+            except (TypeError, ValueError):
+                return self._fail("Некорректная сумма")
+            if amount == 0:
+                return self._fail("Сумма не может быть нулём")
+            amount = max(-1_000_000_000, min(1_000_000_000, amount))
+            new_balance = max(0, int(user["balance"]) + amount)
+            balance = self.db.admin_set_balance(target, new_balance)
+            self.db.admin_log(admin["user_id"], target, "grant_money",
+                              {"delta": amount})
+            return self._json({"ok": True, "kind": kind, "amount": amount,
+                               "balance": balance})
+
+        if kind == "gmpoint":
+            try:
+                amount = int(body.get("amount", qty))
+            except (TypeError, ValueError):
+                return self._fail("Некорректная сумма")
+            value = max(-1_000_000, min(1_000_000, amount))
+            points = self.db.add_gmpoint(target, value) if value > 0 else \
+                self.db.set_gmpoint(target, max(0, int(user.get("gmpoint") or 0) + value))
+            self.db.admin_log(admin["user_id"], target, "grant_gmpoint",
+                              {"delta": value})
+            return self._json({"ok": True, "kind": kind, "amount": value,
+                               "gmpoint": points})
+
+        catalogs = self._grant_catalogs()
+        catalog = catalogs.get(kind)
+        if catalog is None:
+            return self._fail("Неизвестный тип награды", 400)
+        if key not in catalog:
+            return self._fail(f"Неизвестный ключ: {key}", 404)
+
+        qty = max(1, min(999, qty))
+        if kind == "item":
+            if key == "charm":
+                qty *= game.CHARM_CHARGES
+            total = self.db.add_item(target, key, qty)
+        elif kind == "prefix":
+            self.db.add_prefix(target, key)
+            total = 1
+        elif kind in ("avatar", "background"):
+            if not self.db.set_cosmetic(target, kind, key):
+                return self._fail("Не удалось выдать", 400)
+            total = 1
+        elif kind == "rod":
+            self.db.set_rod(target, key)
+            total = 1
+        else:
+            total = 1 if self.db.claim_achievement(target, key) else 1
+
+        self.db.admin_log(admin["user_id"], target, "grant",
+                          {"kind": kind, "item": key, "qty": qty})
         return self._json({
             "ok": True,
             "user_id": target,
+            "kind": kind,
             "item": key,
-            "title": catalog[key]["title"],
+            "title": catalog[key],
             "qty": total,
         })
 
@@ -2659,6 +2744,7 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/admin/balance", api.admin_balance)
     app.router.add_post("/api/admin/ban", api.admin_ban)
     app.router.add_post("/api/admin/grant", api.admin_grant)
+    app.router.add_post("/api/admin/catalog", api.admin_catalog)
     app.router.add_post("/api/admin/role", api.admin_role)
     app.router.add_post("/api/admin/gmpoint", api.admin_gmpoint)
     app.router.add_post("/api/admin/promo/create", api.admin_promo_create)

@@ -2908,6 +2908,64 @@ function bind() {
 
   $("saveSettings").addEventListener("click", saveAdminSettings);
 
+  /* --- админ: выдача любых наград --- */
+  async function loadGrantCatalog() {
+    if (grantCatalog) return grantCatalog;
+    const data = await api("/api/admin/catalog", {});
+    grantCatalog = data.catalog || {};
+    return grantCatalog;
+  }
+
+  function fillGrantKeys() {
+    const kindSel = $("grantKind");
+    const keySel = $("grantKey");
+    if (!kindSel || !keySel) return;
+    const kind = kindSel.value;
+    if (kind === "money" || kind === "gmpoint") {
+      keySel.innerHTML = '<option value="">— сумма из поля ниже —</option>';
+      keySel.disabled = true;
+      if ($("grantHint")) $("grantHint").textContent = "Сумму задай в поле «Количество / сумма»";
+      return;
+    }
+    keySel.disabled = false;
+    const items = (grantCatalog && grantCatalog[kind]) || [];
+    keySel.innerHTML = items.length
+      ? items.map((it) => `<option value="${it.key}">${it.title} · ${it.key}</option>`).join("")
+      : '<option value="">нет доступных ключей</option>';
+  }
+
+  async function grantSend() {
+    const hint = $("grantHint");
+    const userId = parseInt($("grantUser").value || "0", 10);
+    if (!userId) { hint.textContent = "Укажи ID игрока"; return; }
+    const kind = $("grantKind").value;
+    const qty = parseInt($("grantQty").value || "1", 10) || 1;
+    const body = { user_id: userId, kind };
+    if (kind === "money" || kind === "gmpoint") {
+      body.amount = qty;
+    } else {
+      body.item = $("grantKey").value;
+      body.qty = qty;
+    }
+    try {
+      const data = await api("/api/admin/grant", body);
+      hint.textContent = "Готово: " + (data.title || data.item || data.kind)
+        + (data.balance !== undefined ? " · баланс " + fmt(data.balance) : "")
+        + (data.gmpoint !== undefined ? " · GMPOINT " + fmt(data.gmpoint) : "");
+    } catch (e) {
+      hint.textContent = e.message;
+    }
+  }
+
+  if ($("grantKind")) $("grantKind").addEventListener("change", fillGrantKeys);
+  if ($("grantSend")) $("grantSend").addEventListener("click", grantSend);
+  if ($("adminTabs")) $("adminTabs").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-atab]");
+    if (btn && btn.dataset.atab === "grant") {
+      loadGrantCatalog().then(fillGrantKeys).catch((err) => toast(err.message));
+    }
+  });
+
   if ($("hourlyCard")) $("hourlyCard").addEventListener("click", claimHourly);
   if ($("spinCard")) $("spinCard").addEventListener("click", () => switchView("tasks"));
   if ($("dailySpinBtn")) $("dailySpinBtn").addEventListener("click", spinDaily);

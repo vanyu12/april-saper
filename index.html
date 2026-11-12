@@ -636,6 +636,7 @@
       <button class="tab active" data-atab="overview">Сводка</button>
       <button class="tab" data-atab="users">Игроки</button>
       <button class="tab" data-atab="promo">Промокоды</button>
+      <button class="tab" data-atab="grant">Выдать</button>
       <button class="tab" data-atab="roles">Роли</button>
       <button class="tab" data-atab="settings">Настройки</button>
     </div>
@@ -692,7 +693,32 @@
       </div>
     </div>
 
-    <div class="admin-pane" id="pane-roles">
+    <div class="admin-pane" id="pane-grant">
+      <div class="card">
+        <div class="card-title">Выдать что угодно</div>
+        <div class="admin-field"><span>ID игрока</span><input class="mini-input" id="grantUser" type="number" placeholder="123456789"></div>
+        <div class="admin-field"><span>Тип</span>
+          <select class="mini-input" id="grantKind">
+            <option value="item">Предмет из магазина</option>
+            <option value="prefix">Префикс</option>
+            <option value="avatar">Аватарка</option>
+            <option value="background">Фон</option>
+            <option value="rod">Удочка</option>
+            <option value="achievement">Достижение</option>
+            <option value="money">mCoin (сумма)</option>
+            <option value="gmpoint">GMPOINT (сумма)</option>
+          </select>
+        </div>
+        <div class="admin-field"><span>Что выдать</span>
+          <select class="mini-input" id="grantKey"></select>
+        </div>
+        <div class="admin-field"><span>Количество / сумма</span><input class="mini-input" id="grantQty" type="number" value="1" min="1"></div>
+        <button class="cta" id="grantSend">Выдать</button>
+        <div class="hint" id="grantHint"></div>
+      </div>
+    </div>
+
+
       <div class="card">
         <div class="card-title">Роли и что они могут</div>
         <details class="role-card role-owner">
