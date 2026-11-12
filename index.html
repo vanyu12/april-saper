@@ -362,6 +362,13 @@
     </section>
 
     <section class="view" id="view-profile">
+      <div class="profile-nav" id="profileNav">
+        <button class="profile-nav-btn" data-scroll="accountCard">Аккаунт</button>
+        <button class="profile-nav-btn" data-scroll="cardTransfer">Перевод</button>
+        <button class="profile-nav-btn" data-scroll="cardPromo">Промокод</button>
+        <button class="profile-nav-btn" data-scroll="cardLevel">Уровень</button>
+        <button class="profile-nav-btn" data-scroll="achievements">Достижения</button>
+      </div>
       <div class="profile-card">
         <div class="avatar" id="avatar">?</div>
         <div>
@@ -437,7 +444,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card transfer-card" id="cardTransfer">
         <div class="card-title">Перевод игроку</div>
         <div class="hint transfer-id">Ваш ID: <b id="myId">—</b>
           <button class="chip-btn" id="copyId" type="button">Копировать</button>
@@ -449,7 +456,7 @@
         <div class="hint" id="transferHint">Без комиссии. Перевод получает игрок сразу.</div>
       </div>
 
-      <div class="card">
+      <div class="card" id="cardPromo">
         <div class="card-title">Промокод на GMPOINT</div>
         <input class="account-input" id="promoRedeemInput" placeholder="Введите промокод">
         <div class="account-actions">
@@ -457,7 +464,7 @@
         </div>
       </div>
 
-      <div class="card level-card">
+      <div class="card level-card" id="cardLevel">
         <div class="level-head">
           <span class="level-badge" id="levelBadge">1</span>
           <div class="level-main">

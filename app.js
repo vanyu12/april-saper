@@ -3153,6 +3153,17 @@ function bind() {
     });
   }
 
+  const profileNav = $("profileNav");
+  if (profileNav) {
+    profileNav.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-scroll]");
+      if (!btn) return;
+      const target = document.getElementById(btn.dataset.scroll);
+      haptic();
+      if (target) target.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+  }
+
   const prefixList = $("profilePrefixList");
   if (prefixList) {
     prefixList.addEventListener("click", (e) => {
