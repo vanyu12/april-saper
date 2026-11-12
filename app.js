@@ -1890,7 +1890,9 @@ function renderShop() {
   if (items) {
     const active = SHOP_SECTIONS.find((section) => section.key === shopCat)
       || SHOP_SECTIONS[0] || { key: "", title: "" };
-    const list = (shop.items || []).filter((item) => item.category === active.key);
+    const list = (shop.items || [])
+      .filter((item) => item.category === active.key)
+      .sort((a, b) => (a.price || 0) - (b.price || 0));
     items.innerHTML = list.length
       ? list.map((item) => shopCard(item)).join("")
       : '<div class="empty">В этой категории пока пусто</div>';
@@ -1908,7 +1910,9 @@ function renderShop() {
   }
   const prefixes = $("shopPrefixes");
   if (prefixes) {
-    prefixes.innerHTML = (shop.prefixes || []).map((item) => {
+    prefixes.innerHTML = (shop.prefixes || []).slice()
+      .sort((a, b) => (a.price || 0) - (b.price || 0))
+      .map((item) => {
       const levelOnly = item.currency === "level" || item.currency === "role";
       const style = item.style && item.style !== "solid" ? " · цветная обводка" : "";
       const bonus = Number(item.bonus || 0);
