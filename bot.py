@@ -336,6 +336,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
         before = game.level_from_xp(int(user.get("xp") or 0))
         db.finish_stats(user["user_id"], bet, payout, mult)
         boost_bonus(user, bet, payout)
+        if payout > 0:
+            db.referral_share(user["user_id"], payout, game.REF_WIN_SHARE)
         db.add_xp(user["user_id"], xp_gain)
         earned = awards.evaluate(db, user["user_id"])
         db.claim_referral_bonus(user["user_id"])

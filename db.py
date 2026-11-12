@@ -849,6 +849,30 @@ class Database:
             self.add_balance(me["referred_by"], 500)
             return me["referred_by"]
 
+    def referral_share(self, user_id: int, payout: int, rate: float) -> int:
+        """5% от выигрыша приглашённого переводим тому, кто его позвал."""
+        if payout <= 0 or rate <= 0:
+            return 0
+        with self._lock:
+            me = self.user(user_id)
+            if not me or not me.get("referred_by"):
+                return 0
+            ref_id = int(me["referred_by"])
+            if ref_id == int(user_id):
+                return 0
+            ref = self.user(ref_id)
+            if not ref or ref.get("is_banned"):
+                return 0
+            amount = int(round(int(payout) * float(rate)))
+            amount = min(amount, max(0, int(me["balance"])))
+            if amount <= 0:
+                return 0
+            self._exec("UPDATE users SET balance = balance - ? WHERE user_id = ?",
+                       (amount, user_id))
+            self._exec("UPDATE users SET balance = balance + ? WHERE user_id = ?",
+                       (amount, ref_id))
+            return amount
+
     # --- бонусы и колесо -------------------------------------------------
     def claim_hourly(self, user_id: int, now: int, cooldown: int, amount: int) -> int | None:
         with self._lock:

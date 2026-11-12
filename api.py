@@ -588,6 +588,8 @@ class Api:
     def _finish(self, user: dict, bet: int, payout: int, mult: float) -> list[dict]:
         self.db.finish_stats(user["user_id"], bet, payout, mult)
         self._apply_boost(user, bet, payout)
+        if payout > 0:
+            self.db.referral_share(user["user_id"], payout, game.REF_WIN_SHARE)
         xp = game.XP_PER_GAME + (game.XP_PER_WIN if payout > 0 else 0)
         self.db.add_xp(user["user_id"], xp)
         earned = awards.evaluate(self.db, user["user_id"])
