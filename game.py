@@ -314,6 +314,30 @@ WHEEL_SEGMENTS = (
 
 DAY_OFFSET = 3 * 3600
 
+# Прогрессивный ежедневный бонус: 1 000 в первый день, +1 000 за день серии.
+DAILY_BASE = 1000
+DAILY_STEP = 1000
+DAILY_MAX = 30000
+DAILY_STREAK_CAP = 30
+
+
+def daily_bonus_for_streak(streak: int) -> int:
+    """Сумма бонуса за день серии: 1 000 → 30 000."""
+    streak = max(1, min(DAILY_STREAK_CAP, int(streak)))
+    return min(DAILY_MAX, DAILY_BASE + (streak - 1) * DAILY_STEP)
+
+
+def day_diff(today: str, previous: str) -> int:
+    """Сколько дней между двумя ключами дат. При мусоре — большое число."""
+    if not today or not previous:
+        return 9999
+    try:
+        from datetime import date
+
+        return (date.fromisoformat(today) - date.fromisoformat(previous)).days
+    except (TypeError, ValueError):
+        return 9999
+
 DAILY_SPIN = (
     {"kind": "coins", "amount": 25, "weight": 150},
     {"kind": "coins", "amount": 50, "weight": 150},
@@ -538,6 +562,25 @@ DONATE_ITEMS = (
      "desc": "Три талисмана по пять зарядов", "items": {"charm": 3}},
 )
 
+# Картинки товаров (лежат в web/ и раздаются как /static/<файл>).
+SHOP_ICONS = {
+    "insurance": "shop_insurance.jpg",
+    "double_daily": "shop_double_daily.jpg",
+    "charm": "shop_charm.jpg",
+    "relic_mines": "shop_relic_mines.jpg",
+    "relic_dice": "shop_relic_dice.jpg",
+    "relic_wheel": "shop_relic_wheel.jpg",
+    "relic_crash": "shop_relic_crash.jpg",
+    "theme_neon": "shop_theme_neon.jpg",
+    "theme_gold": "shop_theme_gold.jpg",
+    "gold_pick": "shop_gold_pick.jpg",
+    "lootbox": "shop_lootbox.jpg",
+    "boost_win": "",
+    "boost_loss": "",
+}
+for _shop_item in SHOP_ITEMS:
+    _shop_item["icon"] = SHOP_ICONS.get(_shop_item["key"], "")
+
 INSURANCE_REFUND = 0.25
 INSURANCE_CAP = 200
 CHARM_BONUS = 0.1
@@ -702,6 +745,44 @@ def basket_shot(server_seed: str, client_seed: str, nonce: int) -> bool:
     return value < BASKET_CHANCE
 
 
+# --- дартс: три исхода броска 🎯 ---------------------------------------
+DARTS_SECTORS = (
+    {"key": "miss", "title": "Мимо", "icon": "💨", "values": (1, 2),
+     "multiplier": 2.97, "desc": "дротик уйдёт мимо мишени"},
+    {"key": "sector", "title": "Сектор", "icon": "🎯", "values": (3, 4, 5),
+     "multiplier": 1.98, "desc": "дротик попадёт в поле"},
+    {"key": "bull", "title": "Яблочко", "icon": "🔴", "values": (6,),
+     "multiplier": 5.9, "desc": "дротик попадёт в центр"},
+)
+
+DARTS_BY_KEY = {item["key"]: item for item in DARTS_SECTORS}
+DARTS_MAX = 6
+
+
+def dart_throw(server_seed: str, client_seed: str, nonce: int) -> int:
+    """Значение броска 1–6: 6 — яблочко, 3–5 — сектор, 1–2 — мимо."""
+    value = next(_floats(server_seed, client_seed, nonce, 0, 1))
+    return min(DARTS_MAX, int(value * DARTS_MAX) + 1)
+
+
+def darts_pick(key: str | None) -> dict | None:
+    return DARTS_BY_KEY.get((key or "").strip())
+
+
+def darts_lands(key: str | None, value: int) -> bool:
+    pick = darts_pick(key)
+    if not pick:
+        return False
+    return int(value) in pick["values"]
+
+
+def darts_multiplier(key: str | None, value: int) -> float:
+    pick = darts_pick(key)
+    if not pick or not darts_lands(key, value):
+        return 0.0
+    return float(pick["multiplier"])
+
+
 def open_lootbox(server_seed: str, client_seed: str, nonce: int) -> dict:
     value = next(_floats(server_seed, client_seed, nonce, 0, 1))
     if value < 0.40:
@@ -817,11 +898,46 @@ FISH_SPECIES = (
 
 FISH_COOLDOWN = 4
 
+# --- удочки: редкость, вес и удача -------------------------------------
+RODS = (
+    {"key": "bamboo", "title": "Бамбуковая", "price": 0, "rarity": 0.0,
+     "weight": 0.0, "luck": 0.0, "icon": "🎣",
+     "desc": "Стартовая удочка без бонусов"},
+    {"key": "lucky", "title": "Удочка удачи", "price": 2500, "rarity": 0.10,
+     "weight": 0.0, "luck": 0.05, "icon": "🍀",
+     "desc": "+10% к шансу редкой рыбы · +5% к цене"},
+    {"key": "heavy", "title": "Карповая", "price": 3000, "rarity": 0.0,
+     "weight": 0.25, "luck": 0.0, "icon": "🎏",
+     "desc": "+25% к весу рыбы"},
+    {"key": "hunter", "title": "Хищник", "price": 4500, "rarity": 0.20,
+     "weight": 0.10, "luck": 0.0, "icon": "🦈",
+     "desc": "+20% к шансу редкости · +10% к весу"},
+    {"key": "pro", "title": "Профи", "price": 8000, "rarity": 0.15,
+     "weight": 0.20, "luck": 0.10, "icon": "🏆",
+     "desc": "+15% редкость · +20% вес · +10% к цене"},
+    {"key": "gold", "title": "Золотая", "price": 15000, "rarity": 0.30,
+     "weight": 0.35, "luck": 0.15, "icon": "👑",
+     "desc": "+30% редкость · +35% вес · +15% к цене"},
+)
 
-def fish_catch(server_seed: str, client_seed: str, nonce: int) -> dict:
+ROD_BY_KEY = {rod["key"]: rod for rod in RODS}
+ROD_DEFAULT = "bamboo"
+
+
+def rod_view(key: str | None) -> dict:
+    rod = ROD_BY_KEY.get((key or "").strip()) or ROD_BY_KEY[ROD_DEFAULT]
+    return dict(rod)
+
+
+def fish_catch(server_seed: str, client_seed: str, nonce: int,
+               rod: dict | None = None) -> dict:
     """Пойманная рыба: вид, редкость, вес и цена скупщика."""
     r1, r2, r3 = (next(_floats(server_seed, client_seed, nonce, i, 1))
                   for i in range(3))
+    rarity_bonus = float((rod or {}).get("rarity") or 0.0)
+    weight_bonus = float((rod or {}).get("weight") or 0.0)
+    luck_bonus = float((rod or {}).get("luck") or 0.0)
+    r1 = min(0.999, r1 + rarity_bonus)
     acc = 0.0
     rarity = "common"
     for code, _title, chance, _price, _icon in FISH_RARITY:
@@ -833,10 +949,11 @@ def fish_catch(server_seed: str, client_seed: str, nonce: int) -> dict:
         [FISH_SPECIES[0]]
     sp = species[min(len(species) - 1, int(r2 * len(species)))]
     lo, hi = sp["weight"]
-    weight = int(lo + (hi - lo) * r3)
+    fraction = min(1.0, r3 * (1 + weight_bonus))
+    weight = int(lo + (hi - lo) * fraction)
     plo, phi = FISH_RARITY_MAP[rarity]["price"]
-    share = (weight - lo) / max(1, hi - lo)
-    price = int(plo + (phi - plo) * share)
+    share = min(1.0, (weight - lo) / max(1, hi - lo))
+    price = int((plo + (phi - plo) * share) * (1 + luck_bonus))
     return {"key": sp["key"], "name": sp["name"], "rarity": rarity,
             "rarity_title": FISH_RARITY_MAP[rarity]["title"],
             "icon": FISH_RARITY_MAP[rarity]["icon"], "weight_g": weight,

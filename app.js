@@ -203,9 +203,11 @@ function renderDaily() {
   const btn = $("dailyBtn");
   const ready = state.user && state.user.daily_ready;
   btn.classList.toggle("ready", !!ready);
+  const streak = (state.user && state.user.daily_streak) || 0;
+  const amount = (state.user && state.user.daily_amount) || 1000;
   btn.title = ready
-    ? `Забрать ${fmt(state.user.daily_amount || 300)} mCoin`
-    : "Бонус уже получен";
+    ? `Бонус: день ${streak + 1} · +${fmt(amount)} mCoin`
+    : `Бонус получен · серия ${streak} дн.`;
 }
 
 function fmtTime(sec) {
@@ -358,6 +360,7 @@ const HUB_GAMES = [
   ["coinflip", "🪙", "Орёл и решка", "Монета 50/50 ×1,96"],
   ["blackjack", "♠️", "21", "Блэкджек против дилера"],
   ["basket", "🏀", "Баскет", "Один бросок в кольцо ×2,4"],
+  ["darts", "🎯", "Дартс", "Яблочко ×5,9 · сектор ×1,98 · мимо ×2,97"],
 ];
 
 function renderGamesHub() {
@@ -1350,6 +1353,7 @@ const GAMES = [
   { key: "coinflip", icon: "🟡", title: "Орёл и решка", desc: "Монета 50/50, ×1,96" },
   { key: "blackjack", icon: "♠️", title: "21", desc: "Против дилера" },
   { key: "basket", icon: "🏀", title: "Баскет", desc: "Бросок в кольцо, ×2,4" },
+  { key: "darts", icon: "🎯", title: "Дартс", desc: "Яблочко, сектор или мимо" },
   { key: "fishing", icon: "🎣", title: "Рыбалка", desc: "Ждать поклёвку и продать" },
 ];
 
@@ -1589,6 +1593,58 @@ async function playBasket() {
   }
 }
 
+/* ---------- дартс ---------- */
+
+function dartsPick() {
+  const active = document.querySelector("#dartsPicks .darts-pick.active");
+  return active ? active.dataset.dartsPick : "bull";
+}
+
+async function playDarts() {
+  const input = $("dartsBet");
+  const bet = clampBet(parseInt(input.value || "0", 10));
+  input.value = bet;
+  const stage = $("dartsStage");
+  const result = $("dartsResult");
+  const btn = $("dartsThrow");
+  const score = $("dartsScore");
+  const pick = dartsPick();
+  btn.disabled = true;
+  stage.classList.remove("throw-bull", "throw-sector", "throw-miss");
+  result.className = "basket-result";
+  result.textContent = "Бросок…";
+  if (score) score.textContent = "";
+  try {
+    const data = await api("/api/games/darts", { bet, pick });
+    state.user.balance = data.balance;
+    state.quests = data.quests || state.quests;
+    void stage.offsetWidth;
+    stage.classList.add("throw-" + (data.sector || "miss"));
+    if (score) score.textContent = String(data.value);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    if (data.win) {
+      result.textContent = `В цель! ${fmtMult(data.multiplier)} · +${fmt(data.payout)} mCoin`;
+      result.className = "basket-result win";
+      sfx.cash();
+      haptic("success");
+      toast(`+${fmt(data.payout)} mCoin`);
+      confetti();
+    } else {
+      result.textContent = `Сектор ${data.value} — мимо, ставка сгорела`;
+      result.className = "basket-result lose";
+      sfx.boom();
+      haptic("error");
+    }
+    renderAll();
+  } catch (e) {
+    result.textContent = e.message;
+    result.className = "basket-result lose";
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 /* ---------- блэкджек ---------- */
 
 function bjCardHtml(card) {
@@ -1783,8 +1839,12 @@ function shopCard(entry, opts) {
     ? `<span class="${prefixClass(entry)}" style="${prefixStyleCss(entry)}">${escapeHtml(entry.title)}</span>`
     : escapeHtml(entry.title);
   const qty = consumable && entry.qty ? ` <span class="shop-qty">×${entry.qty}</span>` : "";
+  const icon = entry.icon
+    ? `<img class="shop-icon" src="/static/${entry.icon}" alt="">`
+    : "";
   return `<div class="shop-card${owned ? " owned" : ""}${entry.active ? " active" : ""}">
     <div class="shop-meta">
+      ${icon}
       <div class="shop-title">${title}${owned ? ' <span class="owned-mark">✓</span>' : ""}${entry.active ? ' <span class="owned-mark">•</span>' : ""}${qty}</div>
       <div class="shop-desc">${escapeHtml(entry.desc || (entry.currency === "level" ? "Награда за уровень" : ""))}</div>
     </div>
@@ -2296,6 +2356,55 @@ async function loadFish() {
     state.fishItems = data.items || [];
     renderFishSell();
   } catch (e) {}
+  loadRods();
+}
+
+function renderRods() {
+  const grid = $("rodGrid");
+  if (!grid) return;
+  const data = state.rods || { rods: [], rod_key: "bamboo" };
+  const list = data.rods || [];
+  grid.innerHTML = list.map((rod) => {
+    const active = rod.key === data.rod_key;
+    const price = rod.owned ? "" : `<span class="rod-price">◈ ${fmt(rod.price)}</span>`;
+    const act = rod.owned ? (active ? "" : "equip") : "buy";
+    return `<div class="rod-card${active ? " active" : ""}${rod.owned ? "" : " locked"}">
+      <div class="rod-icon">${rod.icon_file
+        ? `<img src="/static/${rod.icon_file}" alt="" onerror="this.remove()">`
+        : (rod.icon || "🎣")}</div>
+      <div class="rod-info">
+        <div class="rod-title">${escapeHtml(rod.title)}${active ? ' <span class="owned-mark">•</span>' : ""}</div>
+        <div class="rod-desc">${escapeHtml(rod.desc)}</div>
+        ${price}
+      </div>
+      <button class="rod-btn" data-rod="${rod.key}" data-act="${act}" ${active ? "disabled" : ""}>
+        ${active ? "Надета" : rod.owned ? "Надеть" : "Купить"}
+      </button>
+    </div>`;
+  }).join("") || '<div class="empty">Загрузка…</div>';
+}
+
+async function loadRods() {
+  try {
+    const data = await api("/api/fish/rods", { action: "list" });
+    state.rods = data;
+    renderRods();
+  } catch (e) {}
+}
+
+async function rodAction(key, act) {
+  try {
+    const data = await api("/api/fish/rods", { action: act, key });
+    state.rods = data;
+    if (data.balance !== undefined) state.user.balance = data.balance;
+    haptic("success");
+    toast(act === "buy" ? "Удочка куплена и надета" : "Удочка надета");
+    renderRods();
+    renderBalance();
+  } catch (e) {
+    haptic("error");
+    toast(e.message);
+  }
 }
 
 function renderAll() {
@@ -2837,7 +2946,8 @@ function bind() {
 
   document.querySelectorAll("[data-kbet]").forEach((btn) =>
     btn.addEventListener("click", () => {
-      const input = $("basketBet");
+      const pane = btn.closest(".game-pane");
+      const input = (pane && pane.querySelector('input[type="number"]')) || $("basketBet");
       let v = parseInt(input.value, 10) || 0;
       const mode = btn.dataset.kbet;
       if (mode === "half") v = Math.floor(v / 2);
@@ -2848,8 +2958,24 @@ function bind() {
     }));
 
   if ($("basketShoot")) $("basketShoot").addEventListener("click", playBasket);
+  if ($("dartsThrow")) $("dartsThrow").addEventListener("click", playDarts);
+  document.querySelectorAll("#dartsPicks .darts-pick").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#dartsPicks .darts-pick")
+        .forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      haptic();
+    }));
   if ($("fishCast")) $("fishCast").addEventListener("click", castFish);
   if ($("fishSellAll")) $("fishSellAll").addEventListener("click", sellAllFish);
+  const rodGrid = $("rodGrid");
+  if (rodGrid) {
+    rodGrid.addEventListener("click", (e) => {
+      const btn = e.target.closest(".rod-btn");
+      if (!btn || btn.disabled || !btn.dataset.act) return;
+      rodAction(btn.dataset.rod, btn.dataset.act);
+    });
+  }
 
   $("view-shop").addEventListener("click", (e) => {
     const btn = e.target.closest(".shop-buy");

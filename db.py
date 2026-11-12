@@ -281,6 +281,7 @@ DEFAULT_SETTINGS = {
     "game_blackjack": "1",
     "game_basket": "1",
     "game_fishing": "1",
+    "game_darts": "1",
 }
 
 
@@ -394,6 +395,9 @@ class Database:
             ("avatar_key", "TEXT NOT NULL DEFAULT 'letter'"),
             ("bg_key", "TEXT NOT NULL DEFAULT 'default'"),
             ("game_bg_key", "TEXT NOT NULL DEFAULT ''"),
+            ("daily_streak", "INTEGER NOT NULL DEFAULT 0"),
+            ("last_daily_day", "TEXT NOT NULL DEFAULT ''"),
+            ("rod_key", "TEXT NOT NULL DEFAULT ''"),
         ):
             if name not in present:
                 self._exec(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
@@ -627,6 +631,10 @@ class Database:
 
     def set_game_background(self, user_id: int, key: str) -> None:
         self._exec("UPDATE users SET game_bg_key = ? WHERE user_id = ?",
+                   ((key or "").strip(), user_id))
+
+    def set_rod(self, user_id: int, key: str) -> None:
+        self._exec("UPDATE users SET rod_key = ? WHERE user_id = ?",
                    ((key or "").strip(), user_id))
 
     def set_user_background(self, user_id: int, mime: str, data: str) -> None:
@@ -922,6 +930,36 @@ class Database:
                 return None
             self._exec("UPDATE users SET last_daily = ? WHERE user_id = ?", (now, user_id))
             return amount
+
+    def claim_daily_progressive(self, user_id: int, now: int, cooldown: int,
+                                today: str, base: int, step: int, cap_streak: int,
+                                max_amount: int) -> dict | None:
+        """Ежедневный бонус с серией: каждый следующий день серии дороже."""
+        with self._lock:
+            me = self.user(user_id)
+            if not me or now - int(me["last_daily"]) < cooldown:
+                return None
+            last_day = me.get("last_daily_day") or ""
+            streak = int(me.get("daily_streak") or 0)
+            if last_day == today:
+                streak = max(1, streak)
+            else:
+                diff = 9999
+                try:
+                    from datetime import date
+
+                    diff = (date.fromisoformat(today)
+                            - date.fromisoformat(last_day)).days
+                except (TypeError, ValueError):
+                    diff = 9999
+                streak = streak + 1 if diff == 1 else 1
+            streak = max(1, min(int(cap_streak), streak))
+            amount = min(int(max_amount), int(base) + (streak - 1) * int(step))
+            self._exec(
+                "UPDATE users SET last_daily = ?, daily_streak = ?, "
+                "last_daily_day = ?, balance = balance + ? WHERE user_id = ?",
+                (now, streak, today, amount, user_id))
+            return {"amount": amount, "streak": streak}
 
     def mark_spin(self, user_id: int, now: int, spin_day: int) -> None:
         self._exec("UPDATE users SET last_spin = ?, spin_day = ? WHERE user_id = ?",

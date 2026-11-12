@@ -147,6 +147,7 @@ class Api:
                 "coinflip": int(raw.get("game_coinflip", 1)) == 1,
                 "blackjack": int(raw.get("game_blackjack", 1)) == 1,
                 "basket": int(raw.get("game_basket", 1)) == 1,
+                "darts": int(raw.get("game_darts", 1)) == 1,
                 "fishing": int(raw.get("game_fishing", 1)) == 1,
             },
         }
@@ -278,6 +279,8 @@ class Api:
             "game_bg_title": game_bg["title"],
             "game_bg_url": game_bg_url,
             "game_bg_custom": bool(custom_bg),
+            "rod_key": game.rod_view(user.get("rod_key"))["key"],
+            "rod_title": game.rod_view(user.get("rod_key"))["title"],
             "last_seen": int(user.get("last_seen") or 0),
             "boost_win": self.db.item_qty(user["user_id"], "boost_win"),
             "boost_loss": self.db.item_qty(user["user_id"], "boost_loss"),
@@ -303,7 +306,11 @@ class Api:
             "duels_won": int(user.get("duels_won") or 0),
             "daily_ready": cooldown_left == 0,
             "daily_in": cooldown_left,
-            "daily_amount": int(self._settings().get("daily_bonus", game.DAILY_BONUS)),
+            "daily_streak": int(user.get("daily_streak") or 0),
+            "daily_amount": game.daily_bonus_for_streak(
+                int(user.get("daily_streak") or 0) + 1),
+            "daily_next_amount": game.daily_bonus_for_streak(
+                int(user.get("daily_streak") or 0) + 2),
             "hourly_ready": hourly_left == 0,
             "hourly_in": hourly_left,
             "hourly_amount": game.HOURLY_BONUS,
@@ -641,18 +648,25 @@ class Api:
         if now - user["last_daily"] < game.DAILY_COOLDOWN:
             left = user["last_daily"] + game.DAILY_COOLDOWN - now
             return self._fail(f"Бонус будет доступен через {left // 3600} ч")
-        bonus = int(self._settings().get("daily_bonus", game.DAILY_BONUS))
+        base = int(self._settings().get("daily_bonus", game.DAILY_BASE))
         doubled = self.db.take_item(user["user_id"], "double_daily")
+        result = self.db.claim_daily_progressive(
+            user["user_id"], now, game.DAILY_COOLDOWN, game.day_key(),
+            base, game.DAILY_STEP, game.DAILY_STREAK_CAP, game.DAILY_MAX)
+        if not result:
+            return self._fail("Бонус ещё не готов", 429)
+        bonus = int(result["amount"])
         if doubled:
+            self.db.add_balance(user["user_id"], bonus)
             bonus *= 2
-        self.db._exec("UPDATE users SET last_daily = ? WHERE user_id = ?",
-                      (now, user["user_id"]))
-        self.db.add_balance(user["user_id"], bonus)
+        streak = int(result["streak"])
         gmpoint_bonus = 2
         self.db.add_gmpoint(user["user_id"], gmpoint_bonus)
         earned = awards.evaluate(self.db, user["user_id"])
         fresh = self.db.user(user["user_id"])
         return self._json({"ok": True, "amount": bonus, "doubled": doubled,
+                           "streak": streak,
+                           "next_amount": game.daily_bonus_for_streak(streak + 1),
                            "gmpoint": gmpoint_bonus,
                            "awards": earned, "balance": fresh["balance"],
                            "gmpoint_total": fresh["gmpoint"]})
@@ -1079,6 +1093,55 @@ class Api:
             "quests": self._quests_view(user),
         })
 
+    async def darts(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        body = await self._body(request)
+        try:
+            bet = int(body.get("bet", 0))
+        except (TypeError, ValueError):
+            return self._fail("Некорректная ставка")
+        pick = str(body.get("pick", "sector")).strip().lower()
+        if not game.darts_pick(pick):
+            return self._fail("Выбери: bull, sector или miss")
+        error = self._bet_error(user, bet, "darts")
+        if error:
+            return self._fail(error, 403 if user.get("is_banned") else 400)
+
+        nonce = self.db.bump_nonce(user["user_id"])
+        value = game.dart_throw(user["server_seed"], user["client_seed"], nonce)
+        win = game.darts_lands(pick, value)
+        multiplier = game.darts_multiplier(pick, value)
+        payout = int(math.floor(bet * multiplier)) if win else 0
+        refund = 0
+        if win:
+            payout = self._charm_bonus(user, payout)
+            payout = self._prefix_bonus(user, payout)
+        else:
+            refund = self._insurance_refund(user, bet)
+
+        self.db.add_balance(user["user_id"], payout - bet)
+        self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "darts", bet, win,
+                         payout, {"value": value, "pick": pick, "nonce": nonce})
+        self._finish(user, bet, payout, multiplier or 1.0)
+        self._settle_referral(user["user_id"])
+
+        sector = next((item["key"] for item in game.DARTS_SECTORS
+                       if value in item["values"]), "miss")
+        return self._json({
+            "ok": True,
+            "value": value,
+            "sector": sector,
+            "pick": pick,
+            "win": win,
+            "multiplier": multiplier,
+            "payout": payout,
+            "refund": refund,
+            "balance": self.db.user(user["user_id"])["balance"],
+            "quests": self._quests_view(user),
+        })
+
     async def transfer(self, request: web.Request) -> web.Response:
         user = self._auth(request)
         if not user:
@@ -1171,10 +1234,12 @@ class Api:
             return self._fail("Рыба ещё не подошла — подождите")
         self._last_fish[user["user_id"]] = now
         nonce = self.db.bump_nonce(user["user_id"])
-        fish = game.fish_catch(user["server_seed"], user["client_seed"], nonce)
+        rod = game.rod_view(user.get("rod_key"))
+        fish = game.fish_catch(user["server_seed"], user["client_seed"], nonce, rod)
         fish_id = uuid.uuid4().hex[:16]
         self.db.add_fish(fish_id, user["user_id"], fish)
         return self._json({"ok": True, "id": fish_id, **fish,
+                           "rod": rod["title"],
                            "balance": self.db.user(user["user_id"])["balance"]})
 
     async def fish_list(self, request: web.Request) -> web.Response:
@@ -1205,6 +1270,55 @@ class Api:
             return self._fail("Рыба не найдена или уже продана", 404)
         return self._json({"ok": True, "sold": 1, "amount": price,
                            "balance": self.db.user(user["user_id"])["balance"]})
+
+    def _rods_view(self, user: dict) -> dict:
+        uid = user["user_id"]
+        active = game.rod_view(user.get("rod_key"))["key"]
+        rods = []
+        for rod in game.RODS:
+            owned = (int(rod["price"]) == 0
+                     or self.db.item_qty(uid, "rod_" + rod["key"]) > 0)
+            rods.append({**rod, "owned": owned, "active": rod["key"] == active,
+                         "icon_file": "rod_" + rod["key"] + ".jpg"})
+        return {"rods": rods, "rod_key": active, "balance": user["balance"]}
+
+    async def fish_rods(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        body = await self._body(request)
+        action = str(body.get("action", "list")).strip() or "list"
+        if action == "list":
+            return self._json({"ok": True, **self._rods_view(user)})
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        key = str(body.get("key", "")).strip()
+        rod = game.ROD_BY_KEY.get(key)
+        if not rod:
+            return self._fail("Удочка не найдена", 404)
+        item_key = "rod_" + key
+        if action == "buy":
+            if int(rod["price"]) == 0 or self.db.item_qty(user["user_id"], item_key) > 0:
+                return self._fail("Эта удочка уже доступна")
+            price = int(rod["price"])
+            if int(user["balance"]) < price:
+                return self._fail("Недостаточно mCoin")
+            balance = self.db.add_balance(user["user_id"], -price)
+            self.db.add_item(user["user_id"], item_key, 1)
+            self.db.set_rod(user["user_id"], key)
+            fresh = self.db.user(user["user_id"])
+            return self._json({"ok": True, "bought": rod["title"],
+                               "balance": balance, **self._rods_view(fresh)})
+        if action == "equip":
+            owned = (int(rod["price"]) == 0
+                     or self.db.item_qty(user["user_id"], item_key) > 0)
+            if not owned:
+                return self._fail("Сначала купи эту удочку")
+            self.db.set_rod(user["user_id"], key)
+            fresh = self.db.user(user["user_id"])
+            return self._json({"ok": True, "equipped": True,
+                               **self._rods_view(fresh)})
+        return self._fail("Неизвестное действие")
 
     async def wheel(self, request: web.Request) -> web.Response:
         user = self._auth(request)
@@ -2293,7 +2407,7 @@ class Api:
                    "daily_bonus", "maintenance",
                    "game_mines", "game_dice", "game_wheel", "game_crash",
                    "game_roulette", "game_slots", "game_coinflip", "game_blackjack",
-                   "game_basket")
+                   "game_basket", "game_darts")
         updates: dict[str, int] = {}
         for key in allowed:
             if key not in body:
@@ -2352,9 +2466,11 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/games/crash", api.crash)
     app.router.add_post("/api/games/coinflip", api.coinflip)
     app.router.add_post("/api/games/basket", api.basket)
+    app.router.add_post("/api/games/darts", api.darts)
     app.router.add_post("/api/fish/catch", api.fish_catch)
     app.router.add_post("/api/fish/list", api.fish_list)
     app.router.add_post("/api/fish/sell", api.fish_sell)
+    app.router.add_post("/api/fish/rods", api.fish_rods)
     app.router.add_post("/api/transfer", api.transfer)
     app.router.add_post("/api/transfers", api.transfers)
     app.router.add_post("/api/promo", api.promo)

@@ -295,16 +295,49 @@
 
           <div class="basket-stage" id="basketStage">
             <div class="basket-glow"></div>
-            <div class="basket-board"></div>
-            <div class="basket-ring"></div>
-            <div class="basket-net"></div>
+            <div class="basket-hoop-emoji">🥅</div>
+            <div class="basket-court-emoji">🏟️</div>
             <div class="basket-ball" id="basketBall">🏀</div>
-            <div class="basket-flash" id="basketFlash">🏀</div>
+            <div class="basket-flash" id="basketFlash">✨</div>
           </div>
 
           <div class="basket-result" id="basketResult">Один бросок — попадание ×2,4</div>
           <button class="cta" id="basketShoot">Бросить</button>
           <div class="hint" id="basketHint">Шанс попадания 40%. Попал — выплата ×2,4.</div>
+        </div>
+      </div>
+
+      <div class="game-pane" id="game-pane-darts">
+        <div class="panel">
+          <div class="field-row">
+            <label class="field-label" for="dartsBet">Ставка</label>
+            <div class="bet-controls">
+              <button class="chip-btn" data-kbet="half">½</button>
+              <button class="chip-btn" data-kbet="double">2×</button>
+              <button class="chip-btn" data-kbet="max">MAX</button>
+            </div>
+          </div>
+          <div class="bet-input-wrap">
+            <span class="coin">◈</span>
+            <input id="dartsBet" type="number" inputmode="numeric" min="10" step="10" value="50">
+            <span class="bet-unit">mCoin</span>
+          </div>
+
+          <div class="darts-picks" id="dartsPicks">
+            <button class="darts-pick active" data-darts-pick="bull">🔴 Яблочко <b>×5,9</b></button>
+            <button class="darts-pick" data-darts-pick="sector">🎯 Сектор <b>×1,98</b></button>
+            <button class="darts-pick" data-darts-pick="miss">💨 Мимо <b>×2,97</b></button>
+          </div>
+
+          <div class="darts-stage" id="dartsStage">
+            <div class="darts-board">🎯</div>
+            <div class="darts-dart" id="dartsDart">➤</div>
+            <div class="darts-score" id="dartsScore"></div>
+          </div>
+
+          <div class="basket-result" id="dartsResult">Выбери исход и бросай</div>
+          <button class="cta" id="dartsThrow">Бросить дротик</button>
+          <div class="hint" id="dartsHint">Яблочко ×5,9 · сектор ×1,98 · мимо ×2,97.</div>
         </div>
       </div>
 
@@ -319,6 +352,11 @@
               <span id="fishTotal">0</span> mCoin</button>
           </div>
           <div class="fish-result" id="fishResult"></div>
+        </div>
+        <div class="panel rods-panel">
+          <div class="card-title">Удочки</div>
+          <div class="hint">Бонусы к редкости, весу и цене улова. Работает одна удочка.</div>
+          <div class="rod-grid" id="rodGrid"></div>
         </div>
       </div>
     </section>
@@ -473,6 +511,10 @@
 
     <section class="view" id="view-shop">
       <div class="card-title page-title">Магазин</div>
+      <div class="shop-hero">
+        <img src="/static/shop_banner.jpg" alt="Магазин">
+        <div class="shop-hero-title">Сокровищница сапёра</div>
+      </div>
       <div class="shop-inventory" id="shopInventory"></div>
       <div class="card">
         <div class="shop-list" id="shopItems"></div>

@@ -1115,7 +1115,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
              InlineKeyboardButton(text="🎰 Слоты", callback_data="menu:slots")],
             [InlineKeyboardButton(text="💥 Краш", callback_data="menu:crash"),
              InlineKeyboardButton(text="🪙 Орёл и решка", callback_data="menu:coin")],
-            [InlineKeyboardButton(text="🏀 Баскет", callback_data="menu:basket")],
+            [InlineKeyboardButton(text="🏀 Баскет", callback_data="menu:basket"),
+             InlineKeyboardButton(text="🎯 Дартс", callback_data="menu:darts")],
             [webapp_button()],
         ])
 
@@ -1375,6 +1376,69 @@ def build_dispatcher(db: Database) -> Dispatcher:
         lines.append(f"💰 Баланс: {num(db.user(user['user_id'])['balance'])} mCoin")
         return "\n".join(lines)
 
+    def darts_hint_text() -> str:
+        settings = db.settings()
+        return ("🎯 <b>Дартс</b>\n\n"
+                "Выбери, куда попадёт дротик:\n"
+                "• <b>яблочко</b> — центр мишени, ×5,9\n"
+                "• <b>сектор</b> — поле мишени, ×1,98\n"
+                "• <b>мимо</b> — промах, ×2,97\n\n"
+                "Напиши: <code>/darts 100 яблочко</code>\n"
+                "Бот отправляет анимацию 🎯 из Telegram — она и решает.\n\n"
+                f"Ставка: от {num(settings.get('min_bet', game.MIN_BET))} "
+                f"до {num(settings.get('max_bet', game.MAX_BET))} mCoin.\n\n"
+                "Или просто жми кнопку 👇")
+
+    def darts_hint_keyboard() -> InlineKeyboardMarkup:
+        rows = []
+        for bet in (100, 500):
+            rows.append([
+                InlineKeyboardButton(text=f"{num(bet)} · яблочко",
+                                     callback_data=f"dt:{bet}:bull"),
+                InlineKeyboardButton(text=f"{num(bet)} · сектор",
+                                     callback_data=f"dt:{bet}:sector"),
+                InlineKeyboardButton(text=f"{num(bet)} · мимо",
+                                     callback_data=f"dt:{bet}:miss"),
+            ])
+        rows.append([InlineKeyboardButton(text="⬅️ Игры", callback_data="menu:games")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def play_darts(user: dict, bet: int, value: int, pick: str = "bull") -> str:
+        error = bet_error(user, bet, "darts")
+        if error:
+            return "⚠️ " + error
+        pick_data = game.darts_pick(pick)
+        if not pick_data:
+            return "⚠️ Неизвестный выбор: яблочко, сектор или мимо"
+        win = game.darts_lands(pick, value)
+        multiplier = game.darts_multiplier(pick, value)
+        payout = int(math.floor(bet * multiplier)) if win else 0
+        refund = 0
+        if win:
+            payout = charm_bonus(user, payout)
+        else:
+            refund = insurance_refund(user, bet)
+        earned, xp_gain, level_before, level_after = settle_play(
+            user, "darts", bet, payout, multiplier or 1.0,
+            {"value": value, "pick": pick, "chat": True})
+        sector_key = next((item["key"] for item in game.DARTS_SECTORS
+                           if value in item["values"]), "miss")
+        sector = game.DARTS_BY_KEY[sector_key]
+        lines = ["🎯 <b>Дартс</b>", "",
+                 f"Бросок: <b>{value}</b> из 6 — {sector['icon']} {sector['title']}",
+                 f"Ставка: {num(bet)} mCoin на «{pick_data['title']}»"]
+        if win:
+            lines.append(f"✅ Попал! Выигрыш: <b>+{num(payout)}</b> mCoin "
+                         f"(×{multiplier:.2f})")
+        else:
+            lines.append("❌ Мимо выбранного — ставка сгорела")
+        if refund:
+            lines.append(f"🛡 Страховка вернула {num(refund)} mCoin")
+        lines.append(xp_line(xp_gain, level_before, level_after))
+        lines.extend(awards_lines(earned))
+        lines.append(f"💰 Баланс: {num(db.user(user['user_id'])['balance'])} mCoin")
+        return "\n".join(lines)
+
     def transfer_text(sender: dict, target_raw: str, amount: int) -> str:
         if amount < 1:
             return "⚠️ Сумма должна быть больше нуля"
@@ -1486,19 +1550,25 @@ def build_dispatcher(db: Database) -> Dispatcher:
         daily_left = game.DAILY_COOLDOWN - (now - int(user.get("last_daily") or 0))
         if daily_left <= 0:
             doubled = db.take_item(user["user_id"], "double_daily")
-            bonus = int(settings.get("daily_bonus", game.DAILY_BONUS))
-            if doubled:
-                bonus *= 2
-            amount = db.claim_daily(user["user_id"], now, game.DAILY_COOLDOWN, bonus)
-            if amount is None:
+            base = int(settings.get("daily_bonus", game.DAILY_BASE))
+            result = db.claim_daily_progressive(
+                user["user_id"], now, game.DAILY_COOLDOWN, game.day_key(),
+                base, game.DAILY_STEP, game.DAILY_STREAK_CAP, game.DAILY_MAX)
+            if result is None:
                 if doubled:
                     db.add_item(user["user_id"], "double_daily")
                 lines.append("⏳ Ежедневный: ещё не готов")
             else:
-                db.add_balance(user["user_id"], amount)
+                amount = int(result["amount"])
+                if doubled:
+                    db.add_balance(user["user_id"], amount)
+                    amount *= 2
                 gained += amount
                 suffix = " (×2 за предмет)" if doubled else ""
-                lines.append(f"✅ Ежедневный: +{num(amount)} mCoin{suffix}")
+                lines.append(f"✅ Ежедневный: +{num(amount)} mCoin · "
+                             f"день {result['streak']}{suffix}")
+                nxt = game.daily_bonus_for_streak(int(result["streak"]) + 1)
+                lines.append(f"   Завтра: {num(nxt)} mCoin, если зайдёшь")
         else:
             lines.append(f"⏳ Ежедневный: через {left_text(daily_left)}")
 
@@ -1722,6 +1792,40 @@ def build_dispatcher(db: Database) -> Dispatcher:
         shot = await message.answer_dice(emoji="🏀")
         await message.answer(play_basket(user, bet, shot.dice.value, pick),
                              reply_markup=basket_hint_keyboard())
+
+    @dp.message(Command("darts", "dart"))
+    async def darts_cmd(message: Message) -> None:
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.answer(darts_hint_text(), reply_markup=darts_hint_keyboard())
+            return
+        raw_bet = parts[1].replace(" ", "")
+        if not raw_bet.isdigit():
+            await message.answer("Ставка должна быть числом. Пример: "
+                                 "<code>/darts 100 яблочко</code>")
+            return
+        pick = "bull"
+        if len(parts) >= 3:
+            word = parts[2].lower()
+            if word in ("яблочко", "центр", "bull", "bullseye", "10"):
+                pick = "bull"
+            elif word in ("сектор", "поле", "sector", "мишень"):
+                pick = "sector"
+            elif word in ("мимо", "промах", "miss", "нет"):
+                pick = "miss"
+            else:
+                await message.answer("Выбери: яблочко, сектор или мимо. Пример: "
+                                     "<code>/darts 100 сектор</code>")
+                return
+        user = get_user(message)
+        bet = int(raw_bet)
+        error = bet_error(user, bet, "darts")
+        if error:
+            await message.answer("⚠️ " + error)
+            return
+        shot = await message.answer_dice(emoji="🎯")
+        await message.answer(play_darts(user, bet, shot.dice.value, pick),
+                             reply_markup=darts_hint_keyboard())
 
     @dp.message(Command("pay", "transfer"))
     async def pay_cmd(message: Message) -> None:
@@ -2051,6 +2155,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "/crash 100 2.5 — краш с целью ×1,20–×10\n"
             "/coin 100 орёл — орёл и решка, ×1,96\n"
             "/basket 100 попадёт — баскет: забросит мяч или нет\n"
+            "/darts 100 яблочко — дартс: яблочко, сектор или мимо\n"
             "/duel 100 @username — дуэль 1×1 на бросок\n"
             "/spin — колесо дня раз в 12 часов\n\n"
             "<b>Баланс и бонусы</b>\n"
@@ -2335,6 +2440,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "coinflip": "coinflip", "орёл": "coinflip", "орел": "coinflip",
             "blackjack": "blackjack", "21": "blackjack",
             "basket": "basket", "баскет": "basket",
+            "darts": "darts", "дартс": "darts",
             "roulette": "roulette", "рулетка": "roulette",
             "slots": "slots", "слоты": "slots",
         }
@@ -2934,6 +3040,28 @@ def build_dispatcher(db: Database) -> Dispatcher:
                                       reply_markup=basket_hint_keyboard())
         await callback.answer("Бросок!")
 
+    @dp.callback_query(F.data == "menu:darts")
+    async def menu_darts(callback) -> None:
+        await callback.message.answer(darts_hint_text(),
+                                      reply_markup=darts_hint_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("dt:"))
+    async def darts_quick(callback) -> None:
+        parts_cb = callback.data.split(":")
+        bet_raw = parts_cb[1]
+        pick = parts_cb[2] if len(parts_cb) > 2 else "bull"
+        user = get_user(callback)
+        bet = int(bet_raw)
+        error = bet_error(user, bet, "darts")
+        if error:
+            await callback.answer(error[:60], show_alert=True)
+            return
+        shot = await callback.message.answer_dice(emoji="🎯")
+        await callback.message.answer(play_darts(user, bet, shot.dice.value, pick),
+                                      reply_markup=darts_hint_keyboard())
+        await callback.answer("Бросок!")
+
     @dp.callback_query(F.data.startswith("d:"))
     async def dice_quick(callback) -> None:
         _, bet_raw, pick_raw = callback.data.split(":")
@@ -3243,6 +3371,7 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="crash", description="Краш"),
         BotCommand(command="coin", description="Орёл и решка"),
         BotCommand(command="basket", description="Баскет: бросок в кольцо"),
+        BotCommand(command="darts", description="Дартс: яблочко, сектор или мимо"),
         BotCommand(command="pay", description="Перевод другому игроку"),
         BotCommand(command="promo", description="Активировать промокод"),
         BotCommand(command="updates", description="Что нового"),
