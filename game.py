@@ -100,6 +100,26 @@ PREFIXES = (
 
 PREFIX_BY_KEY = {prefix["key"]: prefix for prefix in PREFIXES}
 
+
+def register_custom_prefixes(custom: list[dict]) -> None:
+    """Добавляет созданные админом префиксы в каталог."""
+    for cp in custom:
+        key = str(cp["key"] or "").strip()
+        if not key:
+            continue
+        PREFIX_BY_KEY[key] = {
+            "key": key,
+            "title": str(cp.get("title") or key),
+            "price": 0,
+            "currency": "role",
+            "level": 1,
+            "color": str(cp.get("color") or "#ffd166"),
+            "color2": str(cp.get("color2") or "") or None,
+            "style": str(cp.get("style") or "solid"),
+            "bonus": float(cp.get("bonus") or 0.0),
+            "desc": f"+{round(float(cp.get('bonus') or 0.0) * 100)}% к выплате · кастомный",
+        }
+
 # Бонусы к выплатам для цветных префиксов: чем дороже префикс, тем выше бонус.
 PREFIX_PAYOUT_BONUS = {
     "red_glow": 0.01,
@@ -380,6 +400,25 @@ DAILY_SPIN = (
 
 SPIN_COOLDOWN = 12 * 60 * 60
 SPIN_STREAK_DAYS = 7
+
+HOUR_QUESTS = (
+    {"key": "h_games", "title": "Сыграй 3 партии за час", "metric": "games",
+     "target": 3, "reward": 150},
+    {"key": "h_win", "title": "Выиграй 1 партию за час", "metric": "wins",
+     "target": 1, "reward": 200},
+    {"key": "h_wager", "title": "Поставь 500 mCoin за час", "metric": "wagered",
+     "target": 500, "reward": 250},
+)
+
+
+def hour_key() -> str:
+    return time.strftime("%Y-%m-%d %H", time.gmtime(time.time() + DAY_OFFSET))
+
+
+def hour_start() -> int:
+    shifted = time.time() + DAY_OFFSET
+    return int(shifted - (shifted % 3600) - DAY_OFFSET)
+
 
 DAILY_QUESTS = (
     {"key": "games5", "title": "Сыграть 5 партий", "metric": "games", "target": 5, "reward": 300},

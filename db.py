@@ -153,6 +153,26 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS hour_quest_claims (
+        user_id    INTEGER NOT NULL,
+        hour       TEXT NOT NULL,
+        quest      TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, hour, quest)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS custom_prefixes (
+        key       TEXT PRIMARY KEY,
+        title     TEXT NOT NULL,
+        color     TEXT NOT NULL DEFAULT '#ffd166',
+        color2    TEXT NOT NULL DEFAULT '',
+        style     TEXT NOT NULL DEFAULT 'solid',
+        bonus     REAL NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS inventory (
         user_id INTEGER NOT NULL,
         item    TEXT NOT NULL,
@@ -277,6 +297,8 @@ DEFAULT_SETTINGS = {
     "min_mines": "1",
     "max_mines": "24",
     "daily_bonus": "1000",
+    "hourly_bonus": "500",
+    "chat_url": "",
     "maintenance": "0",
     "update_version": "0",
     "game_mines": "1",
@@ -596,6 +618,28 @@ class Database:
         rows = self._rows("SELECT prefix_key FROM user_prefixes WHERE user_id = ?",
                           (user_id,))
         return {row["prefix_key"] for row in rows}
+
+    def custom_prefixes(self) -> list[dict]:
+        return self._rows("SELECT key, title, color, color2, style, bonus "
+                          "FROM custom_prefixes ORDER BY created_at DESC")
+
+    def get_custom_prefix(self, key: str) -> dict | None:
+        return self._row("SELECT key, title, color, color2, style, bonus "
+                         "FROM custom_prefixes WHERE key = ?", (key,))
+
+    def upsert_custom_prefix(self, key: str, title: str, color: str, color2: str,
+                             style: str, bonus: float) -> None:
+        self._exec(
+            """INSERT INTO custom_prefixes (key, title, color, color2, style, bonus, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT (key) DO UPDATE SET
+                   title = excluded.title, color = excluded.color,
+                   color2 = excluded.color2, style = excluded.style,
+                   bonus = excluded.bonus""",
+            (key, title, color, color2, style, bonus, int(time.time())))
+
+    def delete_custom_prefix(self, key: str) -> None:
+        self._exec("DELETE FROM custom_prefixes WHERE key = ?", (key,))
 
     def add_prefix(self, user_id: int, prefix_key: str) -> bool:
         changed = self._exec(
@@ -1385,6 +1429,20 @@ class Database:
             """INSERT INTO quest_claims (user_id, day, quest, created_at)
                VALUES (?, ?, ?, ?) ON CONFLICT (user_id, day, quest) DO NOTHING""",
             (user_id, day, quest, int(time.time())),
+        )
+        return bool(changed)
+
+    def hour_claimed_quests(self, user_id: int, hour: str) -> set[str]:
+        rows = self._rows(
+            "SELECT quest FROM hour_quest_claims WHERE user_id = ? AND hour = ?",
+            (user_id, hour))
+        return {row["quest"] for row in rows}
+
+    def claim_hour_quest(self, user_id: int, hour: str, quest: str) -> bool:
+        changed = self._exec(
+            """INSERT INTO hour_quest_claims (user_id, hour, quest, created_at)
+               VALUES (?, ?, ?, ?) ON CONFLICT (user_id, hour, quest) DO NOTHING""",
+            (user_id, hour, quest, int(time.time())),
         )
         return bool(changed)
 

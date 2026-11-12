@@ -140,7 +140,9 @@ class Api:
             "min_mines": raw.get("min_mines", 1),
             "max_mines": raw.get("max_mines", 24),
             "daily_bonus": raw.get("daily_bonus", game.DAILY_BONUS),
+            "hourly_bonus": raw.get("hourly_bonus", game.HOURLY_BONUS),
             "maintenance": raw.get("maintenance", 0),
+            "chat_url": raw.get("chat_url", config.chat_url),
             "games": {
                 "mines": int(raw.get("game_mines", 1)) == 1,
                 "dice": int(raw.get("game_dice", 1)) == 1,
@@ -1486,12 +1488,32 @@ class Api:
             })
         return items
 
+    def _hour_quests_view(self, user: dict) -> list[dict]:
+        hour = game.hour_key()
+        stats = self.db.day_stats(user["user_id"], game.hour_start())
+        claimed = self.db.hour_claimed_quests(user["user_id"], hour)
+        items = []
+        for quest in game.HOUR_QUESTS:
+            progress = min(quest["target"], int(stats.get(quest["metric"], 0)))
+            items.append({
+                "key": quest["key"],
+                "title": quest["title"],
+                "target": quest["target"],
+                "reward": quest["reward"],
+                "currency": quest.get("currency") or "",
+                "progress": progress,
+                "ready": progress >= quest["target"] and quest["key"] not in claimed,
+                "claimed": quest["key"] in claimed,
+            })
+        return items
+
     async def quests(self, request: web.Request) -> web.Response:
         user = self._auth(request)
         if not user:
             return self._fail("unauthorized", 401)
         return self._json({"ok": True, "day": game.day_key(),
-                           "items": self._quests_view(user)})
+                           "items": self._quests_view(user),
+                           "hour_items": self._hour_quests_view(user)})
 
     async def quest_claim(self, request: web.Request) -> web.Response:
         user = self._auth(request)
@@ -1502,13 +1524,24 @@ class Api:
         body = await self._body(request)
         key = str(body.get("key", ""))
         quest = next((q for q in game.DAILY_QUESTS if q["key"] == key), None)
+        is_hour = False
+        if quest is None:
+            quest = next((q for q in game.HOUR_QUESTS if q["key"] == key), None)
+            is_hour = bool(quest)
         if not quest:
             return self._fail("Неизвестное задание", 404)
-        stats = self.db.day_stats(user["user_id"], game.day_start())
-        if int(stats.get(quest["metric"], 0)) < quest["target"]:
-            return self._fail("Задание ещё не выполнено")
-        if not self.db.claim_quest(user["user_id"], game.day_key(), key):
-            return self._fail("Награда уже получена")
+        if is_hour:
+            stats = self.db.day_stats(user["user_id"], game.hour_start())
+            if int(stats.get(quest["metric"], 0)) < quest["target"]:
+                return self._fail("Задание ещё не выполнено")
+            if not self.db.claim_hour_quest(user["user_id"], game.hour_key(), key):
+                return self._fail("Награда уже получена")
+        else:
+            stats = self.db.day_stats(user["user_id"], game.day_start())
+            if int(stats.get(quest["metric"], 0)) < quest["target"]:
+                return self._fail("Задание ещё не выполнено")
+            if not self.db.claim_quest(user["user_id"], game.day_key(), key):
+                return self._fail("Награда уже получена")
         if quest.get("currency") == "gmpoint":
             self.db.add_gmpoint(user["user_id"], int(quest["reward"]))
             balance = self.db.user(user["user_id"])["balance"]
@@ -1518,7 +1551,8 @@ class Api:
             gmpoint = user.get("gmpoint") or 0
         return self._json({"ok": True, "reward": quest["reward"],
                            "balance": balance, "gmpoint": gmpoint,
-                           "quests": self._quests_view(user)})
+                           "quests": self._quests_view(user),
+                           "hour_items": self._hour_quests_view(user)})
 
     # --- уровни ----------------------------------------------------------
     def _levels_view(self, user: dict) -> dict:
@@ -2288,27 +2322,43 @@ class Api:
             return self._fail("Аккаунт заблокирован", 403)
         body = await self._body(request)
         key = str(body.get("key", ""))
+        try:
+            qty = max(1, int(body.get("qty", 1)))
+        except (TypeError, ValueError):
+            qty = 1
         if key != "lootbox":
             return self._fail("Этот предмет нельзя использовать напрямую")
-        if not self.db.take_item(user["user_id"], "lootbox"):
-            return self._fail("Кейса удачи нет")
-        nonce = self.db.bump_nonce(user["user_id"])
-        reward = game.open_lootbox(user["server_seed"], user["client_seed"], nonce)
-        if reward["kind"] == "coins":
-            self.db.add_balance(user["user_id"], int(reward["amount"]))
-            title = f"+{reward['amount']} mCoin"
-        else:
-            qty = int(reward.get("qty", 1))
-            self.db.add_item(user["user_id"], reward["item"], qty)
-            item = next((i for i in game.SHOP_ITEMS if i["key"] == reward["item"]),
-                        None)
-            title = f"{item['title'] if item else reward['item']} ×{qty}"
+        if self.db.item_qty(user["user_id"], "lootbox") < qty:
+            return self._fail("Не хватает кейсов удачи")
+        total_coins = 0
+        rewards: dict[str, int] = {}
+        for _ in range(qty):
+            self.db.take_item(user["user_id"], "lootbox", 1)
+            nonce = self.db.bump_nonce(user["user_id"])
+            reward = game.open_lootbox(
+                user["server_seed"], user["client_seed"], nonce)
+            if reward["kind"] == "coins":
+                total_coins += int(reward["amount"])
+            else:
+                rq = int(reward.get("qty", 1))
+                rewards[reward["item"]] = rewards.get(reward["item"], 0) + rq
+        if total_coins > 0:
+            self.db.add_balance(user["user_id"], total_coins)
+        for item_key, rq in rewards.items():
+            self.db.add_item(user["user_id"], item_key, rq)
+        parts = []
+        if total_coins > 0:
+            parts.append(f"+{total_coins} mCoin")
+        for item_key, rq in rewards.items():
+            item = next((i for i in game.SHOP_ITEMS if i["key"] == item_key), None)
+            parts.append(f"{(item['title'] if item else item_key)} ×{rq}")
+        title = ", ".join(parts) if parts else "ничего"
         awards.evaluate(self.db, user["user_id"])
         fresh = self.db.user(user["user_id"])
         return self._json({
             "ok": True,
-            "reward": reward,
-            "title": title,
+            "count": qty,
+            "title": f"Открыто {qty}: {title}",
             "balance": fresh["balance"],
             "sections": self._inventory_sections(fresh),
         })
@@ -2329,7 +2379,9 @@ class Api:
         if user.get("is_banned"):
             return self._fail("Аккаунт заблокирован", 403)
         amount = self.db.claim_hourly(user["user_id"], int(time.time()),
-                                      game.HOURLY_COOLDOWN, game.HOURLY_BONUS)
+                                      game.HOURLY_COOLDOWN,
+                                      int(self._settings().get("hourly_bonus",
+                                                                 game.HOURLY_BONUS)))
         if amount is None:
             return self._fail("Бонус ещё не готов", 429)
         earned = awards.evaluate(self.db, user["user_id"])
@@ -2584,9 +2636,12 @@ class Api:
         return out
 
     def _grant_catalogs(self) -> dict:
+        prefixes = self._catalog_keys(game.PREFIXES)
+        for cp in self.db.custom_prefixes():
+            prefixes[str(cp["key"])] = f"{cp['title']} · кастомный"
         return {
             "item": self._catalog_keys(game.SHOP_ITEMS),
-            "prefix": self._catalog_keys(game.PREFIXES),
+            "prefix": prefixes,
             "avatar": self._catalog_keys(game.AVATARS),
             "background": self._catalog_keys(game.GAME_BACKGROUNDS),
             "rod": self._catalog_keys(game.RODS),
@@ -2740,6 +2795,59 @@ class Api:
         self.db.admin_log(admin["user_id"], target, "gmpoint", {"delta": value})
         return self._json({"ok": True, "user_id": target, "gmpoint": result})
 
+    async def admin_custom_prefix(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err:
+            return err
+        body = await self._body(request)
+        action = str(body.get("action", "list")).strip() or "list"
+        if action == "list":
+            items = [
+                {"key": str(c["key"]), "title": str(c["title"]),
+                 "color": str(c["color"]), "color2": str(c.get("color2") or ""),
+                 "style": str(c["style"]), "bonus": float(c.get("bonus") or 0.0)}
+                for c in self.db.custom_prefixes()
+            ]
+            return self._json({"ok": True, "items": items})
+        if action == "delete":
+            key = str(body.get("key", "")).strip()
+            if not key or not key.startswith("custom_"):
+                return self._fail("Некорректный ключ префикса")
+            self.db.delete_custom_prefix(key)
+            try:
+                game.register_custom_prefixes(self.db.custom_prefixes())
+            except Exception:
+                pass
+            return self._json({"ok": True, "deleted": key})
+        if action == "create":
+            title = str(body.get("title", "")).strip()
+            color = str(body.get("color", "#ffd166")).strip()
+            color2 = str(body.get("color2", "")).strip()
+            style = str(body.get("style", "solid")).strip()
+            try:
+                bonus = float(body.get("bonus", 0))
+            except (TypeError, ValueError):
+                return self._fail("Бонус: число от 0 до 1")
+            if not title or len(title) > 24:
+                return self._fail("Название: 1–24 символа")
+            if not re.fullmatch(r"#[0-9a-fA-F]{6}", color) or \
+               (color2 and not re.fullmatch(r"#[0-9a-fA-F]{6}", color2)):
+                return self._fail("Цвет: HEX вида #RRGGBB")
+            if style not in game.PREFIX_STYLES:
+                return self._fail("Некорректный стиль")
+            bonus = max(0.0, min(0.5, bonus))
+            key = "custom_" + hashlib.sha1(
+                (title + str(time.time())).encode()).hexdigest()[:8]
+            self.db.upsert_custom_prefix(key, title, color, color2, style, bonus)
+            try:
+                game.register_custom_prefixes(self.db.custom_prefixes())
+            except Exception:
+                pass
+            return self._json({"ok": True, "key": key, "title": title,
+                               "color": color, "color2": color2,
+                               "style": style, "bonus": bonus})
+        return self._fail("Неизвестное действие")
+
     async def admin_promo_create(self, request: web.Request) -> web.Response:
         admin, err = self._require_admin(request)
         if err:
@@ -2831,13 +2939,16 @@ class Api:
             return err
         body = await self._body(request)
         allowed = ("min_bet", "max_bet", "min_mines", "max_mines",
-                   "daily_bonus", "maintenance",
+                   "daily_bonus", "hourly_bonus", "chat_url", "maintenance",
                    "game_mines", "game_dice", "game_wheel", "game_crash",
                    "game_roulette", "game_slots", "game_coinflip", "game_blackjack",
                    "game_basket", "game_darts")
         updates: dict[str, int] = {}
         for key in allowed:
             if key not in body:
+                continue
+            if key == "chat_url":
+                updates[key] = str(body[key]).strip()
                 continue
             try:
                 updates[key] = int(body[key])
@@ -2858,6 +2969,10 @@ class Api:
             return self._fail("Мин не больше 24")
         if merged["daily_bonus"] < 0 or merged["daily_bonus"] > 1_000_000:
             return self._fail("Некорректный ежедневный бонус")
+        if merged.get("hourly_bonus", 0) < 0 or merged.get("hourly_bonus", 0) > 1_000_000:
+            return self._fail("Некорректный часовой бонус")
+        if merged.get("chat_url", "") and not str(merged["chat_url"]).startswith(("https://", "http://")):
+            return self._fail("Ссылка на чат должна начинаться с http(s)://")
         if merged["maintenance"] not in (0, 1):
             return self._fail("Техработы: 0 или 1")
         for key in ("game_mines", "game_dice", "game_wheel", "game_crash",
@@ -2872,6 +2987,10 @@ class Api:
 
 def build_app(db: Database) -> web.Application:
     api = Api(db)
+    try:
+        game.register_custom_prefixes(db.custom_prefixes())
+    except Exception:
+        pass
 
     @web.middleware
     async def overload_guard(request: web.Request, handler):
@@ -2950,6 +3069,7 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/admin/catalog", api.admin_catalog)
     app.router.add_post("/api/admin/role", api.admin_role)
     app.router.add_post("/api/admin/gmpoint", api.admin_gmpoint)
+    app.router.add_post("/api/admin/custom-prefix", api.admin_custom_prefix)
     app.router.add_post("/api/admin/promo/create", api.admin_promo_create)
     app.router.add_post("/api/admin/promo/list", api.admin_promo_list)
     app.router.add_post("/api/admin/promo/delete", api.admin_promo_delete)

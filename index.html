@@ -649,7 +649,7 @@
       <button class="tab" data-atab="users">Игроки</button>
       <button class="tab" data-atab="promo">Промокоды</button>
       <button class="tab" data-atab="grant">Выдать</button>
-      <button class="tab" data-atab="roles">Роли</button>
+      <button class="tab" data-atab="prefix">Префиксы</button>
       <button class="tab" data-atab="settings">Настройки</button>
     </div>
 
@@ -730,73 +730,27 @@
       </div>
     </div>
 
-
+    <div class="admin-pane" id="pane-prefix">
       <div class="card">
-        <div class="card-title">Роли и что они могут</div>
-        <details class="role-card role-owner">
-          <summary>👑 Владелец</summary>
-          <ul>
-            <li>Всё, что может админ</li>
-            <li>Выдавать и снимать роль «Владелец»</li>
-            <li>Удалять промокоды и менять любые настройки</li>
-            <li>Префикс «Владелец»: +10% к выигрышу</li>
-          </ul>
-        </details>
-        <details class="role-card role-admin">
-          <summary>🛠 Админ</summary>
-          <ul>
-            <li>Искать игроков, банить и разбанивать</li>
-            <li>Начислять и списывать mCoin и GMPOINT</li>
-            <li>Выдавать предметы и роли (кроме владельца)</li>
-            <li>Создавать промокоды, менять настройки игр</li>
-            <li>Префикс «Админ»: +7% к выигрышу</li>
-          </ul>
-        </details>
-        <details class="role-card role-mod">
-          <summary>🛡 Модератор</summary>
-          <ul>
-            <li>Искать игроков и смотреть сводку</li>
-            <li>Банить и разбанивать</li>
-            <li>Начислять mCoin</li>
-            <li>Без доступа к настройкам и ролям</li>
-            <li>Префикс «Модератор»: +5% к выигрышу</li>
-          </ul>
-        </details>
-        <details class="role-card role-tester">
-          <summary>🧪 Тестер</summary>
-          <ul>
-            <li>Смотреть сводку и список игроков</li>
-            <li>Без банов, начислений и настроек</li>
-            <li>Префикс «Тестер»: +3% к выигрышу</li>
-          </ul>
-        </details>
-        <details class="role-card role-user">
-          <summary>👤 Игрок</summary>
-          <ul>
-            <li>Играть во все игры и покупать в магазине</li>
-            <li>Активировать промокоды на GMPOINT</li>
-            <li>Копить уровни и получать награды</li>
-          </ul>
-        </details>
-      </div>
-      <div class="card">
-        <div class="card-title">Префиксы и бонусы</div>
-        <details class="role-card role-dracula">
-          <summary>🩸 Дракула · 15 GMPOINT</summary>
-          <ul>
-            <li>+5% к выигрышу во всех играх</li>
-            <li>Красный бейдж в профиле и топе</li>
-            <li>Покупается за GMPOINT в магазине</li>
-          </ul>
-        </details>
-        <details class="role-card">
-          <summary>🎩 Остальные префиксы</summary>
-          <ul>
-            <li>Сапёр, Ветеран, Легенда и другие — за mCoin или GMPOINT</li>
-            <li>Префиксы за уровень открываются автоматически</li>
-            <li>Служебные префиксы выдаются вместе с ролью</li>
-          </ul>
-        </details>
+        <div class="card-title">Кастомные префиксы</div>
+        <div class="admin-field"><span>Название</span><input class="mini-input" id="cpTitle" type="text" maxlength="24" placeholder="Например: Босс"></div>
+        <div class="admin-field"><span>Цвет (#RRGGBB)</span><input class="mini-input" id="cpColor" type="text" value="#ffd166" maxlength="7"></div>
+        <div class="admin-field"><span>Цвет 2 (для градиента)</span><input class="mini-input" id="cpColor2" type="text" maxlength="7"></div>
+        <div class="admin-field"><span>Стиль</span>
+          <select class="mini-input" id="cpStyle">
+            <option value="solid">Обычный</option>
+            <option value="outline">Обводка</option>
+            <option value="glow">Свечение</option>
+            <option value="neon">Неон</option>
+            <option value="gradient">Градиент</option>
+            <option value="rainbow">Радужный</option>
+            <option value="sparkle">С искрами</option>
+          </select>
+        </div>
+        <div class="admin-field"><span>Бонус к выплате (0–0.5)</span><input class="mini-input" id="cpBonus" type="number" value="0" step="0.01" min="0" max="0.5"></div>
+        <div class="admin-row"><button class="secondary" id="cpCreate">Создать префикс</button></div>
+        <div class="hint" id="cpHint"></div>
+        <div class="list" id="cpList"></div>
       </div>
     </div>
 
@@ -807,6 +761,8 @@
         <div class="admin-field"><span>Мин. мин</span><input class="mini-input" id="setMinMines" type="number" min="1" max="24"></div>
         <div class="admin-field"><span>Макс. мин</span><input class="mini-input" id="setMaxMines" type="number" min="1" max="24"></div>
         <div class="admin-field"><span>Бонус за день</span><input class="mini-input" id="setDaily" type="number" min="0"></div>
+        <div class="admin-field"><span>Бонус за час</span><input class="mini-input" id="setHourly" type="number" min="0"></div>
+        <div class="admin-field"><span>Ссылка на чат</span><input class="mini-input" id="setChatUrl" type="text" placeholder="https://t.me/AprilMines"></div>
         <label class="admin-check"><input type="checkbox" id="setMaintenance"> Технические работы</label>
         <div class="admin-sub">Игры</div>
         <label class="admin-check"><input type="checkbox" id="setGameMines"> Сапёр</label>

@@ -16,6 +16,7 @@ const state = {
   sound: true,
   game: "mines",
   quests: [],
+  hourQuests: [],
   shop: { items: [], bundles: [], donate: [], prefixes: [], inventory: {}, gmpoint: 0 },
   cosmetics: { avatars: [], backgrounds: [], avatar_key: "letter", bg_key: "default" },
   leaderboard: { by_balance: [], by_multiplier: [], by_level: [], me: 0 },
@@ -1268,6 +1269,8 @@ function fillSettingsForm(settings) {
   $("setMinMines").value = settings.min_mines;
   $("setMaxMines").value = settings.max_mines;
   $("setDaily").value = settings.daily_bonus;
+  $("setHourly").value = settings.hourly_bonus || 0;
+  $("setChatUrl").value = settings.chat_url || "";
   $("setMaintenance").checked = !!settings.maintenance;
   const games = settings.games || {};
   $("setGameMines").checked = games.mines !== false;
@@ -1366,6 +1369,8 @@ async function saveAdminSettings() {
       min_mines: Number($("setMinMines").value),
       max_mines: Number($("setMaxMines").value),
       daily_bonus: Number($("setDaily").value),
+      hourly_bonus: Number($("setHourly").value || 0),
+      chat_url: String($("setChatUrl").value || "").trim(),
       maintenance: $("setMaintenance").checked ? 1 : 0,
       game_mines: $("setGameMines").checked ? 1 : 0,
       game_dice: $("setGameDice").checked ? 1 : 0,
@@ -1507,28 +1512,31 @@ function renderQuests() {
   const boxes = [$("questsList"), $("tasksQuests")].filter(Boolean);
   if (!boxes.length) return;
   const items = state.quests || [];
-  const html = !items.length
-    ? '<div class="empty">Задания появятся после первой партии</div>'
-    : items
-        .map((q) => {
-          const pct = Math.min(100, Math.round((q.progress / q.target) * 100));
-          const label = q.claimed
-            ? "Получено"
-            : q.ready
-              ? `Забрать +${fmt(q.reward)} ${q.currency === "gmpoint" ? "GMPOINT" : ""}`
-              : `${fmt(q.progress)} / ${fmt(q.target)}`;
-          return `<div class="quest${q.ready ? " ready" : ""}${q.claimed ? " done" : ""}">
-        <div class="quest-main">
-          <div class="quest-title">${escapeHtml(q.title)}</div>
-          <div class="quest-bar"><span style="width:${pct}%"></span></div>
-        </div>
-        <button class="chip-btn quest-claim" data-quest="${q.key}"
-          ${q.ready ? "" : "disabled"}>${label}</button>
-      </div>`;
-        })
-        .join("");
+  const hourItems = state.hourQuests || [];
+  const card = (q) => {
+    const pct = Math.min(100, Math.round((q.progress / q.target) * 100));
+    const label = q.claimed
+      ? "Получено"
+      : q.ready
+        ? `Забрать +${fmt(q.reward)} ${q.currency === "gmpoint" ? "GMPOINT" : ""}`
+        : `${fmt(q.progress)} / ${fmt(q.target)}`;
+    return `<div class="quest${q.ready ? " ready" : ""}${q.claimed ? " done" : ""}">
+      <div class="quest-main">
+        <div class="quest-title">${escapeHtml(q.title)}</div>
+        <div class="quest-bar"><span style="width:${pct}%"></span></div>
+      </div>
+      <button class="chip-btn quest-claim" data-quest="${q.key}"
+        ${q.ready ? "" : "disabled"}>${label}</button>
+    </div>`;
+  };
+  const html = (!items.length ? '<div class="empty">Задания появятся после первой партии</div>' : items.map(card).join(""));
+  const hourHtml = hourItems.length ? `<div class="inv-section-title">Задания за час</div>${hourItems.map(card).join("")}` : "";
   boxes.forEach((box) => {
-    box.innerHTML = html;
+    if (box.id === "tasksQuests") {
+      box.innerHTML = (hourItems.length ? `<div class="inv-section-title">Задания за час</div>${hourItems.map(card).join("")}` : "") + (html || '<div class="empty">—</div>');
+    } else {
+      box.innerHTML = html || '<div class="empty">—</div>';
+    }
   });
 }
 
@@ -2000,10 +2008,16 @@ function renderInventory() {
       const qty = item.key === "fish_value" ? `◈ ${fmt(item.qty)}` : `×${item.qty}`;
       const actions = [];
       if (item.use === "open") {
-        actions.push(`<button class="inv-act" data-inv="use" data-key="${item.key}">Открыть</button>`);
+        actions.push(`<button class="inv-act" data-inv="use" data-key="${item.key}" data-qty="1">Открыть</button>`);
+        if (item.qty >= 5) {
+          actions.push(`<button class="inv-act" data-inv="use" data-key="${item.key}" data-qty="5">×5</button>`);
+        }
+        if (item.qty >= 2) {
+          actions.push(`<button class="inv-act" data-inv="use" data-key="${item.key}" data-qty="${item.qty}" title="Открыть все">Все</button>`);
+        }
       }
       if (item.sell && item.sell > 0) {
-        actions.push(`<button class="inv-act inv-sell" data-inv="sell" data-key="${item.key}" title="Продать за ◈ ${fmt(item.sell)}">Продать</button>`);
+        actions.push(`<button class="inv-act inv-sell" data-inv="sell" data-key="${item.key}" data-qty="1" title="Продать за ◈ ${fmt(item.sell)}">Продать</button>`);
       }
       const acts = actions.length ? `<span class="inv-actions">${actions.join("")}</span>` : "";
       return `<span class="inv-item">${inventoryIcon(item.icon)}<span>${escapeHtml(item.title)}</span><b>${qty}</b>${acts}</span>`;
@@ -2012,15 +2026,15 @@ function renderInventory() {
   }).join("") || '<div class="muted">Загрузка…</div>';
 }
 
-async function inventoryAction(act, key) {
+async function inventoryAction(act, key, qtyOverride) {
   try {
-    const data = await api(`/api/inventory/${act}`, { key, qty: 1 });
+    const data = await api(`/api/inventory/${act}`, { key, qty: qtyOverride || 1 });
     if (act === "sell") {
       toast(`Продано: +${fmt(data.total)} mCoin`);
       state.balance = data.balance;
       state.shop.balance = data.balance;
     } else if (act === "use") {
-      toast(`Открыто: ${data.title || "—"}`);
+      toast(`${data.title || "Открыто"}`);
       state.balance = data.balance;
       state.shop.balance = data.balance;
     }
@@ -2698,6 +2712,7 @@ async function loadState() {
   state.isSuper = !!data.is_superadmin;
   state.account = data.account || null;
   state.quests = data.quests || state.quests;
+  state.hourQuests = data.hour_items || state.hourQuests;
   state.shop.inventory = data.inventory || state.shop.inventory;
   const adminNav = $("adminNav");
   if (adminNav) adminNav.hidden = !state.isAdmin;
@@ -3122,11 +3137,65 @@ function bind() {
 
   if ($("grantKind")) $("grantKind").addEventListener("change", fillGrantKeys);
   if ($("grantSend")) $("grantSend").addEventListener("click", grantSend);
+
+  async function loadCustomPrefixes() {
+    try {
+      const data = await api("/api/admin/custom-prefix", { action: "list" });
+      const box = $("cpList");
+      if (!box) return;
+      const items = data.items || [];
+      box.innerHTML = items.length ? items.map((p) => `
+        <div class="admin-row">
+          <span style="color:${p.color}">${escapeHtml(p.title)}</span>
+          <span class="muted">${p.key} · +${Math.round((p.bonus || 0) * 100)}%</span>
+          <button class="chip-btn" data-cp-del="${p.key}">Удалить</button>
+        </div>`).join("")
+        : '<div class="muted">Пока нет кастомных префиксов</div>';
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+
+  async function createCustomPrefix() {
+    const hint = $("cpHint");
+    if (!hint) return;
+    const title = ($("cpTitle").value || "").trim();
+    if (!title) { hint.textContent = "Укажи название префикса"; return; }
+    try {
+      const data = await api("/api/admin/custom-prefix", {
+        action: "create",
+        title,
+        color: ($("cpColor").value || "#ffd166").trim(),
+        color2: ($("cpColor2").value || "").trim(),
+        style: ($("cpStyle").value || "solid").trim(),
+        bonus: parseFloat($("cpBonus").value || "0") || 0,
+      });
+      hint.textContent = `Создан: ${data.title} (ключ ${data.key}). Выдай его в «Выдать → Префикс».`;
+      loadCustomPrefixes();
+    } catch (e) {
+      hint.textContent = e.message;
+    }
+  }
+
+  if ($("cpCreate")) $("cpCreate").addEventListener("click", createCustomPrefix);
+  if ($("cpList")) $("cpList").addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-cp-del]");
+    if (!btn) return;
+    try {
+      await api("/api/admin/custom-prefix", { action: "delete", key: btn.dataset.cpDel });
+      toast("Префикс удалён");
+      loadCustomPrefixes();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
   if ($("adminTabs")) $("adminTabs").addEventListener("click", (e) => {
     const btn = e.target.closest("[data-atab]");
     if (btn && btn.dataset.atab === "grant") {
       loadGrantCatalog().then(fillGrantKeys).catch((err) => toast(err.message));
     }
+    if (btn && btn.dataset.atab === "prefix") loadCustomPrefixes();
   });
 
   if ($("hourlyCard")) $("hourlyCard").addEventListener("click", claimHourly);
@@ -3300,7 +3369,7 @@ function bind() {
       const btn = e.target.closest("[data-inv]");
       if (!btn) return;
       haptic();
-      inventoryAction(btn.dataset.inv, btn.dataset.key);
+      inventoryAction(btn.dataset.inv, btn.dataset.key, btn.dataset.qty || 1);
     });
   }
 
@@ -3440,6 +3509,7 @@ function bind() {
     try {
       const data = await api("/api/quests/claim", { key: btn.dataset.quest });
   state.quests = data.quests || state.quests;
+  if (data.hour_items) state.hourQuests = data.hour_items;
   state.achievements = data.achievements || [];
   if (prevClaimed.size) {
     const fresh = state.achievements.filter(
