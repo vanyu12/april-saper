@@ -1821,7 +1821,6 @@ body.theme-gold .cell.safe {
   padding: 8px 2px;
   margin-bottom: 8px;
   background: rgba(10, 14, 24, 0.92);
-  backdrop-filter: blur(8px);
   scrollbar-width: none;
 }
 

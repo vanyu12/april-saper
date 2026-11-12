@@ -2533,7 +2533,24 @@ async function rodAction(key, act) {
   }
 }
 
+let renderPending = false;
+
 function renderAll() {
+  if (renderPending) return;
+  renderPending = true;
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(() => {
+      renderPending = false;
+      if (document.hidden) return;
+      renderAllNow();
+    });
+    return;
+  }
+  renderPending = false;
+  renderAllNow();
+}
+
+function renderAllNow() {
   renderBalance();
   renderDaily();
   renderBonus();
@@ -2552,10 +2569,14 @@ function renderAll() {
   renderBlackjack();
   applyCosmetics();
   applyGameBackground();
-    const topTab = document.querySelector("#view-top .tab.active");
-    renderTop(topTab ? topTab.dataset.tab : "balance");
+  const topTab = document.querySelector("#view-top .tab.active");
+  renderTop(topTab ? topTab.dataset.tab : "balance");
   renderFair();
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) renderAll();
+});
 
 /* ---------- actions ---------- */
 
@@ -3037,7 +3058,7 @@ function bind() {
   });
 
   setInterval(() => {
-    if (state.user) renderBonus();
+    if (state.user && !document.hidden) renderBonus();
   }, 1000);
 
   if ($("gamePickerBtn")) $("gamePickerBtn").addEventListener("click", openGameMenu);
