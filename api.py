@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import hmac
 import json
@@ -253,6 +254,15 @@ class Api:
         prefix = game.prefix_view(user.get("prefix"))
         avatar = game.avatar_view(user.get("avatar_key"))
         bg = game.background_view(user.get("bg_key"))
+        game_bg = game.game_background_view(user.get("game_bg_key"))
+        custom_bg = self.db.user_background(user["user_id"])
+        if (user.get("game_bg_key") or "") == game.CUSTOM_BG_KEY and custom_bg:
+            game_bg_url = (f"/api/profile/background/{user['user_id']}"
+                           f"?v={int(custom_bg['updated_at'])}")
+        elif game_bg["file"]:
+            game_bg_url = "/static/" + game_bg["file"]
+        else:
+            game_bg_url = ""
         return {
             "prefix": user.get("prefix") or "",
             "prefix_title": prefix["title"] if prefix else "",
@@ -264,6 +274,10 @@ class Api:
             "avatar_icon": avatar["icon"],
             "bg_key": bg["key"],
             "bg_css": bg["css"],
+            "game_bg_key": game_bg["key"],
+            "game_bg_title": game_bg["title"],
+            "game_bg_url": game_bg_url,
+            "game_bg_custom": bool(custom_bg),
             "last_seen": int(user.get("last_seen") or 0),
             "boost_win": self.db.item_qty(user["user_id"], "boost_win"),
             "boost_loss": self.db.item_qty(user["user_id"], "boost_loss"),
@@ -1395,8 +1409,32 @@ class Api:
                      or self.db.item_qty(uid, game.cosmetic_item_key("background",
                                                                     item["key"])) > 0)
             backgrounds.append({**item, "owned": owned, "active": item["key"] == bg_key})
+        game_bg_key = user.get("game_bg_key") or ""
+        custom_bg = self.db.user_background(uid)
+        game_backgrounds = []
+        for item in game.GAME_BACKGROUNDS:
+            owned = (int(item["price"]) == 0
+                     or self.db.item_qty(uid, "gbg_" + item["key"]) > 0)
+            game_backgrounds.append({
+                **item,
+                "owned": owned,
+                "active": (game_bg_key or "default") == item["key"],
+                "url": "/static/" + item["file"] if item["file"] else "",
+            })
+        game_backgrounds.append({
+            "key": game.CUSTOM_BG_KEY,
+            "title": "Своё фото",
+            "price": 0,
+            "file": "",
+            "owned": bool(custom_bg),
+            "active": game_bg_key == game.CUSTOM_BG_KEY,
+            "url": (f"/api/profile/background/{uid}?v={int(custom_bg['updated_at'])}"
+                    if custom_bg else ""),
+        })
         return {"avatars": avatars, "backgrounds": backgrounds,
+                "game_backgrounds": game_backgrounds,
                 "avatar_key": avatar_key, "bg_key": bg_key,
+                "game_bg_key": game_bg_key,
                 "balance": user["balance"]}
 
     async def profile_cosmetics(self, request: web.Request) -> web.Response:
@@ -1409,6 +1447,49 @@ class Api:
         key = str(body.get("key", "")).strip()
         if action == "list":
             return self._json({"ok": True, **self._cosmetics_view(user)})
+        if kind == "gamebg":
+            if user.get("is_banned"):
+                return self._fail("Аккаунт заблокирован", 403)
+            if key == game.CUSTOM_BG_KEY:
+                if not self.db.user_background(user["user_id"]):
+                    return self._fail("Своё фото ещё не загружено")
+                if action != "equip":
+                    return self._fail("Своё фото загружается отдельно")
+                self.db.set_game_background(user["user_id"], game.CUSTOM_BG_KEY)
+                fresh = self.db.user(user["user_id"])
+                return self._json({"ok": True, "equipped": True,
+                                   "user": self._public_user(fresh),
+                                   **self._cosmetics_view(fresh)})
+            item = next((entry for entry in game.GAME_BACKGROUNDS
+                         if entry["key"] == key), None)
+            if not item:
+                return self._fail("Фон не найден", 404)
+            item_key = "gbg_" + key
+            if action == "buy":
+                if int(item["price"]) == 0 or self.db.item_qty(
+                        user["user_id"], item_key) > 0:
+                    return self._fail("Этот фон уже доступен")
+                price = int(item["price"])
+                if int(user["balance"]) < price:
+                    return self._fail("Недостаточно mCoin")
+                balance = self.db.add_balance(user["user_id"], -price)
+                self.db.add_item(user["user_id"], item_key, 1)
+                self.db.set_game_background(user["user_id"], key)
+                fresh = self.db.user(user["user_id"])
+                return self._json({"ok": True, "balance": balance,
+                                   "bought": item["title"], "equipped": True,
+                                   "user": self._public_user(fresh),
+                                   **self._cosmetics_view(fresh)})
+            if action == "equip":
+                if not (int(item["price"]) == 0
+                        or self.db.item_qty(user["user_id"], item_key) > 0):
+                    return self._fail("Сначала купи этот фон")
+                self.db.set_game_background(user["user_id"], key)
+                fresh = self.db.user(user["user_id"])
+                return self._json({"ok": True, "equipped": True,
+                                   "user": self._public_user(fresh),
+                                   **self._cosmetics_view(fresh)})
+            return self._fail("Неизвестное действие")
         if kind not in ("avatar", "background"):
             return self._fail("Неизвестный вид оформления")
         if user.get("is_banned"):
@@ -1463,6 +1544,49 @@ class Api:
             return self._fail("Не удалось надеть префикс")
         fresh = self.db.user(user["user_id"])
         return self._json({"ok": True, "prefix": key, "user": self._public_user(fresh)})
+
+    async def upload_background(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        raw = str(body.get("image", ""))
+        match = re.match(r"^data:(image/(?:jpeg|png|webp));base64,(.+)$", raw, re.S)
+        if not match:
+            return self._fail("Нужно фото в формате JPEG, PNG или WEBP")
+        mime, payload = match.group(1), match.group(2)
+        try:
+            data = base64.b64decode(payload, validate=True)
+        except (ValueError, TypeError):
+            return self._fail("Не удалось прочитать изображение")
+        if len(data) < 1000:
+            return self._fail("Изображение слишком маленькое")
+        if len(data) > game.CUSTOM_BG_MAX_BYTES:
+            return self._fail("Файл слишком большой — до 400 КБ")
+        self.db.set_user_background(user["user_id"], mime,
+                                    base64.b64encode(data).decode("ascii"))
+        self.db.set_game_background(user["user_id"], game.CUSTOM_BG_KEY)
+        fresh = self.db.user(user["user_id"])
+        return self._json({"ok": True, "uploaded": True,
+                           "user": self._public_user(fresh),
+                           **self._cosmetics_view(fresh)})
+
+    async def serve_background(self, request: web.Request) -> web.StreamResponse:
+        try:
+            user_id = int(request.match_info.get("user_id", "0"))
+        except ValueError:
+            raise web.HTTPNotFound()
+        row = self.db.user_background(user_id)
+        if not row:
+            raise web.HTTPNotFound()
+        try:
+            data = base64.b64decode(row["data"])
+        except (ValueError, TypeError):
+            raise web.HTTPNotFound()
+        return web.Response(body=data, content_type=row["mime"],
+                            headers={"Cache-Control": "public, max-age=300"})
 
     def _insurance_refund(self, user: dict, bet: int) -> int:
         if not self.db.take_item(user["user_id"], "insurance"):
@@ -2207,7 +2331,7 @@ class Api:
 
 def build_app(db: Database) -> web.Application:
     api = Api(db)
-    app = web.Application(client_max_size=64 * 1024)
+    app = web.Application(client_max_size=1024 * 1024)
     app["api"] = api
 
     app.router.add_post("/api/state", api.state)
@@ -2247,6 +2371,8 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/shop/use", api.shop_use)
     app.router.add_post("/api/prefix/equip", api.prefix_equip)
     app.router.add_post("/api/profile/cosmetics", api.profile_cosmetics)
+    app.router.add_post("/api/profile/background/upload", api.upload_background)
+    app.router.add_get("/api/profile/background/{user_id}", api.serve_background)
     app.router.add_post("/api/bonus/hourly", api.hourly)
     app.router.add_post("/api/spin", api.spin)
     app.router.add_post("/api/invites/claim", api.invite_claim)

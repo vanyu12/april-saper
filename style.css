@@ -2013,3 +2013,50 @@ body.theme-gold .cell.safe {
 .row-avatar.emoji { font-size: 20px; background: rgba(255, 255, 255, 0.06); }
 .top-seen { font-size: 11px; color: var(--muted); margin-top: 2px; }
 .shop-qty { color: var(--mint); font-size: 11px; font-weight: 700; }
+
+/* ---------- фон игры: пейзажи и своё фото ---------- */
+.game-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
+}
+.game-bg.active { opacity: 1; }
+.game-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(8, 10, 16, 0.55), rgba(8, 10, 16, 0.82));
+}
+.bg-scene-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+.bg-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+}
+.bg-item.active { border-color: var(--mint); box-shadow: 0 0 0 1px rgba(46, 230, 168, 0.35); }
+.bg-item.locked { opacity: 0.75; }
+.bg-scene {
+  display: block;
+  width: 100%;
+  height: 58px;
+  border-radius: 8px;
+  background-size: cover;
+  background-position: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.bg-scene-default { background: linear-gradient(135deg, #131722, #2b3245); }
+.bg-upload { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.bg-upload .hint { margin: 0; }

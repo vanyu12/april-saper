@@ -464,6 +464,32 @@ BACKGROUNDS = (
 AVATAR_BY_KEY = {item["key"]: item for item in AVATARS}
 BACKGROUND_BY_KEY = {item["key"]: item for item in BACKGROUNDS}
 
+# --- фоны игрового экрана: пейзажи и своё фото --------------------------
+GAME_BACKGROUNDS = (
+    {"key": "default", "title": "Стандарт", "price": 0, "file": ""},
+    {"key": "forest", "title": "Лес", "price": 1500, "file": "bg_forest.jpg"},
+    {"key": "mountains", "title": "Горы", "price": 2000, "file": "bg_mountains.jpg"},
+    {"key": "ocean", "title": "Океан", "price": 1800, "file": "bg_ocean.jpg"},
+    {"key": "desert", "title": "Пустыня", "price": 1600, "file": "bg_desert.jpg"},
+    {"key": "night", "title": "Ночной город", "price": 2500, "file": "bg_night.jpg"},
+    {"key": "aurora", "title": "Северное сияние", "price": 3000,
+     "file": "bg_aurora.jpg"},
+)
+
+GAME_BACKGROUND_BY_KEY = {item["key"]: item for item in GAME_BACKGROUNDS}
+CUSTOM_BG_KEY = "custom"
+CUSTOM_BG_MAX_BYTES = 400_000
+CUSTOM_BG_MIME = ("image/jpeg", "image/png", "image/webp")
+
+
+def game_background_view(key: str | None) -> dict:
+    key = (key or "").strip()
+    if key == CUSTOM_BG_KEY:
+        return {"key": CUSTOM_BG_KEY, "title": "Своё фото", "file": "", "price": 0}
+    item = GAME_BACKGROUND_BY_KEY.get(key) or GAME_BACKGROUND_BY_KEY["default"]
+    return {"key": item["key"], "title": item["title"],
+            "file": item["file"], "price": item["price"]}
+
 COSMETIC_PREFIX = {"avatar": "avatar_", "background": "bg_"}
 
 

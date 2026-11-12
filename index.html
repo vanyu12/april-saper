@@ -10,6 +10,7 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
+<div class="game-bg" id="gameBg" aria-hidden="true"></div>
 <div class="app">
 
   <header class="topbar">
@@ -342,6 +343,17 @@
         <div class="cos-grid" id="avatarGallery"></div>
         <div class="cos-title">Фоны</div>
         <div class="cos-grid cos-grid-bg" id="bgGallery"></div>
+      </div>
+
+      <div class="card game-bg-card">
+        <div class="card-title">Фон игры</div>
+        <div class="hint">Красивые места или своё фото — подложка за полем и экранами.</div>
+        <div class="cos-grid bg-scene-grid" id="gameBgGallery"></div>
+        <div class="bg-upload">
+          <input type="file" id="bgUploadInput" accept="image/jpeg,image/png,image/webp" hidden>
+          <button class="secondary" id="bgUploadBtn" type="button">Загрузить своё фото</button>
+          <span class="hint" id="bgUploadHint">JPEG, PNG или WEBP. Фото сожмётся автоматически.</span>
+        </div>
       </div>
 
       <div class="card">

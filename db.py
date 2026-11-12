@@ -53,6 +53,14 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS user_backgrounds (
+        user_id    INTEGER PRIMARY KEY,
+        mime       TEXT NOT NULL,
+        data       TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS accounts (
         user_id       INTEGER PRIMARY KEY,
         login         TEXT UNIQUE,
@@ -385,6 +393,7 @@ class Database:
             ("last_seen", "INTEGER NOT NULL DEFAULT 0"),
             ("avatar_key", "TEXT NOT NULL DEFAULT 'letter'"),
             ("bg_key", "TEXT NOT NULL DEFAULT 'default'"),
+            ("game_bg_key", "TEXT NOT NULL DEFAULT ''"),
         ):
             if name not in present:
                 self._exec(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
@@ -615,6 +624,28 @@ class Database:
         self._exec(f"UPDATE users SET {column} = ? WHERE user_id = ?",
                    ((key or "").strip(), user_id))
         return True
+
+    def set_game_background(self, user_id: int, key: str) -> None:
+        self._exec("UPDATE users SET game_bg_key = ? WHERE user_id = ?",
+                   ((key or "").strip(), user_id))
+
+    def set_user_background(self, user_id: int, mime: str, data: str) -> None:
+        self._exec(
+            """INSERT INTO user_backgrounds (user_id, mime, data, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT (user_id) DO UPDATE SET
+                   mime = excluded.mime,
+                   data = excluded.data,
+                   updated_at = excluded.updated_at""",
+            (user_id, mime, data, int(time.time())))
+
+    def user_background(self, user_id: int) -> dict | None:
+        return self._row(
+            "SELECT user_id, mime, data, updated_at FROM user_backgrounds "
+            "WHERE user_id = ?", (user_id,))
+
+    def delete_user_background(self, user_id: int) -> None:
+        self._exec("DELETE FROM user_backgrounds WHERE user_id = ?", (user_id,))
 
     def user_achievements(self, user_id: int) -> set[str]:
         rows = self._rows("SELECT key FROM user_achievements WHERE user_id = ?",

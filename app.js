@@ -1873,6 +1873,37 @@ async function loadShop() {
   }
 }
 
+function applyGameBackground() {
+  const layer = $("gameBg");
+  if (!layer) return;
+  const url = state.user && state.user.game_bg_url;
+  if (url) {
+    layer.style.backgroundImage = `url("${url}")`;
+    layer.classList.add("active");
+  } else {
+    layer.style.backgroundImage = "";
+    layer.classList.remove("active");
+  }
+}
+
+function renderGameBgGallery() {
+  const box = $("gameBgGallery");
+  if (!box) return;
+  const list = (state.cosmetics && state.cosmetics.game_backgrounds) || [];
+  box.innerHTML = list.map((item) => {
+    const thumb = item.url
+      ? `<span class="bg-scene" style="background-image:url('${item.url}')"></span>`
+      : '<span class="bg-scene bg-scene-default"></span>';
+    const price = item.owned ? "" : `<span class="cos-price">◈ ${fmt(item.price)}</span>`;
+    const label = item.key === "custom" ? "Своё фото" : item.title;
+    const act = item.owned ? "equip" : (item.key === "custom" ? "upload" : "buy");
+    return `<button class="bg-item${item.active ? " active" : ""}${item.owned ? "" : " locked"}"
+      data-kind="gamebg" data-key="${item.key}" data-act="${act}" title="${escapeHtml(item.title)}">
+      ${thumb}<span class="cos-name">${escapeHtml(label)}</span>${price}
+    </button>`;
+  }).join("") || '<span class="muted">Загрузка…</span>';
+}
+
 function renderCosmetics() {
   const av = $("avatarGallery");
   const bg = $("bgGallery");
@@ -1896,6 +1927,72 @@ function renderCosmetics() {
         <span class="cos-name">${escapeHtml(item.title)}</span>${price}
       </button>`;
     }).join("") || '<span class="muted">Загрузка…</span>';
+  }
+  renderGameBgGallery();
+  applyGameBackground();
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+async function compressBackground(file) {
+  const dataUrl = await readFileAsDataUrl(file);
+  const img = await loadImageElement(dataUrl);
+  const maxW = 1600;
+  const maxH = 1000;
+  const scale = Math.min(1, maxW / img.width, maxH / img.height);
+  const w = Math.max(1, Math.round(img.width * scale));
+  const h = Math.max(1, Math.round(img.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+  let quality = 0.85;
+  let out = canvas.toDataURL("image/jpeg", quality);
+  while (out.length * 0.75 > 380000 && quality > 0.45) {
+    quality -= 0.08;
+    out = canvas.toDataURL("image/jpeg", quality);
+  }
+  return out;
+}
+
+async function uploadBackground(file) {
+  const hint = $("bgUploadHint");
+  try {
+    if (!file) return;
+    if (!file.type || file.type.indexOf("image/") !== 0) {
+      toast("Нужно изображение");
+      return;
+    }
+    if (hint) hint.textContent = "Готовим фото…";
+    const image = await compressBackground(file);
+    const data = await api("/api/profile/background/upload", { image });
+    state.cosmetics = data;
+    if (data.user) state.user = { ...state.user, ...data.user };
+    haptic("success");
+    toast("Фон игры обновлён");
+    renderCosmetics();
+    renderProfile();
+  } catch (e) {
+    haptic("error");
+    toast(e.message);
+  } finally {
+    if (hint) hint.textContent = "JPEG, PNG или WEBP. Фото сожмётся автоматически.";
   }
 }
 
@@ -2219,6 +2316,7 @@ function renderAll() {
   renderHistory();
   renderBlackjack();
   applyCosmetics();
+  applyGameBackground();
     const topTab = document.querySelector("#view-top .tab.active");
     renderTop(topTab ? topTab.dataset.tab : "balance");
   renderFair();
@@ -2775,6 +2873,26 @@ function bind() {
       const btn = e.target.closest(".cos-item");
       if (!btn) return;
       cosmeticAction(btn.dataset.kind, btn.dataset.key, btn.dataset.act);
+    });
+  }
+
+  const bgCard = document.querySelector(".game-bg-card");
+  if (bgCard) {
+    bgCard.addEventListener("click", (e) => {
+      const btn = e.target.closest(".bg-item");
+      if (!btn) return;
+      if (btn.dataset.act === "upload") {
+        if ($("bgUploadInput")) $("bgUploadInput").click();
+        return;
+      }
+      cosmeticAction("gamebg", btn.dataset.key, btn.dataset.act);
+    });
+  }
+  if ($("bgUploadBtn") && $("bgUploadInput")) {
+    $("bgUploadBtn").addEventListener("click", () => $("bgUploadInput").click());
+    $("bgUploadInput").addEventListener("change", (e) => {
+      const file = e.target.files && e.target.files[0];
+      uploadBackground(file).finally(() => { e.target.value = ""; });
     });
   }
 
