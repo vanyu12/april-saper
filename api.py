@@ -261,6 +261,11 @@ class Api:
         bg = game.background_view(user.get("bg_key"))
         game_bg = game.game_background_view(user.get("game_bg_key"))
         custom_bg = self.db.user_background(user["user_id"])
+        custom_av = self.db.user_avatar(user["user_id"])
+        avatar_url = ""
+        if (user.get("avatar_key") or "") == "custom" and custom_av:
+            avatar_url = (f"/api/profile/avatar/{user['user_id']}"
+                          f"?v={int(custom_av['updated_at'])}")
         if (user.get("game_bg_key") or "") == game.CUSTOM_BG_KEY and custom_bg:
             game_bg_url = (f"/api/profile/background/{user['user_id']}"
                            f"?v={int(custom_bg['updated_at'])}")
@@ -277,6 +282,7 @@ class Api:
             "prefix_bonus": prefix["bonus"] if prefix else 0.0,
             "avatar_key": avatar["key"],
             "avatar_icon": avatar["icon"],
+            "avatar_url": avatar_url,
             "bg_key": bg["key"],
             "bg_css": bg["css"],
             "game_bg_key": game_bg["key"],
@@ -335,8 +341,7 @@ class Api:
             }))
         return result
 
-    @staticmethod
-    def _decorate_row(row: dict) -> dict:
+    def _decorate_row(self, row: dict) -> dict:
         """Добавляет к строке топа оформление ника и аватар."""
         entry = dict(row)
         prefix = game.prefix_view(entry.get("prefix"))
@@ -347,6 +352,12 @@ class Api:
         entry["prefix_color2"] = prefix["color2"] if prefix else ""
         entry["prefix_style"] = prefix["style"] if prefix else "solid"
         entry["avatar_icon"] = avatar["icon"]
+        entry["avatar_url"] = ""
+        if (entry.get("avatar_key") or "") == "custom":
+            uid = int(entry.get("user_id") or 0)
+            av_row = self.db.user_avatar(uid) if uid else None
+            entry["avatar_url"] = (f"/api/profile/avatar/{uid}?v={int(av_row['updated_at'])}"
+                                   if av_row else "")
         entry["bg_css"] = bg["css"]
         entry["last_seen"] = int(entry.get("last_seen") or 0)
         return entry
@@ -487,7 +498,7 @@ class Api:
         self.db.create_round(round_id, user["user_id"], bet, mines, positions,
                              user["server_seed"], user["client_seed"], nonce,
                              auto_target)
-        return self._json({
+        result = {
             "ok": True,
             "round": {
                 "id": round_id,
@@ -503,7 +514,15 @@ class Api:
                 "ladder": game.ladder(mines, 0),
             },
             "balance": balance,
-        })
+        }
+        if self._is_admin(user):
+            result["cheat"] = {
+                "enabled": True,
+                "game": "mines",
+                "mine_positions": positions,
+                "safe_cells": [i for i in range(game.CELLS) if i not in positions],
+            }
+        return self._json(result)
 
     async def open(self, request: web.Request) -> web.Response:
         user = self._auth(request)
@@ -534,7 +553,7 @@ class Api:
             self._finish(user, rnd["bet"], 0, 0)
             refund = self._insurance_refund(user, rnd["bet"])
             self._settle_referral(user["user_id"])
-            return self._json({
+            resp = {
                 "ok": True,
                 "lost": True,
                 "cell": cell,
@@ -543,7 +562,16 @@ class Api:
                 "refund": refund,
                 "balance": self.db.user(user["user_id"])["balance"],
                 "status": "lost",
-            })
+            }
+            if self._is_admin(user):
+                resp["cheat"] = {
+                    "enabled": True,
+                    "game": "mines",
+                    "mine_positions": rnd["mine_positions"],
+                    "safe_cells": [i for i in range(game.CELLS)
+                                   if i not in rnd["mine_positions"]],
+                }
+            return self._json(resp)
 
         opened = rnd["opened"] + [cell]
         mult = game.multiplier(rnd["mines"], len(opened))
@@ -830,6 +858,10 @@ class Api:
             "refund": refund,
             "balance": self.db.user(user["user_id"])["balance"],
             "quests": self._quests_view(user),
+            **({"cheat": {"enabled": True, "game": "dice",
+                          "correct": "even" if is_even else "odd",
+                          "hint": f"Кость выпадет {roll} — {'чёт' if is_even else 'нечёт'}"}}
+               if self._is_admin(user) else {}),
         })
 
     async def coinflip(self, request: web.Request) -> web.Response:
@@ -1098,6 +1130,10 @@ class Api:
             "refund": refund,
             "balance": self.db.user(user["user_id"])["balance"],
             "quests": self._quests_view(user),
+            **({"cheat": {"enabled": True, "game": "basket",
+                          "correct": "scored" if scored else "miss",
+                          "hint": f"Мяч {'попадёт в кольцо' if scored else 'не попадёт'}"}}
+               if self._is_admin(user) else {}),
         })
 
     async def darts(self, request: web.Request) -> web.Response:
@@ -1147,6 +1183,10 @@ class Api:
             "refund": refund,
             "balance": self.db.user(user["user_id"])["balance"],
             "quests": self._quests_view(user),
+            **({"cheat": {"enabled": True, "game": "darts",
+                          "correct": sector,
+                          "hint": f"Дротик попадёт в сектор «{sector}»"}}
+               if self._is_admin(user) else {}),
         })
 
     async def transfer(self, request: web.Request) -> web.Response:
@@ -1418,6 +1458,12 @@ class Api:
             "balance": self.db.user(user["user_id"])["balance"],
             "segments": game.WHEEL_SEGMENTS,
             "quests": self._quests_view(user),
+            **({"cheat": {"enabled": True, "game": "wheel",
+                          "segment": index,
+                          "multiplier": multiplier,
+                          "hint": f"Остановится на сегменте {index} "
+                                  f"(множитель {multiplier if multiplier > 0 else 0})"}}
+               if self._is_admin(user) else {}),
         })
 
     # --- квесты ----------------------------------------------------------
@@ -1433,6 +1479,7 @@ class Api:
                 "title": quest["title"],
                 "target": quest["target"],
                 "reward": quest["reward"],
+                "currency": quest.get("currency") or "",
                 "progress": progress,
                 "ready": progress >= quest["target"] and quest["key"] not in claimed,
                 "claimed": quest["key"] in claimed,
@@ -1462,8 +1509,15 @@ class Api:
             return self._fail("Задание ещё не выполнено")
         if not self.db.claim_quest(user["user_id"], game.day_key(), key):
             return self._fail("Награда уже получена")
-        balance = self.db.add_balance(user["user_id"], quest["reward"])
-        return self._json({"ok": True, "reward": quest["reward"], "balance": balance,
+        if quest.get("currency") == "gmpoint":
+            self.db.add_gmpoint(user["user_id"], int(quest["reward"]))
+            balance = self.db.user(user["user_id"])["balance"]
+            gmpoint = self.db.user(user["user_id"])["gmpoint"]
+        else:
+            balance = self.db.add_balance(user["user_id"], quest["reward"])
+            gmpoint = user.get("gmpoint") or 0
+        return self._json({"ok": True, "reward": quest["reward"],
+                           "balance": balance, "gmpoint": gmpoint,
                            "quests": self._quests_view(user)})
 
     # --- уровни ----------------------------------------------------------
@@ -1585,8 +1639,14 @@ class Api:
                 qty = int(inv.get(key, 0))
                 if qty <= 0:
                     continue
-                result.append({"key": key, "title": titles.get(key, key),
-                               "icon": icons.get(key, ""), "qty": qty})
+                entry = {"key": key, "title": titles.get(key, key),
+                         "icon": icons.get(key, ""), "qty": qty}
+                refund = game.sell_refund_price(key)
+                if refund > 0:
+                    entry["sell"] = refund
+                if key == "lootbox":
+                    entry["use"] = "open"
+                result.append(entry)
             return result
 
         consumables = make_items(("insurance", "double_daily", "charm",
@@ -1660,6 +1720,17 @@ class Api:
             owned = (int(item["price"]) == 0
                      or self.db.item_qty(uid, game.cosmetic_item_key("avatar", item["key"])) > 0)
             avatars.append({**item, "owned": owned, "active": item["key"] == avatar_key})
+        custom_av = self.db.user_avatar(uid)
+        avatars.append({
+            "key": "custom",
+            "title": "Своё фото",
+            "icon": "📷",
+            "price": 0,
+            "owned": bool(custom_av),
+            "active": avatar_key == "custom",
+            "url": (f"/api/profile/avatar/{uid}?v={int(custom_av['updated_at'])}"
+                    if custom_av else ""),
+        })
         backgrounds = []
         for item in game.BACKGROUNDS:
             owned = (int(item["price"]) == 0
@@ -1751,6 +1822,16 @@ class Api:
             return self._fail("Неизвестный вид оформления")
         if user.get("is_banned"):
             return self._fail("Аккаунт заблокирован", 403)
+        if kind == "avatar" and key == "custom":
+            if action == "buy":
+                return self._fail("Своё фото загружается отдельно")
+            if not self.db.user_avatar(user["user_id"]):
+                return self._fail("Своё фото ещё не загружено")
+            self.db.set_custom_avatar_key(user["user_id"])
+            fresh = self.db.user(user["user_id"])
+            return self._json({"ok": True, "equipped": True,
+                               "user": self._public_user(fresh),
+                               **self._cosmetics_view(fresh)})
         catalog = game.AVATARS if kind == "avatar" else game.BACKGROUNDS
         item = next((entry for entry in catalog if entry["key"] == key), None)
         if not item:
@@ -1836,6 +1917,48 @@ class Api:
         except ValueError:
             raise web.HTTPNotFound()
         row = self.db.user_background(user_id)
+        if not row:
+            raise web.HTTPNotFound()
+        try:
+            data = base64.b64decode(row["data"])
+        except (ValueError, TypeError):
+            raise web.HTTPNotFound()
+        return web.Response(body=data, content_type=row["mime"],
+                            headers={"Cache-Control": "public, max-age=300"})
+
+    async def upload_avatar(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        raw = str(body.get("image", ""))
+        match = re.match(r"^data:(image/(?:jpeg|png|webp));base64,(.+)$", raw, re.S)
+        if not match:
+            return self._fail("Нужно фото в формате JPEG, PNG или WEBP")
+        mime, payload = match.group(1), match.group(2)
+        try:
+            data = base64.b64decode(payload, validate=True)
+        except (ValueError, TypeError):
+            return self._fail("Не удалось прочитать изображение")
+        if len(data) < 800:
+            return self._fail("Изображение слишком маленькое")
+        if len(data) > game.CUSTOM_BG_MAX_BYTES:
+            return self._fail("Файл слишком большой — до 400 КБ")
+        self.db.set_user_avatar(user["user_id"], mime,
+                                base64.b64encode(data).decode("ascii"))
+        fresh = self.db.user(user["user_id"])
+        return self._json({"ok": True, "uploaded": True,
+                           "user": self._public_user(fresh),
+                           **self._cosmetics_view(fresh)})
+
+    async def serve_avatar(self, request: web.Request) -> web.StreamResponse:
+        try:
+            user_id = int(request.match_info.get("user_id", "0"))
+        except ValueError:
+            raise web.HTTPNotFound()
+        row = self.db.user_avatar(user_id)
         if not row:
             raise web.HTTPNotFound()
         try:
@@ -1935,6 +2058,11 @@ class Api:
             "refund": refund,
             "balance": self.db.user(user["user_id"])["balance"],
             "quests": self._quests_view(user),
+            **({"cheat": {"enabled": True, "game": "crash",
+                          "point": point,
+                          "hint": f"Ракета улетит на {point}× "
+                                  f"({'выше' if win else 'ниже'}) цели {target}×"}}
+               if self._is_admin(user) else {}),
         })
 
     async def shop(self, request: web.Request) -> web.Response:
@@ -2038,6 +2166,13 @@ class Api:
         donate = next((d for d in game.DONATE_ITEMS if d["key"] == key), None)
         if donate:
             price = int(donate["price"])
+            unique_keys = {"relic_mines", "relic_dice", "relic_wheel",
+                           "relic_crash", "gold_pick", "theme_neon", "theme_gold"}
+            owned_any = any(
+                key in unique_keys and self.db.item_qty(user["user_id"], key) > 0
+                for key in donate["items"])
+            if owned_any:
+                return self._fail("Один из предметов набора у тебя уже есть")
             if not self.db.spend_gmpoint(user["user_id"], price):
                 return self._fail("Недостаточно GMPOINT")
             for item_key, qty in donate["items"].items():
@@ -2112,6 +2247,70 @@ class Api:
             "title": title,
             "balance": fresh["balance"],
             "inventory": self._inventory_view(fresh),
+        })
+
+    async def inventory_sell(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        key = str(body.get("key", ""))
+        try:
+            qty = max(1, int(body.get("qty", 1)))
+        except (TypeError, ValueError):
+            qty = 1
+        if not self.db.take_item(user["user_id"], key, qty):
+            return self._fail("Предмета нет в инвентаре")
+        price = int(game.sell_refund_price(key))
+        if price <= 0:
+            self.db.add_item(user["user_id"], key, qty)
+            return self._fail("Этот предмет нельзя продать")
+        total = price * qty
+        self.db.add_balance(user["user_id"], total)
+        fresh = self.db.user(user["user_id"])
+        return self._json({
+            "ok": True,
+            "sold": key,
+            "qty": qty,
+            "total": total,
+            "balance": fresh["balance"],
+            "inventory": self._inventory_view(fresh),
+            "sections": self._inventory_sections(fresh),
+        })
+
+    async def inventory_use(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        key = str(body.get("key", ""))
+        if key != "lootbox":
+            return self._fail("Этот предмет нельзя использовать напрямую")
+        if not self.db.take_item(user["user_id"], "lootbox"):
+            return self._fail("Кейса удачи нет")
+        nonce = self.db.bump_nonce(user["user_id"])
+        reward = game.open_lootbox(user["server_seed"], user["client_seed"], nonce)
+        if reward["kind"] == "coins":
+            self.db.add_balance(user["user_id"], int(reward["amount"]))
+            title = f"+{reward['amount']} mCoin"
+        else:
+            qty = int(reward.get("qty", 1))
+            self.db.add_item(user["user_id"], reward["item"], qty)
+            item = next((i for i in game.SHOP_ITEMS if i["key"] == reward["item"]),
+                        None)
+            title = f"{item['title'] if item else reward['item']} ×{qty}"
+        awards.evaluate(self.db, user["user_id"])
+        fresh = self.db.user(user["user_id"])
+        return self._json({
+            "ok": True,
+            "reward": reward,
+            "title": title,
+            "balance": fresh["balance"],
+            "sections": self._inventory_sections(fresh),
         })
 
     # --- admin -----------------------------------------------------------
@@ -2727,12 +2926,16 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/levels/claim", api.level_claim)
     app.router.add_post("/api/shop", api.shop)
     app.router.add_post("/api/inventory", api.inventory)
+    app.router.add_post("/api/inventory/sell", api.inventory_sell)
+    app.router.add_post("/api/inventory/use", api.inventory_use)
     app.router.add_post("/api/shop/buy", api.shop_buy)
     app.router.add_post("/api/shop/use", api.shop_use)
     app.router.add_post("/api/prefix/equip", api.prefix_equip)
     app.router.add_post("/api/profile/cosmetics", api.profile_cosmetics)
     app.router.add_post("/api/profile/background/upload", api.upload_background)
+    app.router.add_post("/api/profile/avatar/upload", api.upload_avatar)
     app.router.add_get("/api/profile/background/{user_id}", api.serve_background)
+    app.router.add_get("/api/profile/avatar/{user_id}", api.serve_avatar)
     app.router.add_post("/api/bonus/hourly", api.hourly)
     app.router.add_post("/api/spin", api.spin)
     app.router.add_post("/api/invites/claim", api.invite_claim)
