@@ -29,6 +29,7 @@ CELL_MINE = "💣"
 DEPOSIT_AMOUNTS = (100, 500, 1000, 5000, 10000, 25000)
 SAVINGS_AMOUNTS = (100, 500, 1000, 5000)
 DICE_BETS = (100, 500, 1000)
+DICE_ANIMATION_DELAY = 3.2
 CALLBACK_LIMIT = 64
 
 WELCOME = (
@@ -1790,6 +1791,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await message.answer("⚠️ " + error)
             return
         shot = await message.answer_dice(emoji="🏀")
+        await asyncio.sleep(DICE_ANIMATION_DELAY)
         await message.answer(play_basket(user, bet, shot.dice.value, pick),
                              reply_markup=basket_hint_keyboard())
 
@@ -1824,6 +1826,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await message.answer("⚠️ " + error)
             return
         shot = await message.answer_dice(emoji="🎯")
+        await asyncio.sleep(DICE_ANIMATION_DELAY)
         await message.answer(play_darts(user, bet, shot.dice.value, pick),
                              reply_markup=darts_hint_keyboard())
 
@@ -3036,6 +3039,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer(error[:60], show_alert=True)
             return
         shot = await callback.message.answer_dice(emoji="🏀")
+        await asyncio.sleep(DICE_ANIMATION_DELAY)
         await callback.message.answer(play_basket(user, bet, shot.dice.value, pick),
                                       reply_markup=basket_hint_keyboard())
         await callback.answer("Бросок!")
@@ -3058,6 +3062,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer(error[:60], show_alert=True)
             return
         shot = await callback.message.answer_dice(emoji="🎯")
+        await asyncio.sleep(DICE_ANIMATION_DELAY)
         await callback.message.answer(play_darts(user, bet, shot.dice.value, pick),
                                       reply_markup=darts_hint_keyboard())
         await callback.answer("Бросок!")
