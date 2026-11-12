@@ -1003,8 +1003,11 @@ function prefixBadge(entry) {
   return ` <span class="prefix-badge" style="color:${meta.color};border-color:${meta.color}55">${escapeHtml(meta.title)}</span>`;
 }
 
+let topSignature = "";
+
 function renderTop(tab) {
   const list = $("topList");
+  if (!list) return;
   let rows = [];
   if (tab === "mult") {
     rows = (state.leaderboard.by_multiplier || []).map((u, i) => ({
@@ -1039,6 +1042,12 @@ function renderTop(tab) {
     return;
   }
   const medals = ["🥇", "🥈", "🥉"];
+  const signature = tab + "|" + rows
+    .map((r) => [r.id, r.value, r.name, r.photo || "", (r.row && r.row.last_seen) || ""].join(":"))
+    .join("|");
+  if (signature === topSignature) return;
+  topSignature = signature;
+
   list.innerHTML = rows
     .map(
       (r) => {
