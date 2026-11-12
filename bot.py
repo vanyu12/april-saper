@@ -225,9 +225,18 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 f"побед: {num(int(target['games_won']))}\n"
                 f"Оборот: {num(int(target['total_wagered']))} mCoin")
 
+    _last_action: dict[int, float] = {}
+
     def bet_error(user: dict, bet: int, game_key: str | None = None) -> str | None:
         if user.get("is_banned"):
             return "Аккаунт заблокирован."
+        now = time.time()
+        gap = 0.7 * float(__import__("os").environ.get("RATE_LIMIT_MIN", "1"))
+        if gap > 0:
+            last = _last_action.get(user["user_id"], 0.0)
+            if now - last < gap:
+                return "Слишком быстро — подождите секунду."
+            _last_action[user["user_id"]] = now
         settings = db.settings()
         if game_key and int(settings.get("game_" + game_key, 1)) != 1:
             return "Эта игра временно отключена."

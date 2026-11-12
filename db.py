@@ -260,7 +260,7 @@ DEFAULT_SETTINGS = {
     "max_bet": "100000",
     "min_mines": "1",
     "max_mines": "24",
-    "daily_bonus": "300",
+    "daily_bonus": "1000",
     "maintenance": "0",
     "update_version": "0",
     "game_mines": "1",

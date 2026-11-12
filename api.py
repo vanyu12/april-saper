@@ -58,6 +58,7 @@ class Api:
     def __init__(self, db: Database):
         self.db = db
         self._last_click: dict[int, float] = {}
+        self._last_action: dict[int, float] = {}
 
     def _auth(self, request: web.Request) -> dict | None:
         init_data = request.headers.get("X-Init-Data", "")
@@ -667,6 +668,15 @@ class Api:
     def _bet_error(self, user: dict, bet: int, game_key: str | None = None) -> str | None:
         if user.get("is_banned"):
             return "Аккаунт заблокирован"
+        now = time.time()
+        limit = float(__import__("os").environ.get("RATE_LIMIT_MIN", "1"))
+        gap = (0.7 if game_key in ("dice", "wheel", "crash", "coinflip", "basket")
+               else 0.25) * limit
+        if gap > 0:
+            last = self._last_action.get(user["user_id"], 0.0)
+            if now - last < gap:
+                return "Слишком быстро — подождите секунду"
+            self._last_action[user["user_id"]] = now
         settings = self._settings()
         if game_key and not self._game_enabled(settings, game_key):
             return "Эта игра временно отключена"
