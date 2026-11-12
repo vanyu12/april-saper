@@ -1252,6 +1252,41 @@ body.game-menu-open { overflow: hidden; }
   overflow: hidden;
 }
 .fish-hint { color: var(--muted); font-size: 13px; text-align: center; padding: 0 20px; }
+
+.fish-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  width: 100%;
+  padding: 12px;
+}
+
+.fish-cell {
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 22px;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.fish-cell:hover { background: rgba(255, 255, 255, 0.09); }
+
+.fish-cell.has-fish {
+  background: rgba(90, 200, 255, 0.16);
+  border-color: rgba(90, 200, 255, 0.55);
+  animation: fish-pop 0.35s ease-out;
+}
+
+.fish-cell:active { transform: scale(0.94); }
+
+@keyframes fish-pop {
+  0% { transform: scale(0.6); opacity: 0.4; }
+  100% { transform: scale(1); opacity: 1; }
+}
 .fish-target {
   border: 0;
   background: transparent;

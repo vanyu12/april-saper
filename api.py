@@ -62,6 +62,8 @@ class Api:
         self._last_click: dict[int, float] = {}
         self._last_action: dict[int, float] = {}
         self._last_fish: dict[int, float] = {}
+        self._fish_pending: dict[int, dict] = {}
+        self._fish_lock: dict[int, float] = {}
         self._lb_cache: tuple[float, dict | None] = (0.0, None)
         self._inflight = 0
 
@@ -1234,6 +1236,13 @@ class Api:
         if not self._game_enabled(settings, "fishing"):
             return self._fail("Рыбалка временно отключена")
         now = time.time()
+        lock_until = self._fish_lock.get(user["user_id"], 0.0)
+        if lock_until > now:
+            wait = int(math.ceil(lock_until - now))
+            return self._fail(f"Рыба ушла — подождите {wait} с")
+        pending = self._fish_pending.get(user["user_id"])
+        if pending and pending["deadline"] > now:
+            return self._fail("Рыба уже на крючке — успейте схватить")
         gap = float(__import__("os").environ.get("RATE_LIMIT_MIN", "1"))
         if gap > 0 and now - self._last_fish.get(user["user_id"], 0.0) < game.FISH_COOLDOWN:
             return self._fail("Рыба ещё не подошла — подождите")
@@ -1241,10 +1250,55 @@ class Api:
         nonce = self.db.bump_nonce(user["user_id"])
         rod = game.rod_view(user.get("rod_key"))
         fish = game.fish_catch(user["server_seed"], user["client_seed"], nonce, rod)
+        cell = game.fish_cell(user["server_seed"], user["client_seed"], nonce)
+        self._fish_pending[user["user_id"]] = {
+            "fish": fish,
+            "cell": cell,
+            "deadline": now + game.FISH_GRAB_SECONDS,
+            "rod": rod["title"],
+        }
+        return self._json({
+            "ok": True,
+            "cell": cell,
+            "cells": game.FISH_CELLS,
+            "seconds": game.FISH_GRAB_SECONDS,
+            "lock_seconds": game.FISH_LOCK_SECONDS,
+            "icon": fish["icon"],
+            "rarity": fish["rarity"],
+            "rarity_title": fish["rarity_title"],
+            "rod": rod["title"],
+            "balance": self.db.user(user["user_id"])["balance"],
+        })
+
+    async def fish_grab(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        try:
+            cell = int(body.get("cell", -1))
+        except (TypeError, ValueError):
+            return self._fail("Некорректная клетка")
+        pending = self._fish_pending.pop(user["user_id"], None)
+        if not pending:
+            return self._fail("Рыба уже уплыла")
+        if time.time() > pending["deadline"]:
+            self._fish_lock[user["user_id"]] = time.time() + game.FISH_LOCK_SECONDS
+            return self._fail(
+                f"Не успели — рыба ушла. Ловля заблокирована на "
+                f"{game.FISH_LOCK_SECONDS} с")
+        if cell != pending["cell"]:
+            self._fish_lock[user["user_id"]] = time.time() + game.FISH_LOCK_SECONDS
+            return self._fail(
+                f"Мимо — рыба ушла. Ловля заблокирована на "
+                f"{game.FISH_LOCK_SECONDS} с")
+        fish = pending["fish"]
         fish_id = uuid.uuid4().hex[:16]
         self.db.add_fish(fish_id, user["user_id"], fish)
         return self._json({"ok": True, "id": fish_id, **fish,
-                           "rod": rod["title"],
+                           "rod": pending["rod"],
                            "balance": self.db.user(user["user_id"])["balance"]})
 
     async def fish_list(self, request: web.Request) -> web.Response:
@@ -2571,6 +2625,7 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/games/basket", api.basket)
     app.router.add_post("/api/games/darts", api.darts)
     app.router.add_post("/api/fish/catch", api.fish_catch)
+    app.router.add_post("/api/fish/grab", api.fish_grab)
     app.router.add_post("/api/fish/list", api.fish_list)
     app.router.add_post("/api/fish/sell", api.fish_sell)
     app.router.add_post("/api/fish/rods", api.fish_rods)

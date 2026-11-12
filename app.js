@@ -2320,33 +2320,92 @@ function fishCard(fish) {
   $("fishSellOne").addEventListener("click", () => sellFish(fish.id));
 }
 
-async function castFish() {
-  if ($("fishCast").disabled) return;
-  $("fishCast").disabled = true;
+function fishLock(seconds) {
+  const castBtn = $("fishCast");
+  if (!castBtn) return;
+  let left = Math.max(0, Math.round(seconds));
+  castBtn.disabled = true;
+  const label = castBtn.textContent;
+  const tick = () => {
+    if (left <= 0) {
+      castBtn.disabled = false;
+      castBtn.textContent = label;
+      return;
+    }
+    castBtn.textContent = `Ждать ${left} с`;
+    left -= 1;
+    setTimeout(tick, 1000);
+  };
+  tick();
+}
+
+function fishMiss(data, message) {
+  $("fishStage").innerHTML = `<div class="fish-hint">${data.icon || "🐟"} ${message}</div>`;
   $("fishResult").textContent = "";
-  $("fishStage").innerHTML = '<div class="fish-hint">Ждём поклёвку…</div>';
+  toast(message);
+  haptic("error");
+  fishLock(data.lock_seconds || 15);
+}
+
+async function castFish() {
+  const castBtn = $("fishCast");
+  if (!castBtn || castBtn.disabled) return;
+  castBtn.disabled = true;
+  $("fishResult").textContent = "";
   try {
     const data = await api("/api/fish/catch", {});
-    await new Promise((resolve) => setTimeout(resolve, 2000 + Math.random() * 2500));
-    fishCurrent = data;
-    const size = data.weight_g >= 20000 ? "big" : (data.weight_g <= 800 ? "small" : "");
+    const total = data.cells || 25;
+    const parts = [];
+    for (let i = 0; i < total; i += 1) {
+      const hit = i === data.cell;
+      parts.push(`<button class="fish-cell${hit ? " has-fish" : ""}" data-cell="${i}">${hit ? data.icon : ""}</button>`);
+    }
     $("fishStage").innerHTML =
-      `<button class="fish-target ${size}" id="fishTarget">${data.icon}</button>`;
-    $("fishTarget").addEventListener("click", () => {
-      if (!fishCurrent) return;
-      $("fishStage").innerHTML = `<div class="fish-hint">${fishCurrent.icon} Клюёт!</div>`;
-      fishCard(fishCurrent);
-      state.fishItems = (state.fishItems || []).concat([fishCurrent]);
-      fishCurrent = null;
-      renderFishSell();
-      sfx.coin();
-      haptic("success");
+      `<div class="fish-grid">${parts.join("")}</div>
+       <div class="fish-hint">Успей схватить: <b id="fishLeft">${(data.seconds || 3).toFixed(1)}</b> с</div>`;
+    const stage = $("fishStage");
+    const left = $("fishLeft");
+    const budget = data.seconds || 3;
+    const started = Date.now();
+    let done = false;
+    const timer = setInterval(() => {
+      const rest = budget - (Date.now() - started) / 1000;
+      if (left) left.textContent = Math.max(0, rest).toFixed(1);
+      if (rest <= 0 && !done) {
+        done = true;
+        clearInterval(timer);
+        fishMiss(data, "Не успели — рыба ушла");
+      }
+    }, 100);
+    stage.querySelectorAll(".fish-cell").forEach((cell) => {
+      cell.addEventListener("click", async () => {
+        if (done) return;
+        done = true;
+        clearInterval(timer);
+        const picked = Number(cell.dataset.cell);
+        if (picked !== data.cell) {
+          fishMiss(data, "Мимо — рыба ушла");
+          return;
+        }
+        try {
+          const caught = await api("/api/fish/grab", { cell: picked });
+          fishCurrent = caught;
+          stage.innerHTML = `<div class="fish-hint">${caught.icon} Поймали: <b>${caught.name}</b></div>`;
+          fishCard(caught);
+          state.fishItems = (state.fishItems || []).concat([caught]);
+          renderFishSell();
+          sfx.coin();
+          haptic("success");
+        } catch (e) {
+          fishMiss(data, e.message);
+        }
+      });
     });
   } catch (e) {
     $("fishStage").innerHTML = `<div class="fish-hint">${e.message}</div>`;
     toast(e.message);
   } finally {
-    $("fishCast").disabled = false;
+    castBtn.disabled = false;
   }
 }
 

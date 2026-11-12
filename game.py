@@ -957,6 +957,16 @@ FISH_SPECIES = (
 )
 
 FISH_COOLDOWN = 4
+FISH_CELLS = 25
+FISH_GRAB_SECONDS = 3.0
+FISH_LOCK_SECONDS = 15
+
+
+def fish_cell(server_seed: str, client_seed: str, nonce: int) -> int:
+    """Клетка 0..24, где покажется рыба."""
+    value = next(_floats(server_seed, client_seed, nonce, 97, 1))
+    return int(value * FISH_CELLS) % FISH_CELLS
+
 
 # --- удочки: редкость, вес и удача -------------------------------------
 RODS = (
