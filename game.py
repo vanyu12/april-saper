@@ -69,9 +69,37 @@ PREFIXES = (
     {"key": "tester_prefix", "title": "Тестер", "price": 0, "currency": "role",
      "level": 1, "color": "#64d2ff", "role": "tester", "bonus": 0.03,
      "desc": "+3% к выигрышу · только для тестера"},
+    # --- оформления ника: цветная обводка в профиле и топе --------------
+    {"key": "red_glow", "title": "Алый", "price": 3000, "currency": "mcoin",
+     "level": 3, "color": "#ff2d2d", "style": "glow",
+     "desc": "Красная обводка и свечение ника"},
+    {"key": "white_pure", "title": "Белый", "price": 4000, "currency": "mcoin",
+     "level": 4, "color": "#ffffff", "style": "outline",
+     "desc": "Строгая белая обводка"},
+    {"key": "neon_cyan", "title": "Неон", "price": 6000, "currency": "mcoin",
+     "level": 8, "color": "#19f9ff", "style": "neon",
+     "desc": "Неоновая бирюзовая подсветка"},
+    {"key": "rainbow", "title": "Радужный", "price": 12000, "currency": "mcoin",
+     "level": 12, "color": "#ff5c8a", "color2": "#57c7ff", "style": "rainbow",
+     "desc": "Переливающаяся радужная обводка"},
+    {"key": "ice", "title": "Ледяной", "price": 5000, "currency": "mcoin",
+     "level": 6, "color": "#8fdcff", "color2": "#3b82f6", "style": "gradient",
+     "desc": "Холодный градиент от льда к синему"},
+    {"key": "toxic", "title": "Токсичный", "price": 7000, "currency": "mcoin",
+     "level": 10, "color": "#a3ff12", "style": "glow",
+     "desc": "Кислотно-зелёное свечение"},
+    {"key": "sunset", "title": "Закат", "price": 9000, "currency": "mcoin",
+     "level": 15, "color": "#ff9a3c", "color2": "#ff2d6f", "style": "gradient",
+     "desc": "Тёплый градиент заката"},
+    {"key": "gold_dust", "title": "Золотая пыль", "price": 15000, "currency": "mcoin",
+     "level": 20, "color": "#ffd166", "style": "sparkle",
+     "desc": "Золотая обводка с искрами"},
 )
 
 PREFIX_BY_KEY = {prefix["key"]: prefix for prefix in PREFIXES}
+
+# Оформления без бонуса к выигрышу: только внешний вид.
+PREFIX_STYLES = ("solid", "outline", "glow", "neon", "gradient", "rainbow", "sparkle")
 
 
 def prefix_bonus(key: str | None) -> float:
@@ -79,6 +107,12 @@ def prefix_bonus(key: str | None) -> float:
     if not prefix:
         return 0.0
     return float(prefix.get("bonus") or 0.0)
+
+
+def prefix_style(key: str | None) -> str:
+    prefix = PREFIX_BY_KEY.get((key or "").strip())
+    style = (prefix or {}).get("style") or "solid"
+    return style if style in PREFIX_STYLES else "solid"
 
 
 def role_prefix(role: str | None) -> str:
@@ -131,6 +165,9 @@ def prefix_view(key: str | None) -> dict | None:
         "key": prefix["key"],
         "title": prefix["title"],
         "color": prefix["color"],
+        "color2": prefix.get("color2") or prefix["color"],
+        "style": prefix_style(prefix["key"]),
+        "bonus": float(prefix.get("bonus") or 0.0),
     }
 
 
@@ -369,7 +406,88 @@ SHOP_ITEMS = (
      "desc": "Навсегда +3% к выплатам в «Сапёре»"},
     {"key": "lootbox", "title": "Кейс удачи", "price": 800, "category": "exclusive",
      "desc": "Случайная награда: mCoin, страховка или талисман"},
+    {"key": "boost_win", "title": "Буст выигрыша", "price": 2500, "category": "boosts",
+     "charges": 10, "desc": "+5% к выплате. 10 зарядов — по одному на выигрыш"},
+    {"key": "boost_loss", "title": "Кэшбэк-буст", "price": 3000, "category": "boosts",
+     "charges": 10, "desc": "Возврат 5% ставки при проигрыше. 10 зарядов"},
 )
+
+BOOST_WIN_RATE = 0.05
+BOOST_LOSS_RATE = 0.05
+BOOST_CHARGES = 10
+
+# Расходники: покупаются пачками зарядов, «куплено» для них не показываем.
+CONSUMABLE_KEYS = frozenset({
+    "insurance", "double_daily", "charm", "lootbox", "boost_win", "boost_loss",
+})
+
+# --- кастомизация профиля: аватарки и фоны ------------------------------
+AVATARS = (
+    {"key": "letter", "title": "Буква", "icon": "", "price": 0},
+    {"key": "fox", "title": "Лис", "icon": "🦊", "price": 800},
+    {"key": "wolf", "title": "Волк", "icon": "🐺", "price": 800},
+    {"key": "tiger", "title": "Тигр", "icon": "🐯", "price": 1200},
+    {"key": "lion", "title": "Лев", "icon": "🦁", "price": 1500},
+    {"key": "frog", "title": "Жаба", "icon": "🐸", "price": 600},
+    {"key": "panda", "title": "Панда", "icon": "🐼", "price": 1000},
+    {"key": "owl", "title": "Сова", "icon": "🦉", "price": 1000},
+    {"key": "octopus", "title": "Осьминог", "icon": "🐙", "price": 1200},
+    {"key": "unicorn", "title": "Единорог", "icon": "🦄", "price": 3000},
+    {"key": "alien", "title": "Пришелец", "icon": "👾", "price": 2500},
+    {"key": "robot", "title": "Робот", "icon": "🤖", "price": 2000},
+    {"key": "tophat", "title": "Цилиндр", "icon": "🎩", "price": 1800},
+    {"key": "crown", "title": "Корона", "icon": "👑", "price": 5000},
+    {"key": "diamond", "title": "Алмаз", "icon": "💎", "price": 6000},
+    {"key": "fire", "title": "Огонь", "icon": "🔥", "price": 3500},
+)
+
+BACKGROUNDS = (
+    {"key": "default", "title": "Стандарт", "price": 0,
+     "css": "linear-gradient(135deg, #131722, #1e2533)"},
+    {"key": "aurora", "title": "Аврора", "price": 2000,
+     "css": "linear-gradient(135deg, #0f766e, #312e81 55%, #9d174d)"},
+    {"key": "ocean", "title": "Океан", "price": 1500,
+     "css": "linear-gradient(135deg, #0c4a6e, #0ea5e9)"},
+    {"key": "sunset", "title": "Закат", "price": 1500,
+     "css": "linear-gradient(135deg, #7c2d12, #f97316 60%, #ec4899)"},
+    {"key": "matrix", "title": "Матрица", "price": 2500,
+     "css": "linear-gradient(135deg, #00221a, #0b3d2e 60%, #16a34a)"},
+    {"key": "gold", "title": "Золото", "price": 4000,
+     "css": "linear-gradient(135deg, #4a2c07, #b7791f 60%, #facc15)"},
+    {"key": "violet", "title": "Фиалка", "price": 3000,
+     "css": "linear-gradient(135deg, #2e1065, #7c3aed 60%, #f472b6)"},
+    {"key": "steel", "title": "Сталь", "price": 1000,
+     "css": "linear-gradient(135deg, #111827, #4b5563)"},
+)
+
+AVATAR_BY_KEY = {item["key"]: item for item in AVATARS}
+BACKGROUND_BY_KEY = {item["key"]: item for item in BACKGROUNDS}
+
+COSMETIC_PREFIX = {"avatar": "avatar_", "background": "bg_"}
+
+
+def avatar_view(key: str | None) -> dict:
+    item = AVATAR_BY_KEY.get((key or "").strip()) or AVATAR_BY_KEY["letter"]
+    return {"key": item["key"], "title": item["title"], "icon": item["icon"]}
+
+
+def background_view(key: str | None) -> dict:
+    item = BACKGROUND_BY_KEY.get((key or "").strip()) or BACKGROUND_BY_KEY["default"]
+    return {"key": item["key"], "title": item["title"], "css": item["css"]}
+
+
+def cosmetic_item_key(kind: str, key: str) -> str:
+    return COSMETIC_PREFIX.get(kind, "") + (key or "").strip()
+
+
+def cosmetic_from_inventory(kind: str, key: str | None) -> bool:
+    """Бесплатные оформления считаются купленными всегда."""
+    key = (key or "").strip()
+    if kind == "avatar":
+        return key in AVATAR_BY_KEY and int(AVATAR_BY_KEY[key]["price"]) == 0
+    if kind == "background":
+        return key in BACKGROUND_BY_KEY and int(BACKGROUND_BY_KEY[key]["price"]) == 0
+    return False
 
 SHOP_BUNDLES = (
     {"key": "starter", "title": "Набор новичка", "price": 320, "category": "bundles",

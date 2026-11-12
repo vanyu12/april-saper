@@ -75,6 +75,23 @@ def date_text(timestamp: int) -> str:
     return time.strftime("%d.%m.%Y %H:%M", time.localtime(timestamp))
 
 
+def seen_text(timestamp: int | None, now: int | None = None) -> str:
+    """Когда игрок последний раз заходил в игру."""
+    if not timestamp:
+        return "давно не заходил(а)"
+    current = int(now or time.time())
+    delta = max(0, current - int(timestamp))
+    if delta < 90:
+        return "был(а) только что"
+    if delta < 3600:
+        return f"был(а) {delta // 60} мин назад"
+    if delta < 86400:
+        return f"был(а) {delta // 3600} ч назад"
+    if delta < 7 * 86400:
+        return f"был(а) {max(1, delta // 86400)} дн. назад"
+    return "заходил(а) " + date_text(timestamp)
+
+
 def webapp_button(text: str = "🎮 Открыть игру") -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, web_app=WebAppInfo(url=app_url()))
 
@@ -227,12 +244,13 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     _last_action: dict[int, float] = {}
 
-    def bet_error(user: dict, bet: int, game_key: str | None = None) -> str | None:
+    def bet_error(user: dict, bet: int, game_key: str | None = None,
+                  rate: bool = True) -> str | None:
         if user.get("is_banned"):
             return "Аккаунт заблокирован."
         now = time.time()
         gap = 0.7 * float(__import__("os").environ.get("RATE_LIMIT_MIN", "1"))
-        if gap > 0:
+        if rate and gap > 0:
             last = _last_action.get(user["user_id"], 0.0)
             if now - last < gap:
                 return "Слишком быстро — подождите секунду."
@@ -255,6 +273,24 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if rate <= 0 or payout <= 0:
             return payout
         return int(round(payout * (1 + rate)))
+
+    def boost_bonus(user: dict, bet: int, payout: int) -> int:
+        """Списывает заряд буста и начисляет бонус. Возвращает сумму бонуса."""
+        uid = user["user_id"]
+        if payout > 0:
+            if not db.take_item(uid, "boost_win"):
+                return 0
+            extra = int(round(payout * game.BOOST_WIN_RATE))
+        elif bet > 0:
+            if not db.take_item(uid, "boost_loss"):
+                return 0
+            extra = int(round(bet * game.BOOST_LOSS_RATE))
+        else:
+            return 0
+        if extra <= 0:
+            return 0
+        db.add_balance(uid, extra)
+        return extra
 
     def charm_bonus(user: dict, payout: int) -> int:
         if payout <= 0:
@@ -299,6 +335,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         xp_gain = game.XP_PER_GAME + (game.XP_PER_WIN if payout > 0 else 0)
         before = game.level_from_xp(int(user.get("xp") or 0))
         db.finish_stats(user["user_id"], bet, payout, mult)
+        boost_bonus(user, bet, payout)
         db.add_xp(user["user_id"], xp_gain)
         earned = awards.evaluate(db, user["user_id"])
         db.claim_referral_bonus(user["user_id"])
@@ -347,20 +384,38 @@ def build_dispatcher(db: Database) -> Dispatcher:
         level = game.level_view(user.get("xp") or 0)
         duels_played = int(user.get("duels_played") or 0)
         duels_won = int(user.get("duels_won") or 0)
+        pref = game.prefix_view(user.get("prefix"))
+        avatar = game.avatar_view(user.get("avatar_key"))
+        bg = game.background_view(user.get("bg_key"))
+        head = "👤 <b>Профиль</b>"
+        if avatar["icon"]:
+            head += f" {avatar['icon']}"
         lines = [
-            "👤 <b>Профиль</b>",
+            head,
             f"💰 Баланс: <b>{num(user['balance'])} mCoin</b>",
             f"🎁 GMPOINT: <b>{num(user.get('gmpoint') or 0)}</b>",
-            (f"🎩 Префикс: <b>{game.prefix_view(user.get('prefix'))['title']}</b>"
-             + (f" · +{int(round(game.prefix_bonus(user.get('prefix')) * 100))}% к выигрышу"
-                if game.prefix_bonus(user.get('prefix')) else ""))
-            if game.prefix_view(user.get("prefix")) else "🎩 Префикс: нет",
+            (f"🎩 Префикс: <b>{pref['title']}</b>"
+             + (f" · +{int(round(pref['bonus'] * 100))}% к выигрышу"
+                if pref["bonus"] else ""))
+            if pref else "🎩 Префикс: нет",
+            f"🎨 Фон профиля: {bg['title']}"
+            + (f" · аватар: {avatar['title']}" if avatar["icon"] else ""),
             f"⭐ Уровень {level['level']} — {level['title']}",
             f"🎖 XP: {level['into']} / {level['need']}",
             f"🎯 Партий: {user['games_played']} · побед: {user['games_won']}",
             f"📉 Проиграно: {num(lost)} mCoin",
             f"🔥 Лучший множитель: ×{user['best_multiplier']:.2f}",
+            f"🕒 {seen_text(user.get('last_seen'), now)}",
         ]
+        boost_win = db.item_qty(user["user_id"], "boost_win")
+        boost_loss = db.item_qty(user["user_id"], "boost_loss")
+        if boost_win or boost_loss:
+            parts = []
+            if boost_win:
+                parts.append(f"+5% к выигрышу ×{boost_win}")
+            if boost_loss:
+                parts.append(f"кэшбэк 5% ×{boost_loss}")
+            lines.append("🚀 Бусты: " + " · ".join(parts))
         if duels_played:
             lines.append(f"⚔️ Дуэли: {duels_played} · побед: {duels_won}")
         place = db.rank(user["user_id"])
@@ -478,6 +533,59 @@ def build_dispatcher(db: Database) -> Dispatcher:
             return "@" + str(user["username"]).lstrip("@")
         return user.get("first_name") or f"id{user['user_id']}"
 
+    def prefix_key(user: dict) -> str:
+        return (user.get("prefix") or "").strip()
+
+    def prefix_menu_text(user: dict) -> str:
+        owned = db.user_prefixes(user["user_id"])
+        active = prefix_key(user)
+        current = game.prefix_view(active)
+        level = game.level_view(user.get("xp") or 0)["level"]
+        lines = ["🎩 <b>Префиксы и оформление ника</b>", ""]
+        lines.append(f"Сейчас: <b>{current['title']}</b>" if current else "Сейчас: без префикса")
+        lines.append("")
+        if owned:
+            lines.append("<b>Куплено</b>")
+            for key in sorted(owned):
+                view = game.prefix_view(key)
+                if not view:
+                    continue
+                mark = " • надет" if key == active else ""
+                lines.append(f"• {view['title']}{mark}")
+        else:
+            lines.append("Купленных префиксов пока нет.")
+        lines.append("")
+        lines.append(f"⭐ Уровень {level}. Префиксы за уровень открываются сами.")
+        lines.append("🛒 Купить новые — в мини-аппе, раздел «Магазин».")
+        return "\n".join(lines)
+
+    def prefix_menu_keyboard(user: dict) -> InlineKeyboardMarkup:
+        owned = db.user_prefixes(user["user_id"])
+        active = prefix_key(user)
+        rows = []
+        for key in sorted(owned):
+            view = game.prefix_view(key)
+            if not view or key == active:
+                continue
+            rows.append([InlineKeyboardButton(
+                text=f"Надеть «{view['title']}»",
+                callback_data=f"prefix:equip:{key}")])
+        if active:
+            rows.append([InlineKeyboardButton(text="Снять префикс",
+                                              callback_data="prefix:off")])
+        rows.append([InlineKeyboardButton(text="🎨 Аватар и фон",
+                                          callback_data="menu:cosmetics")])
+        rows.append([InlineKeyboardButton(text="⬅️ Профиль", callback_data="menu:profile")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def cosmetics_menu_text(user: dict) -> str:
+        avatar = game.avatar_view(user.get("avatar_key"))
+        bg = game.background_view(user.get("bg_key"))
+        return ("🎨 <b>Оформление профиля</b>\n\n"
+                f"Аватар: {avatar['icon'] + ' ' if avatar['icon'] else ''}{avatar['title']}\n"
+                f"Фон: {bg['title']}\n\n"
+                "Галерея аватарок и фонов — в мини-аппе, раздел «Профиль».")
+
     def duel_top_text() -> str:
         rows = db.top_duelists(10)
         lines = ["🏆 <b>Топ дуэлянтов</b>", ""]
@@ -491,9 +599,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
         return "\n".join(lines)
 
     def duel_menu_text(user: dict) -> str:
+        now = int(time.time())
+        db.expire_duels(now, game.DUEL_TTL)
         pending = db.pending_duel_for(user["user_id"])
         lines = ["⚔️ <b>Дуэли 1×1</b>", "",
                  "Вызови друга: <code>/duel 100 @username</code>",
+                 "или по ID: <code>/duel 100 123456789</code>",
                  f"Победитель забирает {num(game.duel_prize(100))} mCoin "
                  "со ставки 100 (комиссия 5%).", ""]
         if pending:
@@ -503,8 +614,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
             other = db.user(other_id)
             role = ("твой вызов" if int(pending["challenger_id"]) == int(user["user_id"])
                     else "тебя вызвали")
+            left = game.DUEL_TTL - (now - int(pending["created_at"]))
             lines.append(f"⏳ Активный вызов: {user_name(other)} · "
                          f"{num(pending['bet'])} mCoin ({role})")
+            lines.append(f"Осталось: {left_text(left)}")
         else:
             lines.append("Активных вызовов нет.")
         lines += ["", f"Пар: {user['duels_played']} · побед: {user['duels_won']}"]
@@ -596,6 +709,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
              InlineKeyboardButton(text="🏦 Банк", callback_data="menu:bank")],
             [InlineKeyboardButton(text="🏅 Достижения", callback_data="menu:ach"),
              InlineKeyboardButton(text="🎯 Задания", callback_data="menu:tasks")],
+            [InlineKeyboardButton(text="🎩 Префиксы", callback_data="menu:prefixes"),
+             InlineKeyboardButton(text="🎨 Аватар и фон", callback_data="menu:cosmetics")],
             [InlineKeyboardButton(text="🏆 Топ по балансу", callback_data="top"),
              InlineKeyboardButton(text="⭐ Топ по уровню", callback_data="top:level")],
             [webapp_button()],
@@ -603,6 +718,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     def top_text() -> str:
         rows = db.leaderboard(10)
+        now = int(time.time())
         lines = ["🏆 <b>Топ по балансу</b>", ""]
         medals = ("🥇", "🥈", "🥉")
         for index, row in enumerate(rows, 1):
@@ -610,13 +726,17 @@ def build_dispatcher(db: Database) -> Dispatcher:
             prefix = medals[index - 1] if index <= 3 else f"{index}."
             pref = game.prefix_view(row.get("prefix"))
             mark = f" [{pref['title']}]" if pref else ""
-            lines.append(f"{prefix} {name}{mark} — {num(row['balance'])} mCoin")
+            avatar = game.avatar_view(row.get("avatar_key"))
+            face = f"{avatar['icon']} " if avatar["icon"] else ""
+            lines.append(f"{prefix} {face}{name}{mark} — {num(row['balance'])} mCoin")
+            lines.append(f"   {seen_text(row.get('last_seen'), now)}")
         if not rows:
             lines.append("Пока пусто")
         return "\n".join(lines)
 
     def top_level_text() -> str:
         rows = db.top_by_level(10)
+        now = int(time.time())
         lines = ["⭐ <b>Топ по уровню</b>", ""]
         medals = ("🥇", "🥈", "🥉")
         for index, row in enumerate(rows, 1):
@@ -624,10 +744,13 @@ def build_dispatcher(db: Database) -> Dispatcher:
             level = game.level_view(row.get("xp") or 0)
             prefix = game.prefix_view(row.get("prefix"))
             mark = f" {prefix['title']}" if prefix else ""
+            avatar = game.avatar_view(row.get("avatar_key"))
+            face = f"{avatar['icon']} " if avatar["icon"] else ""
             place = medals[index - 1] if index <= 3 else f"{index}."
             lines.append(
-                f"{place} {name}{mark} — {level['level']} ур. "
+                f"{place} {face}{name}{mark} — {level['level']} ур. "
                 f"({level['title']}) · {num(level['xp'])} XP")
+            lines.append(f"   {seen_text(row.get('last_seen'), now)}")
         if not rows:
             lines.append("Пока пусто")
         return "\n".join(lines)
@@ -1631,6 +1754,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
     @dp.message(Command("duel", "duels"))
     async def duel_cmd(message: Message) -> None:
         user = get_user(message)
+        if db.expire_duels(int(time.time()), game.DUEL_TTL):
+            awards.evaluate(db, user["user_id"])
+            user = db.user(user["user_id"]) or user
         parts = (message.text or "").split()
         if len(parts) > 1 and parts[1].lower() in ("top", "топ"):
             await message.answer(duel_top_text(), reply_markup=duel_menu_keyboard(user))
@@ -1640,16 +1766,23 @@ def build_dispatcher(db: Database) -> Dispatcher:
                                  reply_markup=duel_menu_keyboard(user))
             return
         target = next((part for part in parts[1:] if part.startswith("@")), None)
-        bet_raw = next((part for part in parts[1:] if part.isdigit()), None)
+        if not target:
+            target = next((part for part in parts[1:] if part.isdigit()), None)
+        bet_raw = next((part for part in parts[1:] if part.isdigit()
+                        and part != target), None)
         if not target or not bet_raw:
-            await message.answer("Формат: <code>/duel 100 @username</code>")
+            await message.answer("Формат: <code>/duel 100 @username</code> "
+                                 "или <code>/duel 100 123456789</code>")
             return
         bet = int(bet_raw)
-        error = bet_error(user, bet)
+        error = bet_error(user, bet, rate=False)
         if error:
             await message.answer("⚠️ " + error)
             return
-        opponent = db.user_by_username(target)
+        if target.startswith("@"):
+            opponent = db.user_by_username(target)
+        else:
+            opponent = db.user(int(target))
         if not opponent:
             await message.answer("⚠️ Этот игрок ещё не запускал бота.")
             return
@@ -1662,10 +1795,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if int(opponent["balance"]) < bet:
             await message.answer("⚠️ У соперника недостаточно mCoin.")
             return
-        if db.pending_duel_for(user["user_id"]):
+        if db.pending_duel_for(user["user_id"], int(time.time()), game.DUEL_TTL):
             await message.answer("⚠️ У тебя уже есть активный вызов.")
             return
-        if db.pending_duel_for(opponent["user_id"]):
+        if db.pending_duel_for(opponent["user_id"], int(time.time()), game.DUEL_TTL):
             await message.answer("⚠️ У соперника уже есть активный вызов.")
             return
         now = int(time.time())
@@ -1751,6 +1884,46 @@ def build_dispatcher(db: Database) -> Dispatcher:
         user = get_user(message)
         await message.answer(profile_text(user), reply_markup=profile_keyboard())
 
+    @dp.message(Command("prefix", "prefixes"))
+    async def prefix_cmd(message: Message) -> None:
+        user = get_user(message)
+        await message.answer(prefix_menu_text(user),
+                             reply_markup=prefix_menu_keyboard(user))
+
+    @dp.callback_query(F.data.startswith("prefix:equip:"))
+    async def prefix_equip_cb(callback) -> None:
+        key = callback.data.split(":", 2)[-1]
+        user = get_user(callback)
+        if not db.equip_prefix(user["user_id"], key):
+            await callback.answer("Этот префикс не куплен", show_alert=True)
+            return
+        fresh = db.user(user["user_id"])
+        await safe_edit(callback.message, prefix_menu_text(fresh),
+                        prefix_menu_keyboard(fresh))
+        await callback.answer("Префикс надет")
+
+    @dp.callback_query(F.data == "prefix:off")
+    async def prefix_off_cb(callback) -> None:
+        user = get_user(callback)
+        db.equip_prefix(user["user_id"], "")
+        fresh = db.user(user["user_id"])
+        await safe_edit(callback.message, prefix_menu_text(fresh),
+                        prefix_menu_keyboard(fresh))
+        await callback.answer("Префикс снят")
+
+    @dp.callback_query(F.data == "menu:prefixes")
+    async def menu_prefixes(callback) -> None:
+        user = get_user(callback)
+        await callback.message.answer(prefix_menu_text(user),
+                                      reply_markup=prefix_menu_keyboard(user))
+        await callback.answer()
+
+    @dp.callback_query(F.data == "menu:cosmetics")
+    async def menu_cosmetics(callback) -> None:
+        user = get_user(callback)
+        await callback.message.answer(cosmetics_menu_text(user),
+                                      reply_markup=prefix_menu_keyboard(user))
+        await callback.answer()
     @dp.message(Command("achievements", "ach"))
     async def achievements_cmd(message: Message) -> None:
         user = get_user(message)
@@ -3082,6 +3255,7 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="spin", description="Колесо дня"),
         BotCommand(command="bonus", description="Бонусы"),
         BotCommand(command="balance", description="Профиль и статистика"),
+        BotCommand(command="prefix", description="Префиксы и оформление ника"),
         BotCommand(command="deposit", description="Депозиты"),
         BotCommand(command="tasks", description="Задания"),
         BotCommand(command="achievements", description="Уровни и достижения"),

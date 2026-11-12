@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl
 import aiohttp
 from aiohttp import web
 
+import auth
 import awards
 import game
 import updates
@@ -249,7 +250,23 @@ class Api:
         hourly_left = max(0, int(user.get("last_hourly") or 0) + game.HOURLY_COOLDOWN - now)
         spin_left = max(0, int(user.get("last_spin") or 0) + game.SPIN_COOLDOWN - now)
         level = game.level_view(user.get("xp") or 0)
+        prefix = game.prefix_view(user.get("prefix"))
+        avatar = game.avatar_view(user.get("avatar_key"))
+        bg = game.background_view(user.get("bg_key"))
         return {
+            "prefix": user.get("prefix") or "",
+            "prefix_title": prefix["title"] if prefix else "",
+            "prefix_color": prefix["color"] if prefix else "",
+            "prefix_color2": prefix["color2"] if prefix else "",
+            "prefix_style": prefix["style"] if prefix else "solid",
+            "prefix_bonus": prefix["bonus"] if prefix else 0.0,
+            "avatar_key": avatar["key"],
+            "avatar_icon": avatar["icon"],
+            "bg_key": bg["key"],
+            "bg_css": bg["css"],
+            "last_seen": int(user.get("last_seen") or 0),
+            "boost_win": self.db.item_qty(user["user_id"], "boost_win"),
+            "boost_loss": self.db.item_qty(user["user_id"], "boost_loss"),
             "id": user["user_id"],
             "username": user["username"],
             "first_name": user["first_name"],
@@ -286,12 +303,31 @@ class Api:
         result = []
         for row in rows:
             level = game.level_view(row.get("xp") or 0)
-            result.append({
+            result.append(self._decorate_row({
                 **row,
                 "level": level["level"],
                 "level_title": level["title"],
-            })
+            }))
         return result
+
+    @staticmethod
+    def _decorate_row(row: dict) -> dict:
+        """Добавляет к строке топа оформление ника и аватар."""
+        entry = dict(row)
+        prefix = game.prefix_view(entry.get("prefix"))
+        avatar = game.avatar_view(entry.get("avatar_key"))
+        bg = game.background_view(entry.get("bg_key"))
+        entry["prefix_title"] = prefix["title"] if prefix else ""
+        entry["prefix_color"] = prefix["color"] if prefix else ""
+        entry["prefix_color2"] = prefix["color2"] if prefix else ""
+        entry["prefix_style"] = prefix["style"] if prefix else "solid"
+        entry["avatar_icon"] = avatar["icon"]
+        entry["bg_css"] = bg["css"]
+        entry["last_seen"] = int(entry.get("last_seen") or 0)
+        return entry
+
+    def _top_rows(self, rows: list[dict]) -> list[dict]:
+        return [self._decorate_row(row) for row in rows]
 
     async def state(self, request: web.Request) -> web.Response:
         user = self._auth(request)
@@ -314,7 +350,7 @@ class Api:
             "settings": self._public_settings(),
             "rank": self.db.rank(user["user_id"]),
             "referrals": self.db.referrals(user["user_id"]),
-            "leaderboard": self.db.leaderboard(10),
+            "leaderboard": self._top_rows(self.db.leaderboard(10)),
             "leaderboard_level": self._level_rows(self.db.top_by_level(10)),
             "history": self.db.history(user["user_id"], 10),
             "fair": {
@@ -551,11 +587,30 @@ class Api:
 
     def _finish(self, user: dict, bet: int, payout: int, mult: float) -> list[dict]:
         self.db.finish_stats(user["user_id"], bet, payout, mult)
+        self._apply_boost(user, bet, payout)
         xp = game.XP_PER_GAME + (game.XP_PER_WIN if payout > 0 else 0)
         self.db.add_xp(user["user_id"], xp)
         earned = awards.evaluate(self.db, user["user_id"])
         self.db.claim_referral_bonus(user["user_id"])
         return earned
+
+    def _apply_boost(self, user: dict, bet: int, payout: int) -> int:
+        """Списывает заряд буста и начисляет бонус. Возвращает сумму бонуса."""
+        uid = user["user_id"]
+        if payout > 0:
+            if not self.db.take_item(uid, "boost_win"):
+                return 0
+            extra = int(round(payout * game.BOOST_WIN_RATE))
+        elif bet > 0:
+            if not self.db.take_item(uid, "boost_loss"):
+                return 0
+            extra = int(round(bet * game.BOOST_LOSS_RATE))
+        else:
+            return 0
+        if extra <= 0:
+            return 0
+        self.db.add_balance(uid, extra)
+        return extra
 
     def _settle_referral(self, user_id: int) -> None:
         self.db.claim_referral_bonus(user_id)
@@ -598,8 +653,8 @@ class Api:
             return self._fail("unauthorized", 401)
         return self._json({
             "ok": True,
-            "by_balance": self.db.leaderboard(20),
-            "by_multiplier": self.db.top_multiplier(10),
+            "by_balance": self._top_rows(self.db.leaderboard(20)),
+            "by_multiplier": self._top_rows(self.db.top_multiplier(10)),
             "by_level": self._level_rows(self.db.top_by_level(20)),
             "me": user["user_id"],
         })
@@ -1322,6 +1377,91 @@ class Api:
         keys.update({"insurance", "double_daily", "charm"})
         return {key: int(inv.get(key, 0)) for key in sorted(keys)}
 
+    # --- оформление профиля ---------------------------------------------
+    def _cosmetics_view(self, user: dict) -> dict:
+        uid = user["user_id"]
+        avatar_key = user.get("avatar_key") or "letter"
+        bg_key = user.get("bg_key") or "default"
+        avatars = []
+        for item in game.AVATARS:
+            owned = (int(item["price"]) == 0
+                     or self.db.item_qty(uid, game.cosmetic_item_key("avatar", item["key"])) > 0)
+            avatars.append({**item, "owned": owned, "active": item["key"] == avatar_key})
+        backgrounds = []
+        for item in game.BACKGROUNDS:
+            owned = (int(item["price"]) == 0
+                     or self.db.item_qty(uid, game.cosmetic_item_key("background",
+                                                                    item["key"])) > 0)
+            backgrounds.append({**item, "owned": owned, "active": item["key"] == bg_key})
+        return {"avatars": avatars, "backgrounds": backgrounds,
+                "avatar_key": avatar_key, "bg_key": bg_key,
+                "balance": user["balance"]}
+
+    async def profile_cosmetics(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        body = await self._body(request)
+        action = str(body.get("action", "list")).strip() or "list"
+        kind = str(body.get("kind", "avatar")).strip()
+        key = str(body.get("key", "")).strip()
+        if action == "list":
+            return self._json({"ok": True, **self._cosmetics_view(user)})
+        if kind not in ("avatar", "background"):
+            return self._fail("Неизвестный вид оформления")
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        catalog = game.AVATARS if kind == "avatar" else game.BACKGROUNDS
+        item = next((entry for entry in catalog if entry["key"] == key), None)
+        if not item:
+            return self._fail("Оформление не найдено", 404)
+        item_key = game.cosmetic_item_key(kind, key)
+        if action == "buy":
+            if int(item["price"]) == 0 or self.db.item_qty(user["user_id"], item_key) > 0:
+                return self._fail("Это оформление уже доступно")
+            price = int(item["price"])
+            if int(user["balance"]) < price:
+                return self._fail("Недостаточно mCoin")
+            balance = self.db.add_balance(user["user_id"], -price)
+            self.db.add_item(user["user_id"], item_key, 1)
+            self.db.set_cosmetic(user["user_id"], kind, key)
+            fresh = self.db.user(user["user_id"])
+            return self._json({"ok": True, "balance": balance, "bought": item["title"],
+                               "equipped": True, "user": self._public_user(fresh),
+                               **self._cosmetics_view(fresh)})
+        if action == "equip":
+            if not (int(item["price"]) == 0
+                    or self.db.item_qty(user["user_id"], item_key) > 0):
+                return self._fail("Сначала купи это оформление")
+            self.db.set_cosmetic(user["user_id"], kind, key)
+            fresh = self.db.user(user["user_id"])
+            return self._json({"ok": True, "equipped": True,
+                               "user": self._public_user(fresh),
+                               **self._cosmetics_view(fresh)})
+        return self._fail("Неизвестное действие")
+
+    async def prefix_equip(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        if user.get("is_banned"):
+            return self._fail("Аккаунт заблокирован", 403)
+        body = await self._body(request)
+        key = str(body.get("key", "")).strip()
+        if key:
+            prefix = game.PREFIX_BY_KEY.get(key)
+            if not prefix:
+                return self._fail("Префикс не найден", 404)
+            if prefix.get("currency") == "role" and \
+                    (user.get("role") or "user") != prefix.get("role"):
+                return self._fail("Этот префикс доступен только с этой ролью", 403)
+            if not self.db.has_prefix(user["user_id"], key):
+                return self._fail("Префикс не куплен")
+        if not self.db.equip_prefix(user["user_id"], key):
+            return self._fail("Не удалось надеть префикс")
+        fresh = self.db.user(user["user_id"])
+        return self._json({"ok": True, "prefix": key, "user": self._public_user(fresh)})
+
     def _insurance_refund(self, user: dict, bet: int) -> int:
         if not self.db.take_item(user["user_id"], "insurance"):
             return 0
@@ -1422,7 +1562,10 @@ class Api:
         items = []
         for item in game.SHOP_ITEMS:
             entry = dict(item)
-            entry["owned"] = inv.get(item["key"], 0) > 0
+            charges = int(inv.get(item["key"], 0))
+            entry["qty"] = charges
+            entry["owned"] = (charges > 0
+                              and item["key"] not in game.CONSUMABLE_KEYS)
             items.append(entry)
         bundles = []
         for bundle in game.SHOP_BUNDLES:
@@ -1528,7 +1671,7 @@ class Api:
             })
 
         entry = next((item for item in game.SHOP_ITEMS if item["key"] == key), None)
-        grant = {key: 1} if entry else None
+        grant = {key: int(entry.get("charges") or 1)} if entry else None
         if entry is None:
             bundle = next((b for b in game.SHOP_BUNDLES if b["key"] == key), None)
             if not bundle:
@@ -2100,6 +2243,8 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/shop", api.shop)
     app.router.add_post("/api/shop/buy", api.shop_buy)
     app.router.add_post("/api/shop/use", api.shop_use)
+    app.router.add_post("/api/prefix/equip", api.prefix_equip)
+    app.router.add_post("/api/profile/cosmetics", api.profile_cosmetics)
     app.router.add_post("/api/bonus/hourly", api.hourly)
     app.router.add_post("/api/spin", api.spin)
     app.router.add_post("/api/invites/claim", api.invite_claim)

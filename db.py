@@ -382,6 +382,9 @@ class Database:
             ("role", "TEXT NOT NULL DEFAULT 'user'"),
             ("gmpoint", "INTEGER NOT NULL DEFAULT 0"),
             ("prefix", "TEXT NOT NULL DEFAULT ''"),
+            ("last_seen", "INTEGER NOT NULL DEFAULT 0"),
+            ("avatar_key", "TEXT NOT NULL DEFAULT 'letter'"),
+            ("bg_key", "TEXT NOT NULL DEFAULT 'default'"),
         ):
             if name not in present:
                 self._exec(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
@@ -414,8 +417,8 @@ class Database:
             if row:
                 self._exec(
                     "UPDATE users SET username = ?, first_name = ?, "
-                    "photo_url = COALESCE(?, photo_url) WHERE user_id = ?",
-                    (username, first_name, photo_url, user_id),
+                    "photo_url = COALESCE(?, photo_url), last_seen = ? WHERE user_id = ?",
+                    (username, first_name, photo_url, int(time.time()), user_id),
                 )
                 return self.user(user_id)
             now = int(time.time())
@@ -430,10 +433,11 @@ class Database:
                 referrer = None
             self._exec(
                 """INSERT INTO users (user_id, username, first_name, balance, created_at,
-                       server_seed, server_seed_hash, client_seed, referred_by, photo_url)
-                   VALUES (?, ?, ?, 1000, ?, ?, ?, ?, ?, ?)""",
+                       server_seed, server_seed_hash, client_seed, referred_by, photo_url,
+                       last_seen)
+                   VALUES (?, ?, ?, 1000, ?, ?, ?, ?, ?, ?, ?)""",
                 (user_id, username, first_name, now, seed, seed_hash, client_seed,
-                 referrer, photo_url or ""),
+                 referrer, photo_url or "", now),
             )
             return self.user(user_id)
 
@@ -591,6 +595,27 @@ class Database:
                    (prefix_key or "", user_id))
         return True
 
+    def equip_prefix(self, user_id: int, prefix_key: str) -> bool:
+        """Надеть купленный префикс; пустая строка — снять оформление."""
+        prefix_key = (prefix_key or "").strip()
+        if prefix_key:
+            if not self.has_prefix(user_id, prefix_key):
+                return False
+            self._exec("UPDATE users SET prefix = ? WHERE user_id = ?",
+                       (prefix_key, user_id))
+            return True
+        self._exec("UPDATE users SET prefix = '' WHERE user_id = ?", (user_id,))
+        return True
+
+    def set_cosmetic(self, user_id: int, kind: str, key: str) -> bool:
+        """kind: avatar | background. Возвращает False для неизвестного вида."""
+        column = {"avatar": "avatar_key", "background": "bg_key"}.get(kind)
+        if not column:
+            return False
+        self._exec(f"UPDATE users SET {column} = ? WHERE user_id = ?",
+                   ((key or "").strip(), user_id))
+        return True
+
     def user_achievements(self, user_id: int) -> set[str]:
         rows = self._rows("SELECT key FROM user_achievements WHERE user_id = ?",
                           (user_id,))
@@ -626,11 +651,36 @@ class Database:
     def duel(self, duel_id: str) -> dict | None:
         return self._row("SELECT * FROM duels WHERE id = ?", (duel_id,))
 
-    def pending_duel_for(self, user_id: int) -> dict | None:
+    def pending_duel_for(self, user_id: int, now: int | None = None,
+                         ttl: int = 0) -> dict | None:
+        if ttl > 0:
+            self.expire_duels(int(now or time.time()), ttl)
         return self._row(
             """SELECT * FROM duels WHERE status = 'pending'
                AND (challenger_id = ? OR opponent_id = ?)
                ORDER BY created_at DESC LIMIT 1""", (user_id, user_id))
+
+    def expire_duels(self, now: int, ttl: int) -> list[dict]:
+        """Просроченные вызовы закрываем и возвращаем ставку автору."""
+        if ttl <= 0:
+            return []
+        with self._lock:
+            stale = self._rows(
+                """SELECT id, challenger_id, bet FROM duels
+                   WHERE status = 'pending' AND created_at < ?""",
+                (int(now) - int(ttl),))
+            expired = []
+            for row in stale:
+                changed = self._exec(
+                    "UPDATE duels SET status = 'expired', finished_at = ? "
+                    "WHERE id = ? AND status = 'pending'",
+                    (int(now), row["id"]))
+                if not changed:
+                    continue
+                self._exec("UPDATE users SET balance = balance + ? WHERE user_id = ?",
+                           (int(row["bet"]), int(row["challenger_id"])))
+                expired.append(row)
+            return expired
 
     def close_duel(self, duel_id: str, status: str, now: int) -> bool:
         changed = self._exec(
@@ -743,7 +793,8 @@ class Database:
     def leaderboard(self, limit: int = 20) -> list[dict]:
         return self._rows(
             """SELECT user_id, username, first_name, photo_url, balance,
-                      best_multiplier, games_played, prefix
+                      best_multiplier, games_played, prefix,
+                      avatar_key, bg_key, last_seen
                FROM users ORDER BY balance DESC LIMIT ?""",
             (limit,),
         )
@@ -758,7 +809,8 @@ class Database:
 
     def top_by_level(self, limit: int = 10) -> list[dict]:
         return self._rows(
-            """SELECT user_id, username, first_name, photo_url, xp, games_won, prefix
+            """SELECT user_id, username, first_name, photo_url, xp, games_won, prefix,
+                      avatar_key, bg_key, last_seen
                FROM users ORDER BY xp DESC, games_won DESC, created_at ASC LIMIT ?""",
             (limit,),
         )

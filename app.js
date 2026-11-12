@@ -17,6 +17,7 @@ const state = {
   game: "mines",
   quests: [],
   shop: { items: [], bundles: [], donate: [], prefixes: [], inventory: {}, gmpoint: 0 },
+  cosmetics: { avatars: [], backgrounds: [], avatar_key: "letter", bg_key: "default" },
   leaderboard: { by_balance: [], by_multiplier: [], by_level: [], me: 0 },
   levels: { level: 1, pending: 0, pending_levels: [], next: 2, to_next: 0 },
   history: [],
@@ -659,24 +660,71 @@ function maxMultiplier(mines) {
   return Math.max(1, Math.floor((0.99 / p) * 100) / 100);
 }
 
+function avatarFace(u) {
+  if (u.avatar_icon) return u.avatar_icon;
+  return (u.first_name || u.username || "И").trim().charAt(0).toUpperCase();
+}
+
+function prefixStyleCss(entry) {
+  const color = entry.prefix_color || entry.color || "#e5e7eb";
+  const color2 = entry.prefix_color2 || entry.color2 || color;
+  return `--prefix-color:${color};--prefix-color2:${color2};`;
+}
+
+function prefixClass(entry) {
+  const style = entry.prefix_style || entry.style || "solid";
+  return `prefix-badge prefix-style-${style}`;
+}
+
+function seenLabel(ts) {
+  if (!ts) return "давно не заходил";
+  const delta = Math.max(0, Math.floor(Date.now() / 1000) - Number(ts));
+  if (delta < 90) return "был(а) только что";
+  if (delta < 3600) return `был(а) ${Math.floor(delta / 60)} мин назад`;
+  if (delta < 86400) return `был(а) ${Math.floor(delta / 3600)} ч назад`;
+  if (delta < 7 * 86400) return `был(а) ${Math.max(1, Math.floor(delta / 86400))} дн. назад`;
+  const date = new Date(Number(ts) * 1000);
+  return "заходил(а) " + date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+}
+
 function renderProfile() {
   if (!state.user) return;
   const u = state.user;
   $("profileName").textContent = u.first_name || u.username || "Игрок";
   $("profileId").textContent = "id " + u.id;
   if ($("myId")) $("myId").textContent = u.id;
-  $("avatar").textContent = (u.first_name || u.username || "И").trim().charAt(0).toUpperCase();
+  $("avatar").textContent = avatarFace(u);
+  const card = document.querySelector("#view-profile .profile-card");
+  if (card) {
+    if (u.bg_css) {
+      card.style.background = u.bg_css;
+      card.classList.add("has-bg");
+    } else {
+      card.style.background = "";
+      card.classList.remove("has-bg");
+    }
+  }
   const prefBox = $("profilePrefix");
   if (prefBox) {
     if (u.prefix_title) {
       const bonus = u.prefix_bonus ? ` · +${Math.round(u.prefix_bonus * 100)}% к выигрышу` : "";
       prefBox.hidden = false;
       prefBox.textContent = `${u.prefix_title}${bonus}`;
-      prefBox.style.color = u.prefix_color || "#e5e7eb";
-      prefBox.style.borderColor = (u.prefix_color || "#e5e7eb") + "66";
+      prefBox.className = "profile-prefix " + prefixClass(u);
+      prefBox.style.cssText = prefixStyleCss(u);
     } else {
       prefBox.hidden = true;
     }
+  }
+  const seen = $("profileSeen");
+  if (seen) seen.textContent = seenLabel(u.last_seen);
+  const boosts = $("profileBoosts");
+  if (boosts) {
+    const bits = [];
+    if (u.boost_win) bits.push(`🚀 +5% к выигрышу ×${u.boost_win}`);
+    if (u.boost_loss) bits.push(`🛟 кэшбэк 5% ×${u.boost_loss}`);
+    boosts.hidden = !bits.length;
+    boosts.textContent = bits.join(" · ");
   }
   $("statGames").textContent = fmt(u.games_played);
   $("statWins").textContent = fmt(u.games_won);
@@ -924,8 +972,12 @@ const PREFIX_META = {
   immortal_50: { title: "Бессмертный", color: "#ff6b6b" },
 };
 
-function prefixBadge(key) {
-  const meta = PREFIX_META[key];
+function prefixBadge(entry) {
+  if (!entry) return "";
+  if (entry.prefix_title) {
+    return ` <span class="${prefixClass(entry)}" style="${prefixStyleCss(entry)}">${escapeHtml(entry.prefix_title)}</span>`;
+  }
+  const meta = PREFIX_META[entry];
   if (!meta) return "";
   return ` <span class="prefix-badge" style="color:${meta.color};border-color:${meta.color}55">${escapeHtml(meta.title)}</span>`;
 }
@@ -940,6 +992,7 @@ function renderTop(tab) {
       value: fmtMult(u.best_multiplier),
       id: u.user_id,
       photo: u.photo_url,
+      row: u,
     }));
   } else if (tab === "lvl") {
     rows = (state.leaderboard.by_level || []).map((u, i) => ({
@@ -948,7 +1001,7 @@ function renderTop(tab) {
       value: `⭐ ${u.level || 1} ур. · ${fmt(u.xp || 0)} XP`,
       id: u.user_id,
       photo: u.photo_url,
-      prefix: u.prefix,
+      row: u,
     }));
   } else {
     rows = (state.leaderboard.by_balance || []).map((u, i) => ({
@@ -957,7 +1010,7 @@ function renderTop(tab) {
       value: fmt(u.balance) + " mCoin",
       id: u.user_id,
       photo: u.photo_url,
-      prefix: u.prefix,
+      row: u,
     }));
   }
   if (!rows.length) {
@@ -967,13 +1020,17 @@ function renderTop(tab) {
   const medals = ["🥇", "🥈", "🥉"];
   list.innerHTML = rows
     .map(
-      (r) => `<div class="row" style="${r.id === state.leaderboard.me ? "border-color:rgba(46,230,168,.45)" : ""}">
+      (r) => {
+        const seen = seenLabel(r.row && r.row.last_seen);
+        return `<div class="row" style="${r.id === state.leaderboard.me ? "border-color:rgba(46,230,168,.45)" : ""}">
         ${r.photo
           ? `<img class="row-avatar" src="${escapeHtml(r.photo)}" alt="">`
-          : `<span class="row-avatar letter">${escapeHtml(String(r.name).replace("@", "").charAt(0).toUpperCase() || "?")}</span>`}
-        <div class="row-main"><div class="row-title"><span class="top-place">${medals[r.place - 1] || r.place}</span> ${escapeHtml(r.name)}${prefixBadge(r.prefix)}</div></div>
+          : `<span class="row-avatar${r.row && r.row.avatar_icon ? " emoji" : " letter"}">${escapeHtml(r.row && r.row.avatar_icon ? r.row.avatar_icon : (String(r.name).replace("@", "").charAt(0).toUpperCase() || "?"))}</span>`}
+        <div class="row-main"><div class="row-title"><span class="top-place">${medals[r.place - 1] || r.place}</span> ${escapeHtml(r.name)}${prefixBadge(r.row)}</div>
+        <div class="row-sub top-seen">${escapeHtml(seen)}</div></div>
         <div class="row-value">${r.value}</div>
-      </div>`
+      </div>`;
+      }
     )
     .join("");
 }
@@ -1698,29 +1755,42 @@ function renderShopInventory() {
 }
 
 const SHOP_SECTIONS = [
+  { key: "boosts", title: "Бусты" },
   { key: "items", title: "Расходники" },
   { key: "relics", title: "Реликвии" },
   { key: "exclusive", title: "Эксклюзив" },
   { key: "cosmetics", title: "Косметика" },
 ];
 
+const CONSUMABLE_KEYS = new Set([
+  "insurance", "double_daily", "charm", "lootbox", "boost_win", "boost_loss",
+]);
+
 function shopCard(entry, opts) {
   const options = opts || {};
-  const owned = !!entry.owned && entry.key !== "lootbox";
+  const consumable = CONSUMABLE_KEYS.has(entry.key);
+  const owned = !!entry.owned && !consumable;
+  const canEquip = !!options.equip && owned && !entry.active;
   const currency = entry.currency === "gmpoint" ? "G" : (entry.currency === "level" ? "LVL" : "◈");
   let priceText;
   if (options.levelOnly) priceText = `с ${entry.level} ур.`;
   else if (entry.currency === "level") priceText = `за ${entry.level} ур.`;
   else priceText = `${currency} ${fmt(entry.price)}`;
   const label = owned ? (entry.active ? "Надет" : "Куплено") : (options.buyLabel || "Купить");
+  const action = canEquip ? "equip" : "buy";
+  const disabled = (owned && !canEquip) || options.levelOnly;
+  const title = entry.color
+    ? `<span class="${prefixClass(entry)}" style="${prefixStyleCss(entry)}">${escapeHtml(entry.title)}</span>`
+    : escapeHtml(entry.title);
+  const qty = consumable && entry.qty ? ` <span class="shop-qty">×${entry.qty}</span>` : "";
   return `<div class="shop-card${owned ? " owned" : ""}${entry.active ? " active" : ""}">
     <div class="shop-meta">
-      <div class="shop-title">${escapeHtml(entry.title)}${owned ? ' <span class="owned-mark">✓</span>' : ""}${entry.active ? ' <span class="owned-mark">•</span>' : ""}</div>
+      <div class="shop-title">${title}${owned ? ' <span class="owned-mark">✓</span>' : ""}${entry.active ? ' <span class="owned-mark">•</span>' : ""}${qty}</div>
       <div class="shop-desc">${escapeHtml(entry.desc || (entry.currency === "level" ? "Награда за уровень" : ""))}</div>
     </div>
-    <button class="shop-buy" data-key="${entry.key}" ${owned || options.levelOnly ? "disabled" : ""}>
-      <span class="shop-price">${owned ? label : priceText}</span>
-      ${owned ? "Есть" : (entry.currency === "gmpoint" ? "За GMPOINT" : label)}
+    <button class="shop-buy" data-key="${entry.key}" data-act="${action}" ${disabled ? "disabled" : ""}>
+      <span class="shop-price">${owned && !canEquip ? label : priceText}</span>
+      ${owned && !canEquip ? "Есть" : (canEquip ? "Надеть" : (entry.currency === "gmpoint" ? "За GMPOINT" : label))}
     </button>
   </div>`;
 }
@@ -1751,17 +1821,39 @@ function renderShop() {
   const prefixes = $("shopPrefixes");
   if (prefixes) {
     prefixes.innerHTML = (shop.prefixes || []).map((item) => {
-      const levelOnly = item.currency === "level";
-      const desc = `Цвет ${item.color}${levelOnly ? ` · открывается на ${item.level} уровне` : ""}`;
-      return shopCard({ ...item, desc }, { levelOnly, buyLabel: "Надеть" });
+      const levelOnly = item.currency === "level" || item.currency === "role";
+      const style = item.style && item.style !== "solid" ? " · цветная обводка" : "";
+      const desc = `Цвет ${item.color}${style}${levelOnly ? ` · открывается на ${item.level} уровне` : ""}`;
+      return shopCard({ ...item, desc }, { levelOnly, equip: true });
     }).join("") || '<div class="empty">Пока пусто</div>';
   }
+  renderProfilePrefixList();
   const gmp = $("shopGmpoint");
   if (gmp) gmp.textContent = fmt(shop.gmpoint || 0);
   const lootbox = (shop.inventory && shop.inventory.lootbox) || 0;
   const box = $("lootboxCard");
   if (box) box.hidden = lootbox <= 0;
   renderShopInventory();
+}
+
+function renderProfilePrefixList() {
+  const box = $("profilePrefixList");
+  if (!box) return;
+  const prefixes = (state.shop && state.shop.prefixes) || [];
+  const owned = prefixes.filter((p) => p.owned);
+  if (!owned.length) {
+    box.innerHTML = '<span class="muted">Купленных префиксов нет — загляни в магазин.</span>';
+    return;
+  }
+  box.innerHTML = owned.map((item) => {
+    const active = item.active;
+    return `<button class="prefix-pick${active ? " active" : ""}" data-key="${item.key}"
+      data-act="${active ? "off" : "equip"}"
+      style="${prefixStyleCss(item)}">
+      <span class="${prefixClass(item)}">${escapeHtml(item.title)}</span>
+      <span class="prefix-pick-state">${active ? "надет · снять" : "надеть"}</span>
+    </button>`;
+  }).join("");
 }
 
 function applyCosmetics() {
@@ -1775,7 +1867,79 @@ async function loadShop() {
     const data = await api("/api/shop");
     state.shop = data;
     renderShop();
+    renderCosmetics();
   } catch (e) {
+    toast(e.message);
+  }
+}
+
+function renderCosmetics() {
+  const av = $("avatarGallery");
+  const bg = $("bgGallery");
+  const data = state.cosmetics || {};
+  if (av) {
+    av.innerHTML = (data.avatars || []).map((item) => {
+      const cls = `cos-item${item.active ? " active" : ""}${item.owned ? "" : " locked"}`;
+      const price = item.owned ? "" : `<span class="cos-price">◈ ${fmt(item.price)}</span>`;
+      return `<button class="${cls}" data-kind="avatar" data-key="${item.key}" data-act="${item.owned ? "equip" : "buy"}" title="${escapeHtml(item.title)}">
+        <span class="cos-emoji">${item.icon || "А"}</span>
+        <span class="cos-name">${escapeHtml(item.title)}</span>${price}
+      </button>`;
+    }).join("") || '<span class="muted">Загрузка…</span>';
+  }
+  if (bg) {
+    bg.innerHTML = (data.backgrounds || []).map((item) => {
+      const cls = `cos-item cos-item-bg${item.active ? " active" : ""}${item.owned ? "" : " locked"}`;
+      const price = item.owned ? "" : `<span class="cos-price">◈ ${fmt(item.price)}</span>`;
+      return `<button class="${cls}" data-kind="background" data-key="${item.key}" data-act="${item.owned ? "equip" : "buy"}" title="${escapeHtml(item.title)}">
+        <span class="cos-bg" style="background:${item.css}"></span>
+        <span class="cos-name">${escapeHtml(item.title)}</span>${price}
+      </button>`;
+    }).join("") || '<span class="muted">Загрузка…</span>';
+  }
+}
+
+async function loadCosmetics() {
+  try {
+    const data = await api("/api/profile/cosmetics", { action: "list" });
+    state.cosmetics = data;
+    renderCosmetics();
+  } catch (e) {
+    // тихо: галерея не критична
+  }
+}
+
+async function cosmeticAction(kind, key, act) {
+  try {
+    const data = await api("/api/profile/cosmetics", { action: act, kind, key });
+    state.cosmetics = data;
+    if (data.user) state.user = { ...state.user, ...data.user };
+    if (data.balance !== undefined) state.user.balance = data.balance;
+    haptic("success");
+    toast(act === "buy" ? "Куплено и надето" : "Оформление применено");
+    renderCosmetics();
+    renderProfile();
+    renderBalance();
+    if (act === "buy") loadShop().catch(() => {});
+  } catch (e) {
+    haptic("error");
+    toast(e.message);
+  }
+}
+
+async function equipPrefix(key) {
+  try {
+    const data = await api("/api/prefix/equip", { key });
+    if (data.user) state.user = { ...state.user, ...data.user };
+    const shopPrefixes = (state.shop && state.shop.prefixes) || [];
+    shopPrefixes.forEach((p) => { p.active = p.key === key; });
+    haptic("success");
+    toast(key ? "Префикс надет" : "Префикс снят");
+    renderProfile();
+    renderProfilePrefixList();
+    renderShop();
+  } catch (e) {
+    haptic("error");
     toast(e.message);
   }
 }
@@ -1810,6 +1974,7 @@ async function buyItem(key) {
     renderAll();
     renderShop();
     loadShop().catch(() => {});
+    if (data.prefix) loadState().catch(() => {});
   } catch (e) {
     haptic("error");
     toast(e.message);
@@ -2234,6 +2399,12 @@ function switchView(name) {
   if (name === "history") loadHistory();
   if (name === "admin") loadAdmin();
   if (name === "shop") loadShop();
+  if (name === "profile") {
+    renderProfile();
+    loadCosmetics();
+    if (!(state.shop && (state.shop.prefixes || []).length)) loadShop();
+    else renderProfilePrefixList();
+  }
   if (name === "tasks") renderTasks();
   if (name === "bank") renderBank();
   if (name === "games") renderGamesHub();
@@ -2585,8 +2756,27 @@ function bind() {
   $("view-shop").addEventListener("click", (e) => {
     const btn = e.target.closest(".shop-buy");
     if (!btn || btn.disabled) return;
-    buyItem(btn.dataset.key);
+    if (btn.dataset.act === "equip") equipPrefix(btn.dataset.key);
+    else buyItem(btn.dataset.key);
   });
+
+  const prefixList = $("profilePrefixList");
+  if (prefixList) {
+    prefixList.addEventListener("click", (e) => {
+      const btn = e.target.closest(".prefix-pick");
+      if (!btn) return;
+      equipPrefix(btn.dataset.act === "off" ? "" : btn.dataset.key);
+    });
+  }
+
+  const cosBlock = document.querySelector(".cosmetics-card");
+  if (cosBlock) {
+    cosBlock.addEventListener("click", (e) => {
+      const btn = e.target.closest(".cos-item");
+      if (!btn) return;
+      cosmeticAction(btn.dataset.kind, btn.dataset.key, btn.dataset.act);
+    });
+  }
 
   if ($("openLootbox")) $("openLootbox").addEventListener("click", openLootbox);
 
