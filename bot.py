@@ -2686,32 +2686,40 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await message.answer("Команда доступна только администратору.")
             return
         parts = (message.text or "").split()
-        if len(parts) < 4:
+        if len(parts) < 5:
             await message.answer(
-                "Формат: <code>/promo_new 500 100 50000 [КОД]</code>\n"
-                "500 — сумма на игрока, 100 — сколько активаций (0 — без лимита),\n"
-                "50000 — общий бюджет (0 — без лимита). Код можно не указывать.")
+                "Формат: <code>/promo_new СУММА АКТИВАЦИИ ДНИ ВАЛЮТА [КОД]</code>\n"
+                "СУММА — на игрока, АКТИВАЦИИ — сколько раз (0 — без лимита),\n"
+                "ДНИ — срок действия в днях (0 — без срока),\n"
+                "ВАЛЮТА — mcoin или gmpoint (донат). Код можно не указывать.")
             return
         try:
             amount = int(parts[1])
             uses = int(parts[2])
-            budget = int(parts[3])
+            days = int(parts[3])
         except ValueError:
-            await message.answer("Сумма, активации и бюджет должны быть числами.")
+            await message.answer("Сумма, активации и дни должны быть числами.")
             return
-        if amount < 1 or max(amount * uses, amount) > 100_000_000:
+        currency = str(parts[4]).strip().lower()
+        if currency not in ("mcoin", "gmpoint"):
+            await message.answer("Валюта: mcoin или gmpoint (донат).")
+            return
+        limit_flag = 50_000_000 if currency == "gmpoint" else 100_000_000
+        if amount < 1 or max(amount * max(uses, 1), amount) > limit_flag:
             await message.answer("Проверьте сумму и лимиты.")
             return
-        code = parts[4].strip().upper() if len(parts) > 4 else uuid.uuid4().hex[:8].upper()
+        code = parts[5].strip().upper() if len(parts) > 5 else uuid.uuid4().hex[:8].upper()
         if db.promo(code):
             await message.answer("Такой промокод уже есть. Выберите другой.")
             return
-        db.create_promo(code, amount, max(0, uses), max(0, budget), 1, None, "")
+        expires = int(time.time()) + days * 86400 if days > 0 else None
+        db.create_promo(code, amount, max(0, uses), 0, 1, expires, "", currency)
+        cur_name = "gmpoint (донат)" if currency == "gmpoint" else "mCoin"
         await message.answer(
             f"🎁 Промокод <code>{code}</code> создан\n"
-            f"На игрока: {num(amount)} mCoin\n"
+            f"На игрока: {num(amount)} {cur_name}\n"
             f"Активаций: {uses if uses > 0 else 'без лимита'}\n"
-            f"Бюджет: {num(budget) if budget > 0 else 'без лимита'}\n\n"
+            f"Срок: {days if days > 0 else 'без срока'} дн.\n\n"
             f"Игроки вводят: <code>/promo {code}</code>")
 
     @dp.message(Command("promo_list"))
