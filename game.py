@@ -943,7 +943,7 @@ def basket_shot(server_seed: str, client_seed: str, nonce: int) -> bool:
 # --- дартс: три исхода броска 🎯 ---------------------------------------
 DARTS_SECTORS = (
     {"key": "miss", "title": "Мимо", "icon": "💨", "values": (1, 2),
-     "multiplier": 2.75, "desc": "дротик уйдёт мимо мишени"},
+     "multiplier": 2.4, "desc": "дротик уйдёт мимо мишени"},
     {"key": "sector", "title": "Сектор", "icon": "🎯", "values": (3, 4, 5),
      "multiplier": 1.88, "desc": "дротик попадёт в поле"},
     {"key": "bull", "title": "Яблочко", "icon": "🔴", "values": (6,),

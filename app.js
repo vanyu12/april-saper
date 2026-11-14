@@ -1473,7 +1473,9 @@ function switchGame(name) {
 function clampBet(value) {
   const min = state.settings.min_bet || 10;
   const max = state.settings.max_bet || 100000000;
-  return Math.max(min, Math.min(max, Math.round(value || 0)));
+  const num = Number(value);
+  if (!Number.isFinite(num)) return min;
+  return Math.max(min, Math.min(max, Math.round(num)));
 }
 
 const WHEEL_COLORS = ["#3a2230", "#1f3a34", "#26324a", "#342a4d", "#4a3a20", "#1f3b46"];
