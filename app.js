@@ -761,6 +761,11 @@ function renderProfile() {
     const bits = [];
     if (u.boost_win) bits.push(`🚀 +5% к выигрышу ×${u.boost_win}`);
     if (u.boost_loss) bits.push(`🛟 кэшбэк 5% ×${u.boost_loss}`);
+    const inv = (state.shop && state.shop.inventory) || {};
+    const titleKeys = ["title_baron", "title_magnate", "title_emperor",
+                       "title_legend", "title_deity"];
+    const titles = titleKeys.filter((k) => Number(inv[k] || 0) > 0);
+    if (titles.length) bits.push(`👑 Титулов: ${titles.length}`);
     boosts.hidden = !bits.length;
     boosts.textContent = bits.join(" · ");
   }
@@ -1115,6 +1120,11 @@ const ADMIN_ITEMS = [
   ["theme_gold", "Золотые клетки"],
   ["gold_pick", "Золотая кирка"],
   ["lootbox", "Кейс удачи"],
+  ["title_baron", "Титул «Барон»"],
+  ["title_magnate", "Титул «Магнат»"],
+  ["title_emperor", "Титул «Император»"],
+  ["title_legend", "Титул «Легенда»"],
+  ["title_deity", "Титул «Божество»"],
 ];
 
 function renderAdminStats() {
@@ -1884,6 +1894,7 @@ const SHOP_SECTIONS = [
   { key: "boosts", title: "Бусты" },
   { key: "items", title: "Расходники" },
   { key: "relics", title: "Реликвии" },
+  { key: "prestige", title: "Престиж" },
   { key: "exclusive", title: "Эксклюзив" },
   { key: "cosmetics", title: "Косметика" },
 ];

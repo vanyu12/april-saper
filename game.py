@@ -7,7 +7,8 @@ CELLS = 25
 SIDE = 5
 RTP = 0.92
 MIN_BET = 10
-MAX_BET = 100_000_000
+MAX_BET = 100_000
+MAX_WIN = 1_000_000
 START_BALANCE = 1000
 REGISTER_BONUS = 1000
 DAILY_BONUS = 1000
@@ -331,7 +332,7 @@ def hash_seed(server_seed: str) -> str:
     return hashlib.sha256(server_seed.encode()).hexdigest()
 
 
-DICE_MULTIPLIER = 1.84
+DICE_MULTIPLIER = 1.78
 
 DUEL_RAKE = 0.05
 DUEL_TTL = 10 * 60
@@ -346,12 +347,12 @@ def duel_prize(bet: int) -> int:
     return int(math.floor(int(bet) * 2 * (1 - DUEL_RAKE)))
 
 WHEEL_SEGMENTS = (
-    {"multiplier": 0.0, "weight": 38},
-    {"multiplier": 1.1, "weight": 24},
-    {"multiplier": 1.35, "weight": 16},
-    {"multiplier": 1.7, "weight": 11},
-    {"multiplier": 2.3, "weight": 7},
-    {"multiplier": 3.2, "weight": 3},
+    {"multiplier": 0.0, "weight": 42},
+    {"multiplier": 1.12, "weight": 24},
+    {"multiplier": 1.4, "weight": 16},
+    {"multiplier": 1.8, "weight": 10},
+    {"multiplier": 2.4, "weight": 6},
+    {"multiplier": 3.4, "weight": 2},
 )
 
 DAY_OFFSET = 3 * 3600
@@ -578,6 +579,16 @@ SHOP_ITEMS = (
      "charges": 10, "desc": "+5% к выплате. 10 зарядов — по одному на выигрыш"},
     {"key": "boost_loss", "title": "Кэшбэк-буст", "price": 3000, "category": "boosts",
      "charges": 10, "desc": "Возврат 5% ставки при проигрыше. 10 зарядов"},
+    {"key": "title_baron", "title": "Титул «Барон»", "price": 100000,
+     "category": "prestige", "desc": "Престижный титул в профиле"},
+    {"key": "title_magnate", "title": "Титул «Магнат»", "price": 1000000,
+     "category": "prestige", "desc": "Престижный титул в профиле"},
+    {"key": "title_emperor", "title": "Титул «Император»", "price": 10000000,
+     "category": "prestige", "desc": "Престижный титул в профиле"},
+    {"key": "title_legend", "title": "Титул «Легенда»", "price": 100000000,
+     "category": "prestige", "desc": "Престижный титул в профиле"},
+    {"key": "title_deity", "title": "Титул «Божество»", "price": 1000000000,
+     "category": "prestige", "desc": "Максимальный престиж"},
 )
 
 BOOST_WIN_RATE = 0.05
@@ -744,6 +755,27 @@ DONATE_ITEMS = (
      "currency": "gmpoint", "category": "donate",
      "desc": "Неоновая тема и золотые клетки",
      "items": {"theme_neon": 1, "theme_gold": 1}},
+    {"key": "gmp_mythic_rod", "title": "Мифическая удочка", "price": 200,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Удочка «Мифическая» навсегда",
+     "items": {"rod_mythic": 1}},
+    {"key": "gmp_cosmic_rod", "title": "Космическая удочка", "price": 600,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Удочка «Космическая» навсегда",
+     "items": {"rod_cosmic": 1}},
+    {"key": "gmp_divine_rod", "title": "Божественная удочка", "price": 1500,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Удочка «Божественная» навсегда",
+     "items": {"rod_divine": 1}},
+    {"key": "gmp_title_baron", "title": "Титул «Барон»", "price": 100,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Престижный титул", "items": {"title_baron": 1}},
+    {"key": "gmp_title_magnate", "title": "Титул «Магнат»", "price": 400,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Престижный титул", "items": {"title_magnate": 1}},
+    {"key": "gmp_title_emperor", "title": "Титул «Император»", "price": 1200,
+     "currency": "gmpoint", "category": "donate",
+     "desc": "Престижный титул", "items": {"title_emperor": 1}},
 )
 
 # Картинки товаров (лежат в web/ и раздаются как /static/<файл>).
@@ -817,9 +849,9 @@ SLOT_SYMBOLS = (
     {"key": "cherry", "icon": "🍒", "weight": 30, "triple": 3.8},
     {"key": "lemon", "icon": "🍋", "weight": 25, "triple": 5.6},
     {"key": "bell", "icon": "🔔", "weight": 20, "triple": 9.0},
-    {"key": "diamond", "icon": "💎", "weight": 12, "triple": 23.0},
-    {"key": "seven", "icon": "7️⃣", "weight": 8, "triple": 56.0},
-    {"key": "star", "icon": "⭐", "weight": 5, "triple": 185.0},
+    {"key": "diamond", "icon": "💎", "weight": 12, "triple": 14.0},
+    {"key": "seven", "icon": "7️⃣", "weight": 8, "triple": 28.0},
+    {"key": "star", "icon": "⭐", "weight": 5, "triple": 70.0},
 )
 SLOT_PAIR = 1.15
 
@@ -850,7 +882,7 @@ def spin_slots(server_seed: str, client_seed: str, nonce: int) -> tuple[list[dic
 
 CRASH_RTP = 0.92
 CRASH_MIN = 1.2
-CRASH_MAX = 10.0
+CRASH_MAX = 100.0
 
 
 def day_key() -> str:
@@ -1123,6 +1155,15 @@ RODS = (
     {"key": "gold", "title": "Золотая", "price": 15000, "rarity": 0.30,
      "weight": 0.35, "luck": 0.15, "icon": "👑",
      "desc": "+30% редкость · +35% вес · +15% к цене"},
+    {"key": "mythic", "title": "Мифическая", "price": 250000, "rarity": 0.45,
+     "weight": 0.50, "luck": 0.25, "icon": "🔮",
+     "desc": "+45% редкость · +50% вес · +25% к цене"},
+    {"key": "cosmic", "title": "Космическая", "price": 1000000, "rarity": 0.60,
+     "weight": 0.70, "luck": 0.40, "icon": "🌌",
+     "desc": "+60% редкость · +70% вес · +40% к цене"},
+    {"key": "divine", "title": "Божественная", "price": 5000000, "rarity": 0.80,
+     "weight": 1.00, "luck": 0.60, "icon": "✨",
+     "desc": "+80% редкость · +100% вес · +60% к цене"},
 )
 
 ROD_BY_KEY = {rod["key"]: rod for rod in RODS}

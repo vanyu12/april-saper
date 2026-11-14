@@ -7,6 +7,7 @@ import re
 import secrets
 import time
 import uuid
+from datetime import datetime
 from urllib.parse import parse_qsl
 
 import aiohttp
@@ -367,10 +368,30 @@ class Api:
     def _top_rows(self, rows: list[dict]) -> list[dict]:
         return [self._decorate_row(row) for row in rows]
 
+    def _maybe_weekly_rewards(self) -> None:
+        """По понедельникам раз в неделю награждает топ-1 по балансу, множителю и уровню."""
+        now = datetime.now()
+        if now.weekday() != 0:
+            return
+        week = now.strftime("%G-W%V")
+        settings = self.db.settings()
+        if str(settings.get("weekly_reward_week") or "") == week:
+            return
+        reward = 100
+        winners = []
+        for rows in (self.db.leaderboard(1), self.db.top_multiplier(1),
+                     self.db.top_by_level(1)):
+            if rows:
+                winners.append(int(rows[0]["user_id"]))
+        for uid in winners:
+            self.db.add_gmpoint(uid, reward)
+        self.db.set_settings({"weekly_reward_week": week})
+
     async def state(self, request: web.Request) -> web.Response:
         user = self._auth(request)
         if not user:
             return self._fail("unauthorized", 401)
+        self._maybe_weekly_rewards()
         if awards.evaluate(self.db, user["user_id"]):
             user = self.db.user(user["user_id"])
         active = self.db.active_round(user["user_id"])
@@ -648,6 +669,10 @@ class Api:
         })
 
     def _finish(self, user: dict, bet: int, payout: int, mult: float) -> list[dict]:
+        # Жёсткий потолок выигрыша за одну партию — защита от взрывного роста баланса.
+        if payout > game.MAX_WIN:
+            self.db.add_balance(user["user_id"], game.MAX_WIN - payout)
+            payout = game.MAX_WIN
         self.db.finish_stats(user["user_id"], bet, payout, mult)
         self._apply_boost(user, bet, payout)
         if payout > 0:

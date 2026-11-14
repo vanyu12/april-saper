@@ -310,7 +310,7 @@ SCHEMA_STATEMENTS = [
 
 DEFAULT_SETTINGS = {
     "min_bet": "10",
-    "max_bet": "100000000",
+    "max_bet": "100000",
     "min_mines": "1",
     "max_mines": "24",
     "daily_bonus": "1000",
@@ -318,6 +318,7 @@ DEFAULT_SETTINGS = {
     "chat_url": "",
     "maintenance": "0",
     "update_version": "0",
+    "weekly_reward_week": "",
     "game_mines": "1",
     "game_dice": "1",
     "game_wheel": "1",
