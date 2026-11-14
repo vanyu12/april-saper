@@ -5,9 +5,9 @@ import time
 
 CELLS = 25
 SIDE = 5
-RTP = 0.99
+RTP = 0.92
 MIN_BET = 10
-MAX_BET = 100_000
+MAX_BET = 100_000_000
 START_BALANCE = 1000
 REGISTER_BONUS = 1000
 DAILY_BONUS = 1000
@@ -328,7 +328,7 @@ def hash_seed(server_seed: str) -> str:
     return hashlib.sha256(server_seed.encode()).hexdigest()
 
 
-DICE_MULTIPLIER = 1.96
+DICE_MULTIPLIER = 1.84
 
 DUEL_RAKE = 0.05
 DUEL_TTL = 10 * 60
@@ -343,10 +343,10 @@ def duel_prize(bet: int) -> int:
     return int(math.floor(int(bet) * 2 * (1 - DUEL_RAKE)))
 
 WHEEL_SEGMENTS = (
-    {"multiplier": 0.0, "weight": 35},
-    {"multiplier": 1.1, "weight": 25},
-    {"multiplier": 1.35, "weight": 18},
-    {"multiplier": 1.7, "weight": 12},
+    {"multiplier": 0.0, "weight": 38},
+    {"multiplier": 1.1, "weight": 24},
+    {"multiplier": 1.35, "weight": 16},
+    {"multiplier": 1.7, "weight": 11},
     {"multiplier": 2.3, "weight": 7},
     {"multiplier": 3.2, "weight": 3},
 )
@@ -782,26 +782,26 @@ def roulette_number(server_seed: str, client_seed: str, nonce: int) -> int:
 
 def roulette_multiplier(number: int, pick: str) -> float:
     if pick == "green":
-        return 36.0 if number == ROULETTE_GREEN else 0.0
+        return 34.0 if number == ROULETTE_GREEN else 0.0
     if number == ROULETTE_GREEN:
         return 0.0
     red = number in ROULETTE_RED
     if pick == "red" and red:
-        return 2.0
+        return 1.9
     if pick == "black" and not red:
-        return 2.0
+        return 1.9
     return 0.0
 
 
 SLOT_SYMBOLS = (
-    {"key": "cherry", "icon": "🍒", "weight": 30, "triple": 4.0},
-    {"key": "lemon", "icon": "🍋", "weight": 25, "triple": 6.0},
-    {"key": "bell", "icon": "🔔", "weight": 20, "triple": 10.0},
-    {"key": "diamond", "icon": "💎", "weight": 12, "triple": 25.0},
-    {"key": "seven", "icon": "7️⃣", "weight": 8, "triple": 60.0},
-    {"key": "star", "icon": "⭐", "weight": 5, "triple": 200.0},
+    {"key": "cherry", "icon": "🍒", "weight": 30, "triple": 3.8},
+    {"key": "lemon", "icon": "🍋", "weight": 25, "triple": 5.6},
+    {"key": "bell", "icon": "🔔", "weight": 20, "triple": 9.0},
+    {"key": "diamond", "icon": "💎", "weight": 12, "triple": 23.0},
+    {"key": "seven", "icon": "7️⃣", "weight": 8, "triple": 56.0},
+    {"key": "star", "icon": "⭐", "weight": 5, "triple": 185.0},
 )
-SLOT_PAIR = 1.2
+SLOT_PAIR = 1.15
 
 
 def spin_slots(server_seed: str, client_seed: str, nonce: int) -> tuple[list[dict], float]:
@@ -828,7 +828,7 @@ def spin_slots(server_seed: str, client_seed: str, nonce: int) -> tuple[list[dic
         multiplier = 0.0
     return reels, multiplier
 
-CRASH_RTP = 0.99
+CRASH_RTP = 0.92
 CRASH_MIN = 1.2
 CRASH_MAX = 10.0
 
@@ -887,7 +887,7 @@ DEPOSIT_PLANS = (
 )
 SAVINGS_RATE_BPS = 10
 DEPOSIT_MIN = 100
-DEPOSIT_MAX = 1_000_000
+DEPOSIT_MAX = 100_000_000
 
 
 def deposit_interest(amount: int, rate_bps: int) -> int:
@@ -899,7 +899,7 @@ def savings_interest(amount: int, rate_bps: int, seconds: int) -> int:
     return int(amount) * rate_bps * seconds // (10000 * 86400)
 
 
-COINFLIP_MULTIPLIER = 1.96
+COINFLIP_MULTIPLIER = 1.84
 
 
 def coinflip(server_seed: str, client_seed: str, nonce: int) -> str:
@@ -908,7 +908,7 @@ def coinflip(server_seed: str, client_seed: str, nonce: int) -> str:
     return "heads" if value < 0.5 else "tails"
 
 
-BASKET_CHANCE = 0.4
+BASKET_CHANCE = 0.34
 BASKET_MULTIPLIER = 2.4
 BASKET_MISS_MULTIPLIER = 1.6
 BASKET_SCORE_MIN = 4
@@ -923,11 +923,11 @@ def basket_shot(server_seed: str, client_seed: str, nonce: int) -> bool:
 # --- дартс: три исхода броска 🎯 ---------------------------------------
 DARTS_SECTORS = (
     {"key": "miss", "title": "Мимо", "icon": "💨", "values": (1, 2),
-     "multiplier": 2.97, "desc": "дротик уйдёт мимо мишени"},
+     "multiplier": 2.75, "desc": "дротик уйдёт мимо мишени"},
     {"key": "sector", "title": "Сектор", "icon": "🎯", "values": (3, 4, 5),
-     "multiplier": 1.98, "desc": "дротик попадёт в поле"},
+     "multiplier": 1.88, "desc": "дротик попадёт в поле"},
     {"key": "bull", "title": "Яблочко", "icon": "🔴", "values": (6,),
-     "multiplier": 5.9, "desc": "дротик попадёт в центр"},
+     "multiplier": 5.5, "desc": "дротик попадёт в центр"},
 )
 
 DARTS_BY_KEY = {item["key"]: item for item in DARTS_SECTORS}

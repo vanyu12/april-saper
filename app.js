@@ -10,7 +10,7 @@ const state = {
   bet: 50,
   lastBet: 50,
   autoTarget: 0,
-  settings: { min_bet: 10, max_bet: 100000, min_mines: 1, max_mines: 24, daily_bonus: 500, maintenance: 0 },
+  settings: { min_bet: 10, max_bet: 100000000, min_mines: 1, max_mines: 24, daily_bonus: 500, maintenance: 0 },
   isAdmin: false,
   isSuper: false,
   sound: true,
@@ -26,7 +26,7 @@ const state = {
   referrals: { total: 0, active: 0 },
   invites: { total: 0, ladder: [] },
   sponsors: [],
-  deposits: { plans: [], items: [], savings: null, min: 100, max: 1000000 },
+  deposits: { plans: [], items: [], savings: null, min: 100, max: 100000000 },
   spin: { prizes: [] },
   gamesHub: { players: {}, last: null },
   depositPlan: 0,
@@ -1461,7 +1461,7 @@ function switchGame(name) {
 
 function clampBet(value) {
   const min = state.settings.min_bet || 10;
-  const max = state.settings.max_bet || 100000;
+  const max = state.settings.max_bet || 100000000;
   return Math.max(min, Math.min(max, Math.round(value || 0)));
 }
 
@@ -2800,7 +2800,7 @@ async function openCell(index) {
 
 async function startGame() {
   const minBet = state.settings.min_bet || 10;
-  const maxBet = state.settings.max_bet || 100000;
+  const maxBet = state.settings.max_bet || 100000000;
   const bet = Math.max(minBet, Math.min(maxBet, parseInt($("betInput").value || "0", 10) || 0));
   state.bet = bet;
   state.lastBet = bet;
@@ -2956,7 +2956,7 @@ function bind() {
       if (mode === "max") v = Math.max(state.user ? state.user.balance : 1000, 10);
       if (mode === "repeat") v = state.lastBet || v;
       v = Math.max(state.settings.min_bet || 10,
-                   Math.min(state.settings.max_bet || 100000, v));
+                   Math.min(state.settings.max_bet || 100000000, v));
       input.value = v;
       state.bet = v;
       haptic();

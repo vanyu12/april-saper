@@ -136,7 +136,7 @@ class Api:
         raw = self._settings()
         return {
             "min_bet": raw.get("min_bet", 10),
-            "max_bet": raw.get("max_bet", 100000),
+            "max_bet": raw.get("max_bet", 100000000),
             "min_mines": raw.get("min_mines", 1),
             "max_mines": raw.get("max_mines", 24),
             "daily_bonus": raw.get("daily_bonus", game.DAILY_BONUS),
@@ -2961,7 +2961,7 @@ class Api:
         merged = {**current, **updates}
         if merged["min_bet"] < 1 or merged["min_bet"] > merged["max_bet"]:
             return self._fail("Проверьте границы ставки")
-        if merged["max_bet"] > 10_000_000:
+        if merged["max_bet"] > 100_000_000:
             return self._fail("Слишком большой максимум ставки")
         if merged["min_mines"] < 1 or merged["min_mines"] > merged["max_mines"]:
             return self._fail("Проверьте число мин")
