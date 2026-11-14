@@ -584,7 +584,7 @@ function previewLadder(mines, steps) {
   for (let k = 1; k <= Math.min(steps, safe); k++) {
     let p = 1;
     for (let i = 0; i < k; i++) p *= (safe - i) / (25 - i);
-    const mult = Math.max(1, Math.floor((0.99 / p) * 100) / 100);
+    const mult = Math.max(1, Math.min(100, Math.floor((0.92 / p) * 100) / 100));
     const chance = (safe - k + 1) / (25 - k + 1);
     out.push({ opened: k, multiplier: mult, chance });
   }
@@ -671,7 +671,7 @@ function maxMultiplier(mines) {
   const safe = 25 - mines;
   let p = 1;
   for (let i = 0; i < safe; i++) p *= (safe - i) / (25 - i);
-  return Math.max(1, Math.floor((0.99 / p) * 100) / 100);
+  return Math.max(1, Math.min(100, Math.floor((0.92 / p) * 100) / 100));
 }
 
 function avatarFace(u) {
@@ -2814,7 +2814,9 @@ async function openCell(index) {
     if (data.finished) {
       haptic("success");
       confetti();
-      if (data.auto) {
+      if (data.capped) {
+        modal("🧨", "Достигнут потолок ×100", `Авто-вывод: ${fmt(data.payout)} mCoin. Дальше множитель не растёт.`, "Ещё раз");
+      } else if (data.auto) {
         modal("🤖", "Авто-кэшаут!", `${fmt(data.payout)} mCoin на множителе ${fmtMult(data.multiplier)}.`, "Ещё раз");
       } else {
         modal("💎", "Поле очищено!", `Ты забрал ${fmt(data.payout)} mCoin с множителем ${fmtMult(data.multiplier)}.`, "Ещё раз");

@@ -9,6 +9,8 @@ RTP = 0.92
 MIN_BET = 10
 MAX_BET = 100_000
 MAX_WIN = 1_000_000
+# Потолок множителя в «Сапёре»: выше — авто-вывод, чтобы числа не улетали в миллионы.
+MINES_MAX_MULT = 100.0
 START_BALANCE = 1000
 REGISTER_BONUS = 1000
 DAILY_BONUS = 1000
@@ -260,7 +262,7 @@ def multiplier(mines: int, opened: int) -> float:
     for i in range(opened):
         p *= (safe - i) / (CELLS - i)
     value = math.floor((RTP / p) * 100) / 100
-    return max(1.0, value)
+    return max(1.0, min(value, MINES_MAX_MULT))
 
 
 def max_multiplier(mines: int) -> float:

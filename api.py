@@ -606,7 +606,8 @@ class Api:
         opened = rnd["opened"] + [cell]
         mult = game.multiplier(rnd["mines"], len(opened))
         safe = game.CELLS - rnd["mines"]
-        finished = len(opened) >= safe
+        capped = mult >= game.MINES_MAX_MULT
+        finished = len(opened) >= safe or capped
         target = float(rnd.get("auto_target") or 0)
         auto = bool(target) and not finished and mult >= target
         payout = game.payout_for(rnd["bet"], mult) if (finished or auto) else 0
@@ -614,7 +615,7 @@ class Api:
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "mines", payout)
             payout = self._gold_pick(user, payout)
-        status = "won" if finished else ("cashed" if auto else "active")
+        status = "won" if len(opened) >= safe else ("cashed" if (auto or capped) else "active")
         payout = self._prefix_bonus(user, payout)
         self.db.update_round(rnd["id"], opened, mult, status, payout)
 
@@ -633,6 +634,7 @@ class Api:
             "payout": payout,
             "finished": finished or auto,
             "auto": auto,
+            "capped": capped,
             "status": status,
             "next_chance": game.next_chance(rnd["mines"], len(opened)),
             "ladder": game.ladder(rnd["mines"], len(opened)),
