@@ -19,8 +19,9 @@ REF_BONUS = 500
 REF_GAMES_REQUIRED = 5
 REF_WIN_SHARE = 0.05
 
-# Зависшая партия «Сапёр» авто-закрывается с возвратом ставки.
-ROUND_TTL = 30 * 60
+# Зависшая партия авто-закрывается с возвратом ставки.
+ROUND_TTL = 10 * 60
+BJ_TTL = 10 * 60
 
 XP_PER_GAME = 7
 XP_PER_WIN = 10

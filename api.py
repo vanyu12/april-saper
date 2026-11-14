@@ -826,12 +826,12 @@ class Api:
             return "Аккаунт заблокирован"
         now = time.time()
         limit = float(__import__("os").environ.get("RATE_LIMIT_MIN", "1"))
-        gap = (0.7 if game_key in ("dice", "wheel", "crash", "coinflip", "basket")
-               else 0.25) * limit
+        gap = (0.35 if game_key in ("dice", "wheel", "crash", "coinflip", "basket")
+               else 0.12) * limit
         if gap > 0:
             last = self._last_action.get(user["user_id"], 0.0)
             if now - last < gap:
-                return "Слишком быстро — подождите секунду"
+                return "Слишком быстро — подождите немного"
             self._last_action[user["user_id"]] = now
         settings = self._settings()
         if game_key and not self._game_enabled(settings, game_key):
@@ -1015,8 +1015,15 @@ class Api:
         error = self._bet_error(user, bet, "blackjack")
         if error:
             return self._fail(error, 403 if user.get("is_banned") else 400)
-        if self.db.active_bj(user["user_id"]):
-            return self._fail("Сначала завершите текущую партию в «21»")
+        active_bj = self.db.active_bj(user["user_id"])
+        if active_bj:
+            age = int(time.time()) - int(active_bj.get("created_at") or 0)
+            if age < game.BJ_TTL:
+                return self._fail("Сначала завершите текущую партию в «21»")
+            refund = self.db.expire_bj(active_bj["id"])
+            if refund:
+                self.db.add_balance(user["user_id"], refund)
+                user = self.db.user(user["user_id"]) or user
         if self.db.active_round(user["user_id"]):
             return self._fail("Сначала завершите текущую игру в «Сапёре»")
 

@@ -1626,6 +1626,19 @@ class Database:
             "SELECT * FROM bj_rounds WHERE user_id = ? AND status = 'active' "
             "ORDER BY created_at DESC LIMIT 1", (user_id,)))
 
+    def expire_bj(self, round_id: str) -> int:
+        """Закрывает зависшую партию «21» и возвращает ставку (или 0)."""
+        row = self._row("SELECT bet FROM bj_rounds WHERE id = ? AND status = 'active'",
+                        (round_id,))
+        if not row:
+            return 0
+        bet = int(row["bet"])
+        self._exec(
+            "UPDATE bj_rounds SET status = 'expired', payout = ?, finished_at = ? "
+            "WHERE id = ? AND status = 'active'", (bet, int(time.time()), round_id))
+        check = self._row("SELECT status FROM bj_rounds WHERE id = ?", (round_id,))
+        return bet if check and check["status"] == "expired" else 0
+
     @staticmethod
     def _hydrate_bj(row: dict | None) -> dict | None:
         if not row:
