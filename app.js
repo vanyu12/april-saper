@@ -777,6 +777,11 @@ function renderProfile() {
   $("levelXp").textContent = `${fmt(u.xp || 0)} XP`;
   $("xpFill").style.width = Math.max(0, Math.min(100, u.level_percent || 0)) + "%";
 
+  if ($("profileRank")) {
+    const rankPos = Number(state.rank) || 0;
+    $("profileRank").textContent = rankPos > 0 ? "#" + rankPos : "#—";
+  }
+
   const levels = state.levels || {};
   const claimBtn = $("claimLevels");
   const rewardHint = $("levelRewardHint");
@@ -924,11 +929,11 @@ async function createPromo() {
       max_uses: Number($("promoMax").value || 0),
       days: Number($("promoDays").value || 0),
     });
-    $("promoHint").textContent = `Создан ${data.code} на +${fmt(data.amount)} GMPOINT`;
+    $("admPromoHint").textContent = `Создан ${data.code} на +${fmt(data.amount)} GMPOINT`;
     $("promoCode").value = "";
     await loadPromos();
   } catch (e) {
-    $("promoHint").textContent = e.message;
+    $("admPromoHint").textContent = e.message;
   }
 }
 
@@ -1100,6 +1105,8 @@ const ADMIN_ITEMS = [
   ["insurance", "Страховка"],
   ["charm", "Талисман"],
   ["double_daily", "Двойной бонус"],
+  ["boost_win", "Буст выигрыша"],
+  ["boost_loss", "Кэшбэк"],
   ["relic_mines", "Реликвия сапёра"],
   ["relic_dice", "Кости судьбы"],
   ["relic_wheel", "Колесо фортуны"],
@@ -1282,6 +1289,8 @@ function fillSettingsForm(settings) {
   $("setGameCoinflip").checked = games.coinflip !== false;
   $("setGameBlackjack").checked = games.blackjack !== false;
   $("setGameBasket").checked = games.basket !== false;
+  if ($("setGameDarts")) $("setGameDarts").checked = games.darts !== false;
+  if ($("setGameFishing")) $("setGameFishing").checked = games.fishing !== false;
 }
 
 async function loadAdmin() {
@@ -1380,7 +1389,9 @@ async function saveAdminSettings() {
       game_slots: $("setGameSlots").checked ? 1 : 0,
       game_coinflip: $("setGameCoinflip").checked ? 1 : 0,
       game_blackjack: $("setGameBlackjack").checked ? 1 : 0,
-    game_basket: $("setGameBasket").checked ? 1 : 0,
+      game_basket: $("setGameBasket").checked ? 1 : 0,
+      game_darts: $("setGameDarts") && $("setGameDarts").checked ? 1 : 0,
+      game_fishing: $("setGameFishing") && $("setGameFishing").checked ? 1 : 0,
     };
     const data = await api("/api/admin/settings", payload);
     state.settings = data.settings;
@@ -2432,8 +2443,11 @@ async function applyPromo() {
   try {
     const data = await api("/api/promo", { code });
     state.user.balance = data.balance;
+    if (data.gmpoint != null) state.user.gmpoint = data.gmpoint;
     state.quests = data.quests || state.quests;
-    hint.textContent = `Промокод принят: +${fmt(data.amount)} mCoin`;
+    hint.textContent = data.currency === "gmpoint"
+      ? `Промокод принят: +${fmt(data.amount)} GMPOINT`
+      : `Промокод принят: +${fmt(data.amount)} mCoin`;
     input.value = "";
     sfx.cash();
     haptic("success");
@@ -2710,6 +2724,7 @@ async function loadState() {
   state.settings = data.settings || state.settings;
   state.isAdmin = !!data.is_admin;
   state.isSuper = !!data.is_superadmin;
+  state.rank = Number(data.rank) || 0;
   state.account = data.account || null;
   state.quests = data.quests || state.quests;
   state.hourQuests = data.hour_items || state.hourQuests;
@@ -2866,8 +2881,12 @@ async function refreshMeta() {
 /* ---------- events ---------- */
 
 function switchView(name) {
+  const navGroup = name === "tasks" ? "shop" : name;
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + name));
-  document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+  document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === navGroup));
+  document.querySelectorAll("[data-shop-tab]").forEach((t) =>
+    t.classList.toggle("active", t.dataset.shopTab === name)
+  );
   if (name === "top") loadTop();
   if (name === "history") loadHistory();
   if (name === "admin") loadAdmin();
@@ -2907,6 +2926,10 @@ async function loadHistory() {
 function bind() {
   document.querySelectorAll(".nav-btn").forEach((btn) =>
     btn.addEventListener("click", () => switchView(btn.dataset.view))
+  );
+
+  document.querySelectorAll("[data-shop-tab]").forEach((tab) =>
+    tab.addEventListener("click", () => switchView(tab.dataset.shopTab))
   );
 
   document.querySelectorAll("#view-top .tab").forEach((tab) =>
@@ -3508,15 +3531,9 @@ function bind() {
     if (!btn || btn.disabled) return;
     try {
       const data = await api("/api/quests/claim", { key: btn.dataset.quest });
-  state.quests = data.quests || state.quests;
-  if (data.hour_items) state.hourQuests = data.hour_items;
-  state.achievements = data.achievements || [];
-  if (prevClaimed.size) {
-    const fresh = state.achievements.filter(
-      (a) => a.claimed && !prevClaimed.has(a.key)
-    );
-    if (fresh.length) toast(`🏅 ${fresh.map((a) => a.title).join(", ")}`);
-  }
+      state.quests = data.quests || state.quests;
+      if (data.hour_items) state.hourQuests = data.hour_items;
+      if (data.achievements) state.achievements = data.achievements;
       state.user.balance = data.balance;
       sfx.cash();
     toast(data.gmpoint != null && data.gmpoint !== state.user.gmpoint

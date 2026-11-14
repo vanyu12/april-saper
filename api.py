@@ -487,8 +487,15 @@ class Api:
             top = game.max_multiplier(mines)
             if not (1.05 <= auto_target <= top):
                 return self._fail(f"Авто-кэшаут от 1.05 до {top:.2f}")
-        if self.db.active_round(user["user_id"]):
-            return self._fail("Сначала завершите текущую игру")
+        active = self.db.active_round(user["user_id"])
+        if active:
+            age = int(time.time()) - int(active.get("created_at") or 0)
+            if age < game.ROUND_TTL:
+                return self._fail("Сначала завершите текущую игру")
+            refund = self.db.expire_round(active["id"])
+            if refund:
+                self.db.add_balance(user["user_id"], refund)
+                user = self.db.user(user["user_id"]) or user
         if user["balance"] < bet:
             return self._fail("Недостаточно средств")
 
@@ -1072,12 +1079,12 @@ class Api:
         if user["balance"] < rnd["bet"]:
             return self._fail("Недостаточно средств для удвоения")
 
-        self.db.add_balance(user["user_id"], -rnd["bet"])
         player = list(rnd["player"])
         dealer = list(rnd["dealer"])
         index = len(player) + len(dealer)
         if index >= len(rnd["deck"]):
             return self._fail("Колода закончилась")
+        self.db.add_balance(user["user_id"], -rnd["bet"])
         player.append(rnd["deck"][index])
 
         if game.bj_value(player) > game.BJ_TARGET:
@@ -1265,7 +1272,12 @@ class Api:
         if status != "ok":
             return self._fail(messages.get(status, "Не удалось активировать"))
         balance = self.db.user(user["user_id"])["balance"]
+        fresh = self.db.user(user["user_id"])
+        promo = self.db.promo(code) or {}
+        currency = str(promo.get("currency") or "mcoin")
         return self._json({"ok": True, "amount": amount, "balance": balance,
+                           "gmpoint": fresh.get("gmpoint") or 0,
+                           "currency": currency,
                            "quests": self._quests_view(user)})
 
     async def fish_catch(self, request: web.Request) -> web.Response:
@@ -2942,7 +2954,7 @@ class Api:
                    "daily_bonus", "hourly_bonus", "chat_url", "maintenance",
                    "game_mines", "game_dice", "game_wheel", "game_crash",
                    "game_roulette", "game_slots", "game_coinflip", "game_blackjack",
-                   "game_basket", "game_darts")
+                   "game_basket", "game_darts", "game_fishing")
         updates: dict[str, int] = {}
         for key in allowed:
             if key not in body:

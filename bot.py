@@ -396,6 +396,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
         name = config.bot_username or "bot"
         return f"https://t.me/{name}?start=ref_{user_id}"
 
+    def level_bar(value: int, total: int, width: int = 10) -> str:
+        filled = 0 if total <= 0 else max(0, min(width, round(float(value) / total * width)))
+        return "▰" * filled + "▱" * (width - filled)
+
     def profile_text(user: dict) -> str:
         now = int(time.time())
         lost = max(0, int(user["total_wagered"]) - int(user["total_won"]))
@@ -420,7 +424,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             f"🎨 Фон профиля: {bg['title']}"
             + (f" · аватар: {avatar['title']}" if avatar["icon"] else ""),
             f"⭐ Уровень {level['level']} — {level['title']}",
-            f"🎖 XP: {level['into']} / {level['need']}",
+            f"🎖 XP: {level['into']} / {level['need']} {level_bar(level['into'], level['need'])}",
             f"🎯 Партий: {user['games_played']} · побед: {user['games_won']}",
             f"📉 Проиграно: {num(lost)} mCoin",
             f"🔥 Лучший множитель: ×{user['best_multiplier']:.2f}",
@@ -451,6 +455,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
                                          else f"через {left_text(spin_left)}"))
         return "\n".join(lines)
 
+    def progress_bar(value: int, total: int, width: int = 8) -> str:
+        if total <= 0:
+            return "▰" * width
+        filled = max(0, min(width, round(float(value) / total * width)))
+        return "▰" * filled + "▱" * (width - filled)
+
     def achievements_text(user: dict) -> str:
         earned = awards.evaluate(db, user["user_id"])
         fresh = db.user(user["user_id"])
@@ -460,22 +470,22 @@ def build_dispatcher(db: Database) -> Dispatcher:
         pending = level_pending(fresh)
         lines = ["🏅 <b>Достижения</b>",
                  f"⭐ Уровень {level['level']} — {level['title']}",
-                 f"🎖 XP: {level['into']} / {level['need']}"]
+                 f"🎖 XP {level['into']} / {level['need']} {progress_bar(level['into'], level['need'])}"]
         if pending:
             lines.append(f"🎁 Наград за уровни: {len(pending)} — забери в «Наградах»")
-        lines.append("")
-        for ach in game.ACHIEVEMENTS:
-            progress = min(ach["target"], stats.get(ach["metric"], 0))
-            if ach["key"] in claimed:
-                mark = "✅"
-            elif progress >= ach["target"]:
-                mark = "🔓"
-            else:
-                mark = "▫️"
-            lines.append(f"{mark} {ach['icon']} {ach['title']} — "
-                         f"{progress}/{ach['target']} · +{num(ach['reward'])} mCoin")
+        achieved = sum(1 for ach in game.ACHIEVEMENTS if ach["key"] in claimed)
+        lines += ["", f"✅ Собрано <b>{achieved}</b> из {len(game.ACHIEVEMENTS)}", ""]
+        for chain in game.ACH_CHAINS:
+            total = len(chain["targets"])
+            done = sum(1 for t in chain["targets"]
+                       if f"{chain['key']}_{t}" in claimed)
+            value = int(stats.get(chain["metric"], 0) or 0)
+            nxt = next((t for t in chain["targets"] if value < t), None)
+            tail = f" → {num(nxt)}" if nxt is not None else " ✓"
+            lines.append(f"{chain['icon']} <b>{chain['title']}</b> "
+                         f"{progress_bar(done, total)} {done}/{total}{tail}")
         if earned:
-            lines += ["", "Новые:"] + awards_lines(earned)
+            lines += ["", "🆕 <b>Новые достижения</b>"] + awards_lines(earned)
             lines.append(f"💰 Баланс: {num(fresh['balance'])} mCoin")
         return "\n".join(lines)
 
@@ -1982,6 +1992,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
         next_day = day + 1 if day < game.SPIN_STREAK_DAYS else 1
         if prize["kind"] == "coins":
             db.add_balance(user["user_id"], prize["amount"])
+        elif prize["kind"] == "gmpoint":
+            db.add_gmpoint(user["user_id"], int(prize.get("amount") or 0))
         else:
             db.add_item(user["user_id"], prize["item"], prize_title_qty(prize))
         db.mark_spin(user["user_id"], now, next_day)

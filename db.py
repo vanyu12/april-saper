@@ -766,6 +766,26 @@ class Database:
                         (user_id,))
         return int(row["c"]) if row else 0
 
+    def count_unique_games(self, user_id: int) -> int:
+        row = self._row(
+            "SELECT COUNT(DISTINCT game) AS c FROM plays WHERE user_id = ?",
+            (user_id,))
+        return int(row["c"]) if row else 0
+
+    def count_quests_claimed(self, user_id: int) -> int:
+        day = self._row("SELECT COUNT(*) AS c FROM quest_claims WHERE user_id = ?",
+                        (user_id,))
+        hour = self._row(
+            "SELECT COUNT(*) AS c FROM hour_quest_claims WHERE user_id = ?",
+            (user_id,))
+        return (int(day["c"]) if day else 0) + (int(hour["c"]) if hour else 0)
+
+    def count_items_owned(self, user_id: int) -> int:
+        row = self._row(
+            "SELECT COALESCE(SUM(qty), 0) AS c FROM inventory WHERE user_id = ?",
+            (user_id,))
+        return int(row["c"]) if row else 0
+
     # --- дуэли -----------------------------------------------------------
     def user_by_username(self, username: str) -> dict | None:
         name = (username or "").lstrip("@").strip()
@@ -884,6 +904,19 @@ class Database:
             "SELECT * FROM rounds WHERE user_id = ? AND status = 'active' "
             "ORDER BY created_at DESC LIMIT 1", (user_id,))
         return self._hydrate(row)
+
+    def expire_round(self, round_id: str) -> int:
+        """Закрывает зависшую партию и возвращает ставку (или 0)."""
+        row = self._row("SELECT bet FROM rounds WHERE id = ? AND status = 'active'",
+                        (round_id,))
+        if not row:
+            return 0
+        bet = int(row["bet"])
+        self._exec(
+            "UPDATE rounds SET status = 'expired', payout = ? "
+            "WHERE id = ? AND status = 'active'", (bet, round_id))
+        check = self._row("SELECT status FROM rounds WHERE id = ?", (round_id,))
+        return bet if check and check["status"] == "expired" else 0
 
     @staticmethod
     def _hydrate(row: dict | None) -> dict | None:

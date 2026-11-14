@@ -18,9 +18,12 @@ REF_BONUS = 500
 REF_GAMES_REQUIRED = 5
 REF_WIN_SHARE = 0.05
 
-XP_PER_GAME = 10
-XP_PER_WIN = 15
-XP_PER_DUEL_WIN = 40
+# Зависшая партия «Сапёр» авто-закрывается с возвратом ставки.
+ROUND_TTL = 30 * 60
+
+XP_PER_GAME = 7
+XP_PER_WIN = 10
+XP_PER_DUEL_WIN = 30
 
 LEVEL_TITLES = (
     (1, "Новобранец"),
@@ -164,9 +167,9 @@ def role_prefix(role: str | None) -> str:
 
 
 def xp_for_level(level: int) -> int:
-    """Сколько всего XP нужно, чтобы достичь уровня."""
+    """Сколько всего XP нужно, чтобы достичь уровня (крутая кривая)."""
     level = max(1, int(level))
-    return 50 * (level - 1) * level
+    return 90 * (level - 1) * level
 
 
 def level_from_xp(xp: int) -> int:
@@ -213,9 +216,9 @@ def prefix_view(key: str | None) -> dict | None:
 
 def level_reward(level: int) -> dict:
     level = max(1, int(level))
-    coins = 100 + (level - 1) * 50
-    gmpoint = 5 if level % 10 == 0 else 0
-    lootbox = 1 if level % 5 == 0 else 0
+    coins = 80 + (level - 1) * 35
+    gmpoint = 5 if level % 15 == 0 else 0
+    lootbox = 1 if level % 7 == 0 else 0
     prefix = next(
         (item["key"] for item in PREFIXES
          if item["currency"] == "level" and item["level"] == level),
@@ -402,12 +405,12 @@ SPIN_COOLDOWN = 12 * 60 * 60
 SPIN_STREAK_DAYS = 7
 
 HOUR_QUESTS = (
-    {"key": "h_games", "title": "Сыграй 3 партии за час", "metric": "games",
-     "target": 3, "reward": 150},
-    {"key": "h_win", "title": "Выиграй 1 партию за час", "metric": "wins",
-     "target": 1, "reward": 200},
-    {"key": "h_wager", "title": "Поставь 500 mCoin за час", "metric": "wagered",
-     "target": 500, "reward": 250},
+    {"key": "h_games", "title": "Сыграй 5 партий за час", "metric": "games",
+     "target": 5, "reward": 150},
+    {"key": "h_win", "title": "Выиграй 2 партии за час", "metric": "wins",
+     "target": 2, "reward": 200},
+    {"key": "h_wager", "title": "Поставь 1000 mCoin за час", "metric": "wagered",
+     "target": 1000, "reward": 250},
 )
 
 
@@ -421,15 +424,15 @@ def hour_start() -> int:
 
 
 DAILY_QUESTS = (
-    {"key": "games5", "title": "Сыграть 5 партий", "metric": "games", "target": 5, "reward": 300},
-    {"key": "wins3", "title": "Выиграть 3 раза", "metric": "wins", "target": 3, "reward": 500},
-    {"key": "wager1000", "title": "Поставить 1000 mCoin", "metric": "wagered", "target": 1000,
+    {"key": "games5", "title": "Сыграть 8 партий", "metric": "games", "target": 8, "reward": 300},
+    {"key": "wins3", "title": "Выиграть 4 раза", "metric": "wins", "target": 4, "reward": 500},
+    {"key": "wager1000", "title": "Поставить 2000 mCoin", "metric": "wagered", "target": 2000,
      "reward": 700},
-    {"key": "games12", "title": "Сыграть 12 партий", "metric": "games", "target": 12,
+    {"key": "games12", "title": "Сыграть 20 партий", "metric": "games", "target": 20,
      "reward": 1000},
-    {"key": "gmp3", "title": "Выиграть 3 партии", "metric": "wins", "target": 3,
+    {"key": "gmp3", "title": "Выиграть 6 партий", "metric": "wins", "target": 6,
      "reward": 3, "currency": "gmpoint"},
-    {"key": "gmp7", "title": "Поставить 3000 mCoin", "metric": "wagered", "target": 3000,
+    {"key": "gmp7", "title": "Поставить 6000 mCoin", "metric": "wagered", "target": 6000,
      "reward": 4, "currency": "gmpoint"},
 )
 
@@ -439,12 +442,12 @@ _ACH_REWARDS = (1000, 1500, 2000, 3000, 5000, 7500, 10000, 15000, 20000,
 _ACH_CHAINS = (
     {"key": "games_played", "icon": "🎯", "title": "Партии",
      "metric": "games_played",
-     "targets": (1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500),
-     "desc": "Сыграть {value} партий"},
+      "targets": (1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000),
+      "desc": "Сыграть {value} партий"},
     {"key": "games_won", "icon": "🏅", "title": "Победы",
      "metric": "games_won",
-     "targets": (1, 5, 10, 25, 50, 100, 250, 500, 1000),
-     "desc": "Выиграть {value} раз"},
+      "targets": (1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500),
+      "desc": "Выиграть {value} раз"},
     {"key": "total_wagered", "icon": "🎲", "title": "Оборот",
      "metric": "total_wagered",
      "targets": (100, 500, 1000, 5000, 10000, 50000, 100000, 500000,
@@ -481,8 +484,8 @@ _ACH_CHAINS = (
      "desc": "Поймать {value} рыб"},
     {"key": "fish_weight", "icon": "🐋", "title": "Трофей",
      "metric": "fish_weight",
-     "targets": (5000, 20000, 100000, 500000, 1000000),
-     "desc": "Поймать рыбу весом {value} г"},
+      "targets": (5000, 20000, 100000, 250000, 500000),
+      "desc": "Поймать рыбу весом {value} г"},
     {"key": "user_level", "icon": "⭐", "title": "Уровень",
      "metric": "user_level",
      "targets": (5, 10, 20, 30, 40, 50, 75, 100),
@@ -491,6 +494,22 @@ _ACH_CHAINS = (
      "metric": "daily_streak",
      "targets": (3, 7, 14, 30),
      "desc": "Заходить {value} дней подряд"},
+    {"key": "variety", "icon": "🧭", "title": "Разнообразие",
+     "metric": "unique_games",
+     "targets": (2, 3, 5, 7, 9),
+     "desc": "Попробовать {value} разных игр"},
+    {"key": "quests", "icon": "📋", "title": "Задания",
+     "metric": "quests_claimed",
+     "targets": (5, 15, 30, 60, 100),
+     "desc": "Выполнить {value} заданий"},
+    {"key": "collection", "icon": "🎒", "title": "Коллекция",
+     "metric": "items_owned",
+     "targets": (1, 5, 10, 20, 40),
+     "desc": "Собрать {value} предметов"},
+    {"key": "capital", "icon": "💎", "title": "Капитал",
+     "metric": "balance",
+     "targets": (2000000, 5000000, 10000000),
+     "desc": "Накопить {value} mCoin"},
 )
 
 
@@ -530,6 +549,7 @@ ACHIEVEMENTS = tuple(
 )
 
 ACHIEVEMENT_BY_KEY = {ach["key"]: ach for ach in ACHIEVEMENTS}
+ACH_CHAINS = _ACH_CHAINS
 
 SHOP_ITEMS = (
     {"key": "insurance", "title": "Страховка", "price": 120, "category": "items",
@@ -908,8 +928,8 @@ def coinflip(server_seed: str, client_seed: str, nonce: int) -> str:
     return "heads" if value < 0.5 else "tails"
 
 
-BASKET_CHANCE = 0.34
-BASKET_MULTIPLIER = 2.4
+BASKET_CHANCE = 0.40
+BASKET_MULTIPLIER = 2.3
 BASKET_MISS_MULTIPLIER = 1.6
 BASKET_SCORE_MIN = 4
 

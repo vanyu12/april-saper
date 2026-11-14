@@ -58,7 +58,7 @@
             <span class="gp-label">Игра</span>
             <span class="gp-name" id="gameName">Сапёр</span>
           </span>
-          <span class="gp-count" id="gameCount">6 режимов</span>
+          <span class="gp-count" id="gameCount">9 режимов</span>
           <span class="gp-arrow">▾</span>
         </button>
       </div>
@@ -526,7 +526,11 @@
     </section>
 
     <section class="view" id="view-shop">
-      <div class="card-title page-title">Магазин</div>
+      <div class="card-title page-title">Активности</div>
+      <div class="tabs" id="activityTabs">
+        <button class="tab active" type="button" data-shop-tab="shop">🛒 Магазин</button>
+        <button class="tab" type="button" data-shop-tab="tasks">✅ Задания</button>
+      </div>
       <div class="shop-hero">
         <img src="/static/shop_banner.jpg" alt="Магазин">
         <div class="shop-hero-title">Сокровищница сапёра</div>
@@ -697,7 +701,7 @@
         <div class="admin-field"><span>Лимит активаций (0 — без лимита)</span><input class="mini-input" id="promoMax" type="number" value="0" min="0"></div>
         <div class="admin-field"><span>Срок, дней (0 — бессрочно)</span><input class="mini-input" id="promoDays" type="number" value="0" min="0"></div>
         <button class="cta" id="promoCreate">Создать промокод</button>
-        <div class="hint" id="promoHint"></div>
+        <div class="hint" id="admPromoHint"></div>
       </div>
       <div class="card">
         <div class="card-title">Промокоды</div>
@@ -774,6 +778,8 @@
         <label class="admin-check"><input type="checkbox" id="setGameCoinflip"> Орёл и решка</label>
         <label class="admin-check"><input type="checkbox" id="setGameBlackjack"> 21</label>
         <label class="admin-check"><input type="checkbox" id="setGameBasket"> Баскет</label>
+        <label class="admin-check"><input type="checkbox" id="setGameDarts"> Дартс</label>
+        <label class="admin-check"><input type="checkbox" id="setGameFishing"> Рыбалка</label>
         <button class="secondary" id="saveSettings">Сохранить настройки</button>
       </div>
     </div>
@@ -783,8 +789,7 @@
 
   <nav class="nav">
     <button class="nav-btn active" data-view="game"><span>💣</span>Игра</button>
-    <button class="nav-btn" data-view="tasks"><span>✅</span>Задания</button>
-    <button class="nav-btn" data-view="shop"><span>🛒</span>Магазин</button>
+    <button class="nav-btn" data-view="shop"><span>🛒</span>Активности</button>
     <button class="nav-btn" data-view="top"><span>🏆</span>Топ</button>
     <button class="nav-btn" data-view="profile"><span>👤</span>Профиль</button>
     <button class="nav-btn" id="adminNav" data-view="admin" hidden><span>🛠</span>Админ</button>
@@ -851,6 +856,16 @@
     </div>
   </div>
 
+</div>
+<div class="modal" id="modal">
+  <div class="modal-card">
+    <div class="modal-emoji" id="modalEmoji">💥</div>
+    <div class="modal-title" id="modalTitle"></div>
+    <div class="modal-text" id="modalText"></div>
+    <div class="modal-actions">
+      <button class="cta" id="modalBtn" type="button">Понятно</button>
+    </div>
+  </div>
 </div>
 <div class="update-modal" id="updateModal" hidden>
   <div class="update-card">

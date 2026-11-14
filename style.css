@@ -2086,7 +2086,13 @@ body.theme-gold .cell.safe {
 .role-dracula summary { color: #e11d48; }
 
 /* ---------- оформление: префиксы, аватары, фоны ---------- */
-.prefix-style-solid,
+.prefix-style-solid {
+  background: var(--prefix-color);
+  color: #0b0d13;
+  border-color: transparent;
+  text-shadow: none;
+}
+
 .prefix-style-outline {
   color: var(--prefix-color);
   border-color: var(--prefix-color);
@@ -2459,3 +2465,88 @@ img.inv-icon { width: 20px; height: 20px; border-radius: 6px; object-fit: cover;
 .cashout-btn:active { transform: scale(0.98); }
 .game-menu-item, .hub-card { transition: transform 0.15s ease, border-color 0.15s ease; }
 .game-menu-item:active, .hub-card:active { transform: scale(0.985); }
+
+/* ---------- современный слой оформления ---------- */
+:root {
+  --bg: #07080d;
+  --panel: rgba(22, 27, 41, 0.86);
+  --panel-2: rgba(30, 37, 56, 0.9);
+  --line: rgba(255, 255, 255, 0.09);
+  --radius: 22px;
+  --shadow: 0 18px 48px rgba(0, 0, 0, 0.5), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+}
+
+body {
+  background: radial-gradient(1200px 600px at 50% -10%, #151a2b 0%, #07080d 55%) fixed;
+}
+
+.card {
+  background: linear-gradient(180deg, rgba(28, 34, 52, 0.92), rgba(17, 21, 33, 0.92));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px) saturate(130%);
+}
+
+.page-title {
+  background: linear-gradient(92deg, #ffffff 10%, #8fe9c9 55%, #b9a8ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+}
+
+.cta {
+  background: linear-gradient(135deg, #2ee6a8 0%, #35b7ff 100%);
+  color: #04120c;
+  font-weight: 800;
+  border: 0;
+  box-shadow: 0 10px 26px -10px rgba(46, 230, 168, 0.75);
+  transition: transform 0.14s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+.cta:active { transform: scale(0.98); }
+
+.secondary {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  transition: background 0.18s ease, transform 0.14s ease;
+}
+.secondary:hover { background: rgba(255, 255, 255, 0.09); }
+
+.nav {
+  background: rgba(10, 13, 20, 0.82);
+  backdrop-filter: blur(18px) saturate(140%);
+  border-top: 1px solid var(--line);
+}
+.nav-btn { position: relative; transition: color 0.16s ease, transform 0.12s ease; }
+.nav-btn.active { color: var(--mint); }
+.nav-btn.active::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 26px;
+  height: 3px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--mint), #35b7ff);
+  box-shadow: 0 0 12px rgba(46, 230, 168, 0.8);
+}
+
+.tabs { gap: 8px; flex-wrap: wrap; }
+.tab {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 8px 14px;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+.tab.active {
+  background: linear-gradient(135deg, rgba(46, 230, 168, 0.18), rgba(124, 92, 255, 0.18));
+  border-color: rgba(46, 230, 168, 0.35);
+  color: #fff;
+}
+
+.shop-hero { border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+
+.hub-card:hover, .game-menu-item:hover { transform: translateY(-2px); }
