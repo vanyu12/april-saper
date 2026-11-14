@@ -680,16 +680,33 @@ img.avatar-img { border-radius: 16px; }
 .modal-card {
   width: 100%;
   max-width: 320px;
+  max-height: min(80vh, 540px);
+  display: flex;
+  flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 20px;
   padding: 22px;
   text-align: center;
   animation: pop 0.24s ease;
+  overflow: hidden;
 }
 .modal-emoji { font-size: 40px; }
 .modal-title { font-size: 19px; font-weight: 700; margin: 8px 0 6px; }
 .modal-text { font-size: 13px; color: var(--muted); margin-bottom: 16px; line-height: 1.5; }
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: auto;
+  padding-top: 12px;
+}
+.modal-text.scrollable {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  min-height: 0;
+  scrollbar-width: thin;
+}
 
 /* sound toggle */
 .icon-btn {
@@ -956,6 +973,9 @@ img.avatar-img { border-radius: 16px; }
 .game-menu-card {
   position: relative;
   width: min(520px, 100%);
+  max-height: min(84vh, 640px);
+  display: flex;
+  flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 20px;
@@ -964,6 +984,7 @@ img.avatar-img { border-radius: 16px; }
   transform: translateY(8px) scale(0.98);
   opacity: 0;
   transition: transform 0.18s ease, opacity 0.18s ease;
+  overflow: hidden;
 }
 .game-menu.show .game-menu-card { transform: none; opacity: 1; }
 .game-menu-head {
@@ -985,6 +1006,12 @@ img.avatar-img { border-radius: 16px; }
   font-size: 20px;
   line-height: 1;
   cursor: pointer;
+}
+.game-menu-scroll {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  min-height: 0;
+  scrollbar-width: thin;
 }
 .game-menu-grid {
   display: grid;
@@ -1388,11 +1415,26 @@ body.game-menu-open { overflow: hidden; }
 .update-card {
   width: 100%;
   max-width: 340px;
+  max-height: min(84vh, 620px);
+  display: flex;
+  flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 20px;
   padding: 20px;
   animation: pop 0.24s ease;
+  overflow: hidden;
+}
+.update-list {
+  margin: 0 0 14px;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  min-height: 0;
+  scrollbar-width: thin;
 }
 .update-badge {
   display: inline-block;
@@ -1405,7 +1447,6 @@ body.game-menu-open { overflow: hidden; }
   letter-spacing: 0.02em;
 }
 .update-title { font-size: 18px; font-weight: 800; margin: 10px 0 8px; }
-.update-list { margin: 0 0 14px; padding-left: 18px; display: grid; gap: 7px; }
 .update-list li { font-size: 13px; line-height: 1.45; color: var(--text); }
 
 /* колесо */
