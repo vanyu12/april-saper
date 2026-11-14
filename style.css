@@ -564,8 +564,8 @@ img.avatar-img { border-radius: 16px; }
 .empty { text-align: center; color: var(--muted); font-size: 13px; padding: 26px 0; }
 
 /* tabs */
-.tabs { display: flex; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 4px; margin-bottom: 12px; }
-.tab { flex: 1; background: transparent; border: none; color: var(--muted); border-radius: 9px; padding: 9px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 4px; margin-bottom: 12px; }
+.tab { flex: 1 1 0; min-width: 0; background: transparent; border: none; color: var(--muted); border-radius: 9px; padding: 9px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tab.active { background: var(--panel-2); color: var(--text); }
 
 /* fair */
