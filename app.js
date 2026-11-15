@@ -198,6 +198,12 @@ function renderBalance() {
   $("statBalance").textContent = fmt(state.user ? state.user.balance : 0);
   if ($("gmpValue")) $("gmpValue").textContent = fmt(state.user ? (state.user.gmpoint || 0) : 0);
   if ($("statGmpoint")) $("statGmpoint").textContent = fmt(state.user ? (state.user.gmpoint || 0) : 0);
+  const chip = $("balanceChip");
+  if (chip) {
+    chip.classList.remove("flash");
+    void chip.offsetWidth;
+    chip.classList.add("flash");
+  }
 }
 
 function renderDaily() {
@@ -2933,6 +2939,7 @@ async function loadTop() {
     state.leaderboard.by_balance = data.by_balance;
     state.leaderboard.by_multiplier = data.by_multiplier;
     state.leaderboard.by_level = data.by_level || state.leaderboard.by_level;
+    state.leaderboard.weekly = data.weekly || state.leaderboard.weekly;
     state.leaderboard.me = data.me;
   const topTab = document.querySelector("#view-top .tab.active");
   renderTop(topTab ? topTab.dataset.tab : "balance");
