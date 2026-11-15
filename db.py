@@ -1673,6 +1673,14 @@ class Database:
                ORDER BY created_at DESC LIMIT ?""",
             (user_id, user_id, limit))
 
+    def daily_transfer_sent(self, user_id: int) -> int:
+        start = int(time.time()) // 86400 * 86400
+        row = self._row(
+            """SELECT COALESCE(SUM(amount), 0) AS total
+               FROM transfers WHERE from_id = ? AND created_at >= ?""",
+            (user_id, start))
+        return int(row["total"] or 0) if row else 0
+
     # --- промокоды -------------------------------------------------------
     def create_promo(self, code: str, amount: int, max_uses: int = 0,
                      budget: int = 0, per_user: int = 1,

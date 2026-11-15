@@ -2200,6 +2200,20 @@ body.theme-gold .cell.safe {
 
 .row-avatar.emoji { font-size: 20px; background: rgba(255, 255, 255, 0.06); }
 .top-seen { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.top-rewards { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 12px; }
+.top-reward {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 204, 77, 0.08);
+  border: 1px solid rgba(255, 204, 77, 0.25);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--text);
+}
+.top-reward b { color: var(--mint); }
 .shop-qty { color: var(--mint); font-size: 11px; font-weight: 700; }
 
 /* ---------- фон игры: пейзажи и своё фото ---------- */

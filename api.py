@@ -366,10 +366,17 @@ class Api:
         return entry
 
     def _top_rows(self, rows: list[dict]) -> list[dict]:
-        return [self._decorate_row(row) for row in rows]
+        out = []
+        medals = ("🥇", "🥈", "🥉")
+        for i, row in enumerate(rows):
+            entry = self._decorate_row(row)
+            entry["place"] = i + 1
+            entry["medal"] = medals[i] if i < 3 else ""
+            out.append(entry)
+        return out
 
     def _maybe_weekly_rewards(self) -> None:
-        """По понедельникам раз в неделю награждает топ-1 по балансу, множителю и уровню."""
+        """По понедельникам награждает топ-3 по балансу, множителю и уровню."""
         now = datetime.now()
         if now.weekday() != 0:
             return
@@ -377,14 +384,23 @@ class Api:
         settings = self.db.settings()
         if str(settings.get("weekly_reward_week") or "") == week:
             return
-        reward = 100
-        winners = []
-        for rows in (self.db.leaderboard(1), self.db.top_multiplier(1),
-                     self.db.top_by_level(1)):
-            if rows:
-                winners.append(int(rows[0]["user_id"]))
-        for uid in winners:
-            self.db.add_gmpoint(uid, reward)
+        # Подарки за место в топе: (gmpoint, mCoin).
+        tiers = {1: (100, 50_000), 2: (60, 20_000), 3: (30, 10_000)}
+        awarded = {}
+        for rows in (self.db.leaderboard(3), self.db.top_multiplier(3),
+                     self.db.top_by_level(3)):
+            for place, row in enumerate(rows, start=1):
+                uid = int(row["user_id"])
+                gmp, coins = tiers.get(place, (0, 0))
+                if gmp or coins:
+                    awarded.setdefault(uid, [0, 0])
+                    awarded[uid][0] += gmp
+                    awarded[uid][1] += coins
+        for uid, (gmp, coins) in awarded.items():
+            if coins:
+                self.db.add_balance(uid, coins)
+            if gmp:
+                self.db.add_gmpoint(uid, gmp)
         self.db.set_settings({"weekly_reward_week": week})
 
     async def state(self, request: web.Request) -> web.Response:
@@ -756,6 +772,9 @@ class Api:
             "by_balance": self._top_rows(self.db.leaderboard(20)),
             "by_multiplier": self._top_rows(self.db.top_multiplier(10)),
             "by_level": self._level_rows(self.db.top_by_level(20)),
+            "weekly": [{"place": 1, "gmpoint": 100, "coins": 50000},
+                       {"place": 2, "gmpoint": 60, "coins": 20000},
+                       {"place": 3, "gmpoint": 30, "coins": 10000}],
         }
         self._lb_cache = (time.time(), payload)
         return self._json({"ok": True, **payload, "me": user["user_id"]})
@@ -1248,6 +1267,13 @@ class Api:
             return self._fail("Сумма должна быть больше нуля")
         if amount > int(user["balance"]):
             return self._fail("Недостаточно средств")
+        if amount > game.TRANSFER_MAX_PER_OP:
+            return self._fail(f"Максимум за один перевод: {game.TRANSFER_MAX_PER_OP} mCoin")
+        sent = self.db.daily_transfer_sent(user["user_id"])
+        if sent + amount > game.TRANSFER_DAILY_LIMIT:
+            return self._fail(
+                f"Суточный лимит переводов: {game.TRANSFER_DAILY_LIMIT} mCoin "
+                f"(сегодня уже переведено {sent})")
         if not target:
             return self._fail("Укажите ID или @username получателя")
 

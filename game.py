@@ -12,22 +12,27 @@ MAX_WIN = 1_000_000
 # Потолок множителя в «Сапёре»: выше — авто-вывод, чтобы числа не улетали в миллионы.
 MINES_MAX_MULT = 100.0
 START_BALANCE = 1000
-REGISTER_BONUS = 1000
+REGISTER_BONUS = 800
 DAILY_BONUS = 1000
 DAILY_COOLDOWN = 24 * 60 * 60
-HOURLY_BONUS = 500
+HOURLY_BONUS = 350
 HOURLY_COOLDOWN = 60 * 60
-REF_BONUS = 500
+REF_BONUS = 300
 REF_GAMES_REQUIRED = 5
 REF_WIN_SHARE = 0.05
+
+# Суточный лимит исходящих переводов — защита от «отмывки» экономики.
+TRANSFER_DAILY_LIMIT = 1_000_000
+# Максимум за один перевод.
+TRANSFER_MAX_PER_OP = 500_000
 
 # Зависшая партия авто-закрывается с возвратом ставки.
 ROUND_TTL = 10 * 60
 BJ_TTL = 10 * 60
 
-XP_PER_GAME = 7
-XP_PER_WIN = 10
-XP_PER_DUEL_WIN = 30
+XP_PER_GAME = 4
+XP_PER_WIN = 6
+XP_PER_DUEL_WIN = 20
 
 LEVEL_TITLES = (
     (1, "Новобранец"),
@@ -173,7 +178,7 @@ def role_prefix(role: str | None) -> str:
 def xp_for_level(level: int) -> int:
     """Сколько всего XP нужно, чтобы достичь уровня (крутая кривая)."""
     level = max(1, int(level))
-    return 90 * (level - 1) * level
+    return 130 * (level - 1) * (level + 1)
 
 
 def level_from_xp(xp: int) -> int:
@@ -220,9 +225,9 @@ def prefix_view(key: str | None) -> dict | None:
 
 def level_reward(level: int) -> dict:
     level = max(1, int(level))
-    coins = 80 + (level - 1) * 35
-    gmpoint = 5 if level % 15 == 0 else 0
-    lootbox = 1 if level % 7 == 0 else 0
+    coins = 60 + (level - 1) * 28
+    gmpoint = 5 if level % 20 == 0 else 0
+    lootbox = 1 if level % 10 == 0 else 0
     prefix = next(
         (item["key"] for item in PREFIXES
          if item["currency"] == "level" and item["level"] == level),
@@ -361,9 +366,9 @@ WHEEL_SEGMENTS = (
 DAY_OFFSET = 3 * 3600
 
 # Прогрессивный ежедневный бонус: 1 000 в первый день, +1 000 за день серии.
-DAILY_BASE = 1000
-DAILY_STEP = 1000
-DAILY_MAX = 30000
+DAILY_BASE = 800
+DAILY_STEP = 800
+DAILY_MAX = 20000
 DAILY_STREAK_CAP = 30
 
 

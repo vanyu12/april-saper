@@ -1035,6 +1035,15 @@ let topSignature = "";
 function renderTop(tab) {
   const list = $("topList");
   if (!list) return;
+  const rewards = $("topRewards");
+  if (rewards) {
+    const w = state.leaderboard.weekly || [];
+    rewards.innerHTML = w.length
+      ? w.map((x) =>
+          `<div class="top-reward"><span>${["🥇", "🥈", "🥉"][x.place - 1] || x.place} место</span>` +
+          `<b>${fmt(x.coins)} mCoin</b> + ${x.gmpoint} GMPOINT</div>`).join("")
+      : `<div class="top-reward">Еженедельные призы: топ-3 получает mCoin и GMPOINT (каждый понедельник)</div>`;
+  }
   let rows = [];
   if (tab === "mult") {
     rows = (state.leaderboard.by_multiplier || []).map((u, i) => ({
