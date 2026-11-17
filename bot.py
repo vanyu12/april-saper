@@ -62,6 +62,14 @@ def pct(value: float) -> str:
     return (text or "0").replace(".", ",")
 
 
+DIV = "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"
+
+
+def head(emoji: str, title: str) -> str:
+    """Единый заголовок сообщений: эмодзи, капс-название и разделитель."""
+    return f"{emoji} <b>{title.upper()}</b>\n{DIV}"
+
+
 def left_text(seconds: int) -> str:
     seconds = max(0, int(seconds))
     hours, rest = divmod(seconds, 3600)
@@ -216,26 +224,30 @@ def build_dispatcher(db: Database) -> Dispatcher:
         return rank(user) >= ROLE_RANK.get(needed, 2)
 
     def roles_text() -> str:
-        return ("👥 <b>Роли и права</b>\n\n"
-                "<b>Игрок</b>\n"
+        return (head("👥", "Роли и права") + "\n"
+                "🙋 <b>Игрок</b>\n"
                 "• игры в чате и приложении, бонусы, задания\n"
-                "• переводы, промокоды, топ, история, честность\n\n"
-                "<b>Модератор</b>\n"
+                "• переводы, промокоды, топ, история, честность\n"
+                f"{DIV}\n"
+                "🛡 <b>Модератор</b>\n"
                 "• всё как у игрока\n"
                 "• /stats — статистика бота\n"
                 "• /player ID — карточка игрока\n"
                 "• /ban и /unban — блокировка и разблокировка\n"
-                "• /logs — журнал действий\n\n"
-                "<b>Админ</b>\n"
+                "• /logs — журнал действий\n"
+                f"{DIV}\n"
+                "👑 <b>Админ</b>\n"
                 "• всё как у модератора\n"
                 "• /setbal и /addbal — баланс игрока\n"
                 "• /give — выдача предметов\n"
                 "• /role — назначение ролей (admin — только владелец)\n"
                 "• /promo_new, /promo_list, /promo_off, /promo_post\n"
                 "• /maint on|off и /game имя on|off\n"
-                "• /broadcast — рассылка игрокам\n\n"
-                "<b>Владелец</b> (ID из ADMIN_IDS)\n"
-                "• полный доступ и назначение админов\n\n"
+                "• /broadcast — рассылка игрокам\n"
+                f"{DIV}\n"
+                "💎 <b>Владелец</b> (ID из ADMIN_IDS)\n"
+                "• полный доступ и назначение админов\n"
+                f"{DIV}\n"
                 "Команды работают и в группах — просто добавьте бота в чат.")
 
     def find_user(raw: str) -> dict | None:
@@ -410,11 +422,11 @@ def build_dispatcher(db: Database) -> Dispatcher:
         pref = game.prefix_view(user.get("prefix"))
         avatar = game.avatar_view(user.get("avatar_key"))
         bg = game.background_view(user.get("bg_key"))
-        head = "👤 <b>Профиль</b>"
+        title = "Профиль"
         if avatar["icon"]:
-            head += f" {avatar['icon']}"
+            title += f" {avatar['icon']}"
         lines = [
-            head,
+            head("👤", title),
             f"💰 Баланс: <b>{num(user['balance'])} mCoin</b>",
             f"🎁 GMPOINT: <b>{num(user.get('gmpoint') or 0)}</b>",
             (f"🎩 Префикс: <b>{pref['title']}</b>"
@@ -448,7 +460,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             lines.append(f"🏦 В депозитах: {num(deposits_total)} mCoin")
         hourly_left = game.HOURLY_COOLDOWN - (now - int(user.get("last_hourly") or 0))
         spin_left = game.SPIN_COOLDOWN - (now - int(user.get("last_spin") or 0))
-        lines.append("")
+        lines.append(DIV)
         lines.append("🎁 Часовой бонус: " + ("готов" if hourly_left <= 0
                                             else f"через {left_text(hourly_left)}"))
         lines.append("🎡 Колесо дня: " + ("готово" if spin_left <= 0
@@ -468,7 +480,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         stats = awards.metrics(db, user["user_id"])
         level = game.level_view(fresh.get("xp") or 0)
         pending = level_pending(fresh)
-        lines = ["🏅 <b>Достижения</b>",
+        lines = [head("🏅", "Достижения"),
                  f"⭐ Уровень {level['level']} — {level['title']}",
                  f"🎖 XP {level['into']} / {level['need']} {progress_bar(level['into'], level['need'])}"]
         if pending:
@@ -508,7 +520,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
     def level_menu_text(user: dict) -> str:
         view = game.level_view(user.get("xp") or 0)
         pending = level_pending(user)
-        lines = ["🎁 <b>Награды за уровень</b>",
+        lines = [head("🎁", "Награды за уровень"),
                  f"⭐ Уровень {view['level']} — {view['title']}",
                  f"🎖 XP: {num(view['into'])} / {num(view['need'])}", ""]
         if pending:
@@ -570,9 +582,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
         active = prefix_key(user)
         current = game.prefix_view(active)
         level = game.level_view(user.get("xp") or 0)["level"]
-        lines = ["🎩 <b>Префиксы и оформление ника</b>", ""]
+        lines = [head("🎩", "Префиксы и оформление ника"), ""]
         lines.append(f"Сейчас: <b>{current['title']}</b>" if current else "Сейчас: без префикса")
-        lines.append("")
+        lines.append(DIV)
         if owned:
             lines.append("<b>Куплено</b>")
             for key in sorted(owned):
@@ -610,14 +622,15 @@ def build_dispatcher(db: Database) -> Dispatcher:
     def cosmetics_menu_text(user: dict) -> str:
         avatar = game.avatar_view(user.get("avatar_key"))
         bg = game.background_view(user.get("bg_key"))
-        return ("🎨 <b>Оформление профиля</b>\n\n"
-                f"Аватар: {avatar['icon'] + ' ' if avatar['icon'] else ''}{avatar['title']}\n"
-                f"Фон: {bg['title']}\n\n"
+        return (head("🎨", "Оформление профиля") + "\n"
+                f"🖼 Аватар: {avatar['icon'] + ' ' if avatar['icon'] else ''}{avatar['title']}\n"
+                f"🌄 Фон: {bg['title']}\n"
+                f"{DIV}\n"
                 "Галерея аватарок и фонов — в мини-аппе, раздел «Профиль».")
 
     def duel_top_text() -> str:
         rows = db.top_duelists(10)
-        lines = ["🏆 <b>Топ дуэлянтов</b>", ""]
+        lines = [head("🏆", "Топ дуэлянтов"), ""]
         medals = ("🥇", "🥈", "🥉")
         for index, row in enumerate(rows, 1):
             prefix = medals[index - 1] if index <= 3 else f"{index}."
@@ -631,11 +644,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
         now = int(time.time())
         db.expire_duels(now, game.DUEL_TTL)
         pending = db.pending_duel_for(user["user_id"])
-        lines = ["⚔️ <b>Дуэли 1×1</b>", "",
-                 "Вызови друга: <code>/duel 100 @username</code>",
+        lines = [head("⚔️", "Дуэли 1×1"), "",
+                 "💬 <code>/duel [ставка] @username</code>",
                  "или по ID: <code>/duel 100 123456789</code>",
-                 f"Победитель забирает {num(game.duel_prize(100))} mCoin "
-                 "со ставки 100 (комиссия 5%).", ""]
+                 DIV,
+                 f"🏆 Победитель забирает {num(game.duel_prize(100))} mCoin "
+                 "со ставки 100 (комиссия 5%)", ""]
         if pending:
             other_id = (pending["opponent_id"]
                         if int(pending["challenger_id"]) == int(user["user_id"])
@@ -719,9 +733,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
     def duel_play_text(duel: dict, viewer: dict, result: dict) -> str:
         challenger = db.user(duel["challenger_id"])
         opponent = db.user(duel["opponent_id"])
-        lines = ["⚔️ <b>Дуэль завершена</b>", "",
+        lines = [head("⚔️", "Дуэль завершена"), "",
                  f"{user_name(challenger)}: <b>{result['c_roll']}</b>",
-                 f"{user_name(opponent)}: <b>{result['o_roll']}</b>", ""]
+                 f"{user_name(opponent)}: <b>{result['o_roll']}</b>",
+                 DIV]
         if result["winner_id"] is None:
             lines.append("🤝 Ничья — ставки возвращены.")
         elif int(result["winner_id"]) == int(viewer["user_id"]):
@@ -748,7 +763,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
     def top_text() -> str:
         rows = db.leaderboard(10)
         now = int(time.time())
-        lines = ["🏆 <b>Топ по балансу</b>", ""]
+        lines = [head("🏆", "Топ по балансу"), ""]
         medals = ("🥇", "🥈", "🥉")
         for index, row in enumerate(rows, 1):
             name = row["username"] or row["first_name"] or f"id{row['user_id']}"
@@ -766,7 +781,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
     def top_level_text() -> str:
         rows = db.top_by_level(10)
         now = int(time.time())
-        lines = ["⭐ <b>Топ по уровню</b>", ""]
+        lines = [head("⭐", "Топ по уровню"), ""]
         medals = ("🥇", "🥈", "🥉")
         for index, row in enumerate(rows, 1):
             name = row["username"] or row["first_name"] or f"id{row['user_id']}"
@@ -840,10 +855,11 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     def bank_text(user: dict) -> str:
         lines = [
-            "🏦 <b>ДЕПОЗИТ БАНК</b>",
-            f"Баланс: <b>{num(user['balance'])} mCoin</b>",
+            "🏦 <b>ДЕПОЗИТ-БАНК</b>",
+            "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
+            f"💰 В кошельке: <b>{num(user['balance'])} mCoin</b>",
             "",
-            "💵 <b>Временные депозиты</b>",
+            "💵 <b>Доступные проценты</b>",
         ]
         for plan in game.DEPOSIT_PLANS:
             percent = plan["rate_bps"] / 100
@@ -854,8 +870,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "",
             "🪙 <b>Накопительный счёт</b>",
             f"└ {pct(game.SAVINGS_RATE_BPS / 100)}% в день, снять можно в любой момент",
-            "",
-            f"Минимальный вклад — {num(game.DEPOSIT_MIN)} mCoin. "
+            "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
+            f"⚠️ Минимальный вклад — {num(game.DEPOSIT_MIN)} mCoin. "
             "Проценты начисляются при закрытии.",
         ]
         return "\n".join(lines)
@@ -869,8 +885,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
         ])
 
     def fixed_text() -> str:
-        lines = ["💵 <b>Временные депозиты</b>", "",
-                 "Процент фиксируется в момент вклада:", ""]
+        lines = [head("💵", "Временные депозиты"), "",
+                 "📌 Процент фиксируется в момент вклада:", ""]
         for plan in game.DEPOSIT_PLANS:
             percent = plan["rate_bps"] / 100
             lines.append(f"• {plan['days']} дн. — <b>{pct(percent)}%</b>")
@@ -888,9 +904,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
         plan = next((item for item in game.DEPOSIT_PLANS if item["days"] == days), None)
         if not plan:
             return "Неизвестный срок."
-        return (f"💵 <b>Депозит на {days} дн.</b>\n\n"
-                f"Ставка: <b>{pct(plan['rate_bps'] / 100)}%</b> за весь срок\n"
-                f"Сумма: от {num(game.DEPOSIT_MIN)} до {num(game.DEPOSIT_MAX)} mCoin\n\n"
+        return (head("💵", f"Депозит на {days} дн.") + "\n"
+                f"📈 Ставка: <b>{pct(plan['rate_bps'] / 100)}%</b> за весь срок\n"
+                f"💰 Сумма: {num(game.DEPOSIT_MIN)} — {num(game.DEPOSIT_MAX)} mCoin\n"
+                f"{DIV}\n"
                 "Выбери сумму 👇")
 
     def deposit_amounts_keyboard(days: int) -> InlineKeyboardMarkup:
@@ -907,16 +924,17 @@ def build_dispatcher(db: Database) -> Dispatcher:
         now = int(time.time())
         savings = db.savings(user["user_id"])
         if not savings:
-            return ("🪙 <b>Накопительный счёт</b>\n\n"
+            return (head("🪙", "Накопительный счёт") + "\n"
                     "Счёт ещё не открыт.\n"
-                    f"Ставка — {pct(game.SAVINGS_RATE_BPS / 100)}% в день, "
+                    f"📈 Ставка — {pct(game.SAVINGS_RATE_BPS / 100)}% в день, "
                     "снять можно в любой момент.")
         accrued = game.savings_interest(savings["amount"], savings["rate_bps"],
                                         now - int(savings["started_at"]))
-        return ("🪙 <b>Накопительный счёт</b>\n\n"
-                f"На счёте: <b>{num(savings['amount'])} mCoin</b>\n"
-                f"Накоплено: +{num(accrued)} mCoin\n"
-                f"Ставка: {pct(savings['rate_bps'] / 100)}% в день\n\n"
+        return (head("🪙", "Накопительный счёт") + "\n"
+                f"💰 На счёте: <b>{num(savings['amount'])} mCoin</b>\n"
+                f"📈 Накоплено: +{num(accrued)} mCoin\n"
+                f"💵 Ставка: {pct(savings['rate_bps'] / 100)}% в день\n"
+                f"{DIV}\n"
                 "Пополнить или забрать можно в любой момент.")
 
     def savings_keyboard(user: dict) -> InlineKeyboardMarkup:
@@ -936,7 +954,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         rows_all = db.deposits(user["user_id"])
         fixed = [row for row in rows_all if row["kind"] == "fixed"]
         savings = next((row for row in rows_all if row["kind"] == "savings"), None)
-        lines = ["📖 <b>Мои депозиты</b>", ""]
+        lines = [head("📖", "Мои депозиты"), ""]
         rows: list[list[InlineKeyboardButton]] = []
         if not fixed and not savings:
             lines.append("Пока пусто. Открой вклад в разделе «Временные депозиты».")
@@ -966,14 +984,17 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     def mines_hint_text() -> str:
         settings = db.settings()
-        return ("💣 <b>Сапёр в чате</b>\n\n"
-                "Напиши: <code>/mines 100 5</code>\n"
-                "где 100 — ставка, 5 — число мин.\n"
-                "Авто-кэшаут: <code>/mines 100 5 2</code> — забрать на ×2.\n\n"
-                f"Ставка: от {num(settings.get('min_bet', game.MIN_BET))} "
-                f"до {num(settings.get('max_bet', game.MAX_BET))} mCoin\n"
-                f"Мин: от {settings.get('min_mines', 1)} "
-                f"до {settings.get('max_mines', 24)}\n\n"
+        return ("💣 <b>САПЁР</b>\n"
+                "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                "💬 <code>/mines [ставка] [мины]</code>\n"
+                "Пример: <code>/mines 100 5</code>\n"
+                "Авто-кэшаут: <code>/mines 100 5 2</code> — забрать на ×2\n"
+                "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                f"Ставка: {num(settings.get('min_bet', game.MIN_BET))} — "
+                f"{num(settings.get('max_bet', game.MAX_BET))} mCoin\n"
+                f"Мин: {settings.get('min_mines', 1)} — "
+                f"{settings.get('max_mines', 24)}\n"
+                "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
                 "Открывай клетки кнопками — множитель растёт. "
                 "В любой момент нажми «Забрать».")
 
@@ -1027,10 +1048,11 @@ def build_dispatcher(db: Database) -> Dispatcher:
         safe = game.CELLS - int(rnd["mines"])
         mult = float(rnd["multiplier"])
         lines = [
-            f"💣 <b>Сапёр</b> · мин: {rnd['mines']}",
-            f"Ставка: {num(rnd['bet'])} mCoin",
-            f"Открыто: {len(opened)} из {safe}",
-            f"Множитель: ×{mult:.2f}",
+            f"💣 <b>САПЁР</b> · мин: {rnd['mines']}",
+            "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
+            f"💰 Ставка: {num(rnd['bet'])} mCoin",
+            f"💎 Открыто: {len(opened)} из {safe}",
+            f"📈 Множитель: ×{mult:.2f}",
         ]
         if opened:
             payout = game.payout_for(rnd["bet"], mult)
@@ -1064,13 +1086,15 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     def mines_lost_text(rnd: dict, cell: int, refund: int, balance: int) -> str:
         mines = ", ".join(str(pos + 1) for pos in sorted(rnd["mine_positions"]))
-        lines = ["💥 <b>Мина!</b>",
+        lines = ["💥 <b>МИНА!</b>",
+                 "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
                  f"Клетка {cell + 1} оказалась миной.",
                  f"Ставка {num(rnd['bet'])} mCoin потеряна."]
         if refund:
             lines.append(f"🛡 Страховка вернула {num(refund)} mCoin.")
-        lines += ["", f"Открыто клеток: {len(rnd['opened'])} · "
-                       f"множитель дошёл до ×{float(rnd['multiplier']):.2f}",
+        lines += ["┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
+                  f"Открыто клеток: {len(rnd['opened'])} · "
+                  f"множитель дошёл до ×{float(rnd['multiplier']):.2f}",
                   f"Мины были на клетках: {mines}",
                   f"💰 Баланс: {num(balance)} mCoin"]
         return "\n".join(lines)
@@ -1113,11 +1137,14 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     def dice_hint_text() -> str:
         settings = db.settings()
-        return ("🎲 <b>Кости</b>\n\n"
-                "Напиши: <code>/dice 100 чёт</code>\n"
-                "Выплата — ×1,96 при победе.\n\n"
-                f"Ставка: от {num(settings.get('min_bet', game.MIN_BET))} "
-                f"до {num(settings.get('max_bet', game.MAX_BET))} mCoin.\n\n"
+        return (head("🎲", "Кости") + "\n"
+                "💬 <code>/dice [ставка] чёт|нечёт</code>\n"
+                "Пример: <code>/dice 100 чёт</code>\n"
+                f"{DIV}\n"
+                "💸 Выплата при победе — ×1,96\n"
+                f"💰 Ставка: {num(settings.get('min_bet', game.MIN_BET))} — "
+                f"{num(settings.get('max_bet', game.MAX_BET))} mCoin\n"
+                f"{DIV}\n"
                 "Можно и кнопкой 👇")
 
     def settle_play(user: dict, game_name: str, bet: int, payout: int,
@@ -1128,12 +1155,13 @@ def build_dispatcher(db: Database) -> Dispatcher:
         return finish_game(user, bet, payout, mult)
 
     def games_hint_text() -> str:
-        return ("🎰 <b>Игры в чате</b>\n\n"
-                "🎡 /roulette 100 красное — рулетка (×2, зеро ×36)\n"
-                "🎰 /slots 100 — слоты (пара ×1,2, тройка до ×200)\n"
-                "💥 /crash 100 2.5 — краш, цель от ×1,20 до ×10\n"
-                "🪙 /coin 100 орёл — монета, выплата ×1,96\n"
-                "🏀 /basket 100 — бросок в кольцо, выплата ×2,4\n\n"
+        return (head("🎰", "Игры в чате") + "\n"
+                "🎡 <code>/roulette 100 красное</code> — рулетка (×2, зеро ×36)\n"
+                "🎰 <code>/slots 100</code> — слоты (пара ×1,2, тройка до ×200)\n"
+                "💥 <code>/crash 100 2.5</code> — краш, цель от ×1,20 до ×10\n"
+                "🪙 <code>/coin 100 орёл</code> — монета, выплата ×1,96\n"
+                "🏀 <code>/basket 100</code> — бросок в кольцо, выплата ×2,4\n"
+                f"{DIV}\n"
                 "Результат считается из твоего seed — проверить можно /fair.")
 
     def games_keyboard() -> InlineKeyboardMarkup:
@@ -1148,9 +1176,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
         ])
 
     def roulette_hint_text() -> str:
-        return ("🎡 <b>Рулетка</b>\n\n"
-                "Напиши: <code>/roulette 100 красное</code>\n"
-                "Красное или чёрное — ×2, зеро — ×36.\n\n"
+        return (head("🎡", "Рулетка") + "\n"
+                "💬 <code>/roulette [ставка] красное|чёрное|зеро</code>\n"
+                "Пример: <code>/roulette 100 красное</code>\n"
+                f"{DIV}\n"
+                "💰 Красное или чёрное — ×2, зеро — ×36\n"
+                f"{DIV}\n"
                 "Быстрый старт:")
 
     def roulette_hint_keyboard() -> InlineKeyboardMarkup:
@@ -1168,9 +1199,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def slots_hint_text() -> str:
-        return ("🎰 <b>Слоты</b>\n\n"
-                "Напиши: <code>/slots 100</code>\n"
-                "Пара символов — ×1,2, три одинаковых — от ×4 до ×200.\n\n"
+        return (head("🎰", "Слоты") + "\n"
+                "💬 <code>/slots [ставка]</code>\n"
+                "Пример: <code>/slots 100</code>\n"
+                f"{DIV}\n"
+                "💰 Пара символов — ×1,2, три одинаковых — от ×4 до ×200\n"
+                f"{DIV}\n"
                 "Быстрый старт:")
 
     def slots_hint_keyboard() -> InlineKeyboardMarkup:
@@ -1180,10 +1214,13 @@ def build_dispatcher(db: Database) -> Dispatcher:
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def crash_hint_text() -> str:
-        return ("💥 <b>Краш</b>\n\n"
-                "Напиши: <code>/crash 100 2.5</code>\n"
-                "Ставка и цель от ×1,20 до ×10,00.\n"
-                "Если точка краша не ниже цели — забираешь ставку × цель.\n\n"
+        return (head("💥", "Краш") + "\n"
+                "💬 <code>/crash [ставка] [цель]</code>\n"
+                "Пример: <code>/crash 100 2.5</code>\n"
+                f"{DIV}\n"
+                "📈 Цель от ×1,20 до ×10,00\n"
+                "🎯 Если точка краша не ниже цели — забираешь ставку × цель\n"
+                f"{DIV}\n"
                 "Быстрый старт:")
 
     def crash_hint_keyboard() -> InlineKeyboardMarkup:
@@ -1294,9 +1331,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
         return "\n".join(lines)
 
     def coin_hint_text() -> str:
-        return ("🪙 <b>Орёл и решка</b>\n\n"
-                "Напиши: <code>/coin 100 орёл</code>\n"
-                "Выплата ×1,96 при победе.\n\n"
+        return (head("🪙", "Орёл и решка") + "\n"
+                "💬 <code>/coin [ставка] орёл|решка</code>\n"
+                "Пример: <code>/coin 100 орёл</code>\n"
+                f"{DIV}\n"
+                "💸 Выплата при победе — ×1,96\n"
+                f"{DIV}\n"
                 "Быстрый старт:")
 
     def coin_hint_keyboard() -> InlineKeyboardMarkup:
@@ -1347,14 +1387,15 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     def basket_hint_text() -> str:
         settings = db.settings()
-        return ("🏀 <b>Баскет</b>\n\n"
-                "Выбери, что будет: мяч попадёт или промахнётся.\n"
-                "Напиши: <code>/basket 100 попадёт</code>\n"
-                "или: <code>/basket 100 промах</code>\n\n"
-                "Бот отправляет анимацию 🏀 из Telegram — она и решает.\n"
-                "Попадание платит ×2,4 · промах ×1,6.\n\n"
-                f"Ставка: от {num(settings.get('min_bet', game.MIN_BET))} "
-                f"до {num(settings.get('max_bet', game.MAX_BET))} mCoin.\n\n"
+        return (head("🏀", "Баскет") + "\n"
+                "💬 <code>/basket [ставка] попадёт|промах</code>\n"
+                "Пример: <code>/basket 100 попадёт</code>\n"
+                f"{DIV}\n"
+                "🎬 Бот отправляет анимацию 🏀 из Telegram — она и решает\n"
+                "💰 Попадание платит ×2,4 · промах ×1,6\n"
+                f"💰 Ставка: {num(settings.get('min_bet', game.MIN_BET))} — "
+                f"{num(settings.get('max_bet', game.MAX_BET))} mCoin\n"
+                f"{DIV}\n"
                 "Или просто жми кнопку 👇")
 
     def basket_hint_keyboard() -> InlineKeyboardMarkup:
@@ -1405,15 +1446,18 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     def darts_hint_text() -> str:
         settings = db.settings()
-        return ("🎯 <b>Дартс</b>\n\n"
-                "Выбери, куда попадёт дротик:\n"
-                "• <b>яблочко</b> — центр мишени, ×5,9\n"
-                "• <b>сектор</b> — поле мишени, ×1,98\n"
-                "• <b>мимо</b> — промах, ×2,97\n\n"
-                "Напиши: <code>/darts 100 яблочко</code>\n"
-                "Бот отправляет анимацию 🎯 из Telegram — она и решает.\n\n"
-                f"Ставка: от {num(settings.get('min_bet', game.MIN_BET))} "
-                f"до {num(settings.get('max_bet', game.MAX_BET))} mCoin.\n\n"
+        return (head("🎯", "Дартс") + "\n"
+                "💬 <code>/darts [ставка] яблочко|сектор|мимо</code>\n"
+                "Пример: <code>/darts 100 яблочко</code>\n"
+                f"{DIV}\n"
+                "🎯 <b>яблочко</b> — центр мишени, ×5,9\n"
+                "🎯 <b>сектор</b> — поле мишени, ×1,98\n"
+                "🎯 <b>мимо</b> — промах, ×2,97\n"
+                f"{DIV}\n"
+                "🎬 Бот отправляет анимацию 🎯 из Telegram — она и решает\n"
+                f"💰 Ставка: {num(settings.get('min_bet', game.MIN_BET))} — "
+                f"{num(settings.get('max_bet', game.MAX_BET))} mCoin\n"
+                f"{DIV}\n"
                 "Или просто жми кнопку 👇")
 
     def darts_hint_keyboard() -> InlineKeyboardMarkup:
@@ -1490,9 +1534,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
         name = (recipient.get("username") or recipient.get("first_name")
                 or str(recipient["user_id"]))
         balance = db.user(sender["user_id"])["balance"]
-        return ("💸 <b>Перевод отправлен</b>\n\n"
-                f"Кому: <b>{name}</b> · ID {recipient['user_id']}\n"
-                f"Сумма: <b>{num(amount)}</b> mCoin\n"
+        return (head("💸", "Перевод отправлен") + "\n"
+                f"👤 Кому: <b>{name}</b> · ID {recipient['user_id']}\n"
+                f"💵 Сумма: <b>{num(amount)}</b> mCoin\n"
+                f"{DIV}\n"
                 f"💰 Баланс: {num(balance)} mCoin")
 
     def promo_text(user: dict, code: str) -> str:
@@ -1512,19 +1557,20 @@ def build_dispatcher(db: Database) -> Dispatcher:
             return "⚠️ " + errors.get(status, "Не удалось активировать промокод")
         fresh = db.user(user["user_id"])
         if currency == "gmpoint":
-            return ("🎁 <b>Промокод активирован</b>\n\n"
-                    f"Начислено: <b>+{num(amount)}</b> GMPOINT\n"
+            return (head("🎁", "Промокод активирован") + "\n"
+                    f"💎 Начислено: <b>+{num(amount)}</b> GMPOINT\n"
                     f"🎁 Всего: {num(fresh['gmpoint'])} GMPOINT")
-        return ("🎁 <b>Промокод активирован</b>\n\n"
-                f"Начислено: <b>+{num(amount)}</b> mCoin\n"
+        return (head("🎁", "Промокод активирован") + "\n"
+                f"💵 Начислено: <b>+{num(amount)}</b> mCoin\n"
                 f"💰 Баланс: {num(fresh['balance'])} mCoin")
 
     def tasks_view(user: dict) -> tuple[str, InlineKeyboardMarkup]:
         refs = db.referrals(user["user_id"])
         claimed = db.invite_claims(user["user_id"])
-        lines = ["🎯 <b>Задания</b>", "",
-                 f"👥 Друзей: {refs['total']} · активных: {refs['active']}", "",
-                 "<b>Лестница приглашений</b>"]
+        lines = [head("🎯", "Задания"), "",
+                 f"👥 Друзей: {refs['total']} · активных: {refs['active']}",
+                 DIV,
+                 "🪜 <b>Лестница приглашений</b>"]
         rows: list[list[InlineKeyboardButton]] = []
         for item in game.REF_LADDER:
             step = int(item["step"])
@@ -1560,7 +1606,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
     def claim_bonuses(user: dict) -> str:
         now = int(time.time())
         settings = db.settings()
-        lines = ["🎁 <b>Бонусы</b>", ""]
+        lines = ["🎁 <b>БОНУСЫ</b>", "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"]
         gained = 0
         hourly_left = game.HOURLY_COOLDOWN - (now - int(user.get("last_hourly") or 0))
         if hourly_left <= 0:
@@ -1604,9 +1650,11 @@ def build_dispatcher(db: Database) -> Dispatcher:
             fresh = db.user(user["user_id"])
             if earned:
                 lines += [""] + awards_lines(earned)
-            lines += ["", f"💰 Баланс: <b>{num(fresh['balance'])}</b> mCoin"]
+            lines += ["┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
+                      f"💰 Баланс: <b>{num(fresh['balance'])}</b> mCoin"]
         else:
-            lines += ["", "Пока нечего забирать — возвращайся позже."]
+            lines += ["┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
+                      "Пока нечего забирать — возвращайся позже."]
         return "\n".join(lines)
 
     def prize_title(prize: dict) -> str:
@@ -2000,11 +2048,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
         awards.evaluate(db, user["user_id"])
         fresh = db.user(user["user_id"])
         await message.answer(
-            "🎡 <b>Колесо дня</b>\n\n"
-            f"Выпало: <b>{prize_title(prize)}</b>\n"
-            f"День серии: {day}/{game.SPIN_STREAK_DAYS}\n"
-            f"💰 Баланс: {num(fresh['balance'])} mCoin\n\n"
-            f"Следующее вращение через {left_text(game.SPIN_COOLDOWN)}",
+            head("🎡", "Колесо дня") + "\n"
+            f"🏆 Выпало: <b>{prize_title(prize)}</b>\n"
+            f"🔥 День серии: {day}/{game.SPIN_STREAK_DAYS}\n"
+            f"{DIV}\n"
+            f"💰 Баланс: {num(fresh['balance'])} mCoin\n"
+            f"⏳ Следующее вращение через {left_text(game.SPIN_COOLDOWN)}",
             reply_markup=main_keyboard(),
         )
 
@@ -2121,6 +2170,86 @@ def build_dispatcher(db: Database) -> Dispatcher:
         user = get_user(message)
         await message.answer(bank_text(user), reply_markup=bank_keyboard())
 
+    def cases_text(user: dict) -> str:
+        return ("🎁 <b>КЕЙСЫ</b>\n"
+                "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                f"💎 Баланс: <b>{num(user['gmpoint'])} GMPOINT</b>\n\n"
+                "Выбери кейс — внутри GMPOINT и предметы.\n"
+                "Приз определяется честно: /fair")
+
+    def cases_keyboard() -> InlineKeyboardMarkup:
+        rows = [[InlineKeyboardButton(
+            text=f"{case['emoji']} {case['title']} · {num(case['price'])} GMP",
+            callback_data=f"case:open:{case['key']}")]
+            for case in game.GMP_CASES]
+        rows.append([webapp_button()])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def case_result_view(user: dict, case: dict, price: int,
+                         prize_line: str) -> tuple[str, InlineKeyboardMarkup]:
+        text = (f"{case['emoji']} <b>{case['title']}</b>\n"
+                "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                f"Открытие: −{num(price)} GMPOINT\n"
+                f"🏆 <b>{prize_line}</b>\n\n"
+                f"💎 Баланс: <b>{num(user['gmpoint'])} GMPOINT</b>")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"{case['emoji']} Открыть ещё · {num(price)} GMP",
+                callback_data=f"case:open:{case['key']}")],
+            [InlineKeyboardButton(text="🎁 Все кейсы", callback_data="case:menu")],
+        ])
+        return text, keyboard
+
+    @dp.message(Command("case", "cases", "keys"))
+    async def case_cmd(message: Message) -> None:
+        user = get_user(message)
+        await message.answer(cases_text(user), reply_markup=cases_keyboard())
+
+    @dp.callback_query(F.data == "case:menu")
+    async def case_menu_cb(callback) -> None:
+        user = get_user(callback)
+        await safe_edit(callback.message, cases_text(user), cases_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("case:open:"))
+    async def case_open_cb(callback) -> None:
+        key = callback.data.split(":", 2)[-1]
+        case = game.gmp_case(key)
+        if not case:
+            await callback.answer("Такого кейса нет", show_alert=True)
+            return
+        user = get_user(callback)
+        price = int(case["price"])
+        if int(user["gmpoint"]) < price:
+            await callback.answer(
+                f"Не хватает GMPOINT: нужно {num(price)}", show_alert=True)
+            return
+        nonce = db.bump_nonce(user["user_id"])
+        try:
+            prize = game.open_gmp_case(user["server_seed"], user["client_seed"],
+                                       nonce, key)
+        except ValueError:
+            await callback.answer("Кейс недоступен", show_alert=True)
+            return
+        if not db.spend_gmpoint(user["user_id"], price):
+            await callback.answer("Не хватает GMPOINT", show_alert=True)
+            return
+        db.log_gmpoint(user["user_id"], -price, f"case:{key}")
+        if prize["kind"] == "gmpoint":
+            amount = int(prize["amount"])
+            db.add_gmpoint(user["user_id"], amount)
+            db.log_gmpoint(user["user_id"], amount, f"case_win:{key}")
+            prize_line = f"💎 +{num(amount)} GMPOINT"
+        else:
+            qty = int(prize.get("qty", 1))
+            db.add_item(user["user_id"], prize["item"], qty)
+            title = game.GMP_CASE_ITEM_TITLES.get(prize["item"], prize["item"])
+            prize_line = f"🎒 {title} ×{qty}"
+        fresh = db.user(user["user_id"])
+        text, keyboard = case_result_view(fresh, case, price, prize_line)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer("Готово")
+
     @dp.message(Command("tasks", "quests"))
     async def tasks_cmd(message: Message) -> None:
         user = get_user(message)
@@ -2165,10 +2294,11 @@ def build_dispatcher(db: Database) -> Dispatcher:
     async def fair(message: Message) -> None:
         user = get_user(message)
         await message.answer(
-            "🔐 <b>Provably fair</b>\n\n"
-            f"Хеш серверного seed:\n<code>{user['server_seed_hash']}</code>\n"
-            f"Клиентский seed: <code>{user['client_seed']}</code>\n"
-            f"Nonce: {user['nonce']}\n\n"
+            head("🔐", "Provably fair") + "\n"
+            f"🧩 Хеш серверного seed:\n<code>{user['server_seed_hash']}</code>\n"
+            f"🎲 Клиентский seed: <code>{user['client_seed']}</code>\n"
+            f"🔁 Nonce: {user['nonce']}\n"
+            f"{DIV}\n"
             "Позиции мин считаются как HMAC-SHA256(server_seed, client_seed:nonce:i). "
             "Кости и колесо используют тот же поток. "
             "Сменить seed и увидеть старый можно в приложении на вкладке «Честность»."
@@ -2177,8 +2307,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
     @dp.message(Command("help"))
     async def help_cmd(message: Message) -> None:
         await message.answer(
-            "💣 <b>Что умеет бот</b>\n\n"
-            "<b>Играть в чате</b>\n"
+            head("💣", "Что умеет бот") + "\n"
+            "🎮 <b>Играть в чате</b>\n"
             "/mines 100 5 — сапёр: ставка и число мин\n"
             "/dice 100 чёт — кости, выплата ×1,96\n"
             "/roulette 100 красное — рулетка (зеро ×36)\n"
@@ -2188,21 +2318,25 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "/basket 100 попадёт — баскет: забросит мяч или нет\n"
             "/darts 100 яблочко — дартс: яблочко, сектор или мимо\n"
             "/duel 100 @username — дуэль 1×1 на бросок\n"
-            "/spin — колесо дня раз в 12 часов\n\n"
-            "<b>Баланс и бонусы</b>\n"
+            "/spin — колесо дня раз в 12 часов\n"
+            f"{DIV}\n"
+            "💰 <b>Баланс и бонусы</b>\n"
             "/balance — профиль, ID и статистика\n"
             "/pay 100 @ник — перевод другому игроку\n"
             "/promo КОД — активировать промокод\n"
             "/bonus — часовой и ежедневный бонусы\n"
             "/deposit — вклады под процент\n"
+            "/case — кейсы за GMPOINT\n"
             "/tasks — приглашения и спонсоры\n"
             "/achievements — уровни и достижения\n"
-            "/top — рейтинг игроков\n\n"
-            "<b>Приложение</b>\n"
+            "/top — рейтинг игроков\n"
+            f"{DIV}\n"
+            "📱 <b>Приложение</b>\n"
             "/play — полное поле, магазин и история\n"
             "/ref — ссылка для друзей\n"
-            "/fair — проверка честности\n\n"
-            "<b>В группах</b>\n"
+            "/fair — проверка честности\n"
+            f"{DIV}\n"
+            "👥 <b>В группах</b>\n"
             "Добавьте бота в чат — игры и команды работают там же,\n"
             "/chatid покажет ID чата для настроек.\n\n"
             "Валюта mCoin виртуальная: реальные деньги не принимаются и не выводятся.",
@@ -3556,6 +3690,7 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="duel", description="Дуэль 1×1"),
         BotCommand(command="spin", description="Колесо дня"),
         BotCommand(command="bonus", description="Бонусы"),
+        BotCommand(command="case", description="Кейсы за GMPOINT"),
         BotCommand(command="balance", description="Профиль и статистика"),
         BotCommand(command="prefix", description="Префиксы и оформление ника"),
         BotCommand(command="deposit", description="Депозиты"),

@@ -1033,6 +1033,70 @@ def open_lootbox(server_seed: str, client_seed: str, nonce: int) -> dict:
     return {"kind": "item", "item": "charm", "qty": CHARM_CHARGES}
 
 
+GMP_CASES = (
+    {"key": "starter", "title": "Кейс новичка", "emoji": "🎁", "price": 5,
+     "desc": "Быстрый старт: GMPOINT и предметы"},
+    {"key": "lucky", "title": "Кейс удачи", "emoji": "🍀", "price": 20,
+     "desc": "Средний кейс: больше GMPOINT"},
+    {"key": "premium", "title": "Премиум-кейс", "emoji": "💎", "price": 50,
+     "desc": "Крупные призы и редкие предметы"},
+)
+
+GMP_CASE_PRIZES = {
+    "starter": (
+        (0.45, {"kind": "gmpoint", "amount": (3, 8)}),
+        (0.76, {"kind": "gmpoint", "amount": (8, 20)}),
+        (0.93, {"kind": "gmpoint", "amount": (20, 45)}),
+        (0.975, {"kind": "item", "item": "insurance", "qty": 1}),
+        (1.001, {"kind": "item", "item": "charm", "qty": 1}),
+    ),
+    "lucky": (
+        (0.35, {"kind": "gmpoint", "amount": (10, 25)}),
+        (0.68, {"kind": "gmpoint", "amount": (25, 60)}),
+        (0.88, {"kind": "gmpoint", "amount": (60, 140)}),
+        (0.96, {"kind": "item", "item": "insurance", "qty": 2}),
+        (0.99, {"kind": "item", "item": "charm", "qty": 2}),
+        (1.001, {"kind": "item", "item": "double_daily", "qty": 1}),
+    ),
+    "premium": (
+        (0.30, {"kind": "gmpoint", "amount": (30, 70)}),
+        (0.60, {"kind": "gmpoint", "amount": (70, 150)}),
+        (0.84, {"kind": "gmpoint", "amount": (150, 380)}),
+        (0.94, {"kind": "gmpoint", "amount": (380, 800)}),
+        (0.98, {"kind": "item", "item": "charm", "qty": 3}),
+        (1.001, {"kind": "item", "item": "double_daily", "qty": 2}),
+    ),
+}
+
+GMP_CASE_ITEM_TITLES = {
+    "insurance": "Страховка",
+    "charm": "Талисман",
+    "double_daily": "Двойной бонус",
+}
+
+
+def gmp_case(key: str) -> dict | None:
+    return next((case for case in GMP_CASES if case["key"] == key), None)
+
+
+def open_gmp_case(server_seed: str, client_seed: str, nonce: int,
+                  key: str) -> dict:
+    """Приз кейса на GMPOINT: тот же HMAC-поток, что и в остальных играх."""
+    table = GMP_CASE_PRIZES.get(key)
+    if not table:
+        raise ValueError(f"unknown case: {key}")
+    value = next(_floats(server_seed, client_seed, nonce, 11, 1))
+    for edge, prize in table:
+        if value < edge:
+            result = dict(prize)
+            if result["kind"] == "gmpoint":
+                low, high = result["amount"]
+                roll = next(_floats(server_seed, client_seed, nonce, 12, 1))
+                result["amount"] = low + int((high - low) * roll)
+            return result
+    return dict(table[-1][1])
+
+
 BJ_SUITS = ("♠", "♥", "♦", "♣")
 BJ_RANKS = ("2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A")
 BJ_BLACKJACK = 2.5
