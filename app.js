@@ -6093,6 +6093,61 @@ async function loadStreet() {
   } catch (e) {}
 }
 
+const ONBOARD_STEPS = [
+  { emoji: "💣", title: "Добро пожаловать!",
+    text: "Открывай клетки, собирай множитель и забирай выигрыш. Внизу — вкладки: Игра, Активности, Топ и Профиль." },
+  { emoji: "🎯", title: "Ставка и мины",
+    text: "Выбери ставку и число мин. Чем больше мин — тем выше множитель, но и риск выше." },
+  { emoji: "💰", title: "Забирай выигрыш",
+    text: "Открыл несколько клеток — жми «Забрать». Первая мина закрывает партию и сжигает ставку." },
+  { emoji: "🎁", title: "Бонусы каждый день",
+    text: "Заходи за часовым и ежедневным бонусом, крути колесо дня, забирай награды за уровни и задания." },
+];
+
+function setupOnboard() {
+  const box = $("onboard");
+  if (!box) return;
+  const btn = $("onboardNext");
+  const dots = $("onboardDots");
+  const emojiEl = $("onboardEmoji");
+  const titleEl = $("onboardTitle");
+  const textEl = $("onboardText");
+  let step = 0;
+  let done = false;
+  try { done = localStorage.getItem("saper_onboard_done") === "1"; } catch (e) {}
+  if (done) { box.hidden = true; return; }
+  const paint = () => {
+    const item = ONBOARD_STEPS[step];
+    if (emojiEl) emojiEl.textContent = item.emoji;
+    if (titleEl) titleEl.textContent = item.title;
+    if (textEl) textEl.textContent = item.text;
+    if (dots) {
+      dots.innerHTML = ONBOARD_STEPS
+        .map((_, i) => `<span class="onboard-dot${i === step ? " active" : ""}"></span>`)
+        .join("");
+    }
+    if (btn) btn.textContent = step === ONBOARD_STEPS.length - 1 ? "Начать" : "Далее";
+  };
+  const close = () => {
+    box.classList.remove("show");
+    box.hidden = true;
+    try { localStorage.setItem("saper_onboard_done", "1"); } catch (e) {}
+  };
+  if (btn) {
+    btn.addEventListener("click", () => {
+      if (step < ONBOARD_STEPS.length - 1) {
+        step += 1;
+        paint();
+      } else {
+        close();
+      }
+    });
+  }
+  paint();
+  box.hidden = false;
+  requestAnimationFrame(() => box.classList.add("show"));
+}
+
 async function init() {
   if (tg) {
     tg.ready();
@@ -6102,6 +6157,7 @@ async function init() {
       tg.setBackgroundColor("#0e1016");
     } catch (e) {}
   }
+  setupOnboard();
   try {
     const saved = localStorage.getItem("saper_sound");
     if (saved !== null) state.sound = saved === "1";

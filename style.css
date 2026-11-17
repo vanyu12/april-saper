@@ -3290,7 +3290,11 @@ body::after {
   padding: 24px;
   background: rgba(4, 5, 10, 0.78);
   backdrop-filter: blur(10px);
+  opacity: 0;
+  transition: opacity 0.2s ease;
 }
+.onboard[hidden] { display: none; }
+.onboard.show { opacity: 1; }
 .onboard-card {
   width: 100%;
   max-width: 340px;
