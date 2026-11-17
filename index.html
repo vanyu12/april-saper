@@ -129,6 +129,10 @@
 
       <div class="action-bar">
         <button class="cta" id="ctaBtn">Начать игру</button>
+        <div class="action-row">
+          <button class="secondary action-auto" id="autoBtn" type="button" hidden>⚡ Авто</button>
+          <span class="action-auto-info" id="autoInfo"></span>
+        </div>
         <div class="hint" id="hint">Открой первую клетку и реши, когда забрать.</div>
       </div>
       </div>
@@ -492,6 +496,12 @@
         <div class="stat"><span class="stat-value" id="statBest">×1,00</span><span class="stat-label">лучший</span></div>
       </div>
 
+      <div class="card stats-detail-card">
+        <div class="card-title">Статистика по играм</div>
+        <div class="stats-summary" id="statsSummary"></div>
+        <div class="stats-games" id="statsGames"></div>
+      </div>
+
       <div class="card">
         <div class="card-title">Достижения</div>
         <div class="achievements" id="achievements"></div>
@@ -512,6 +522,12 @@
 
     <section class="view" id="view-history">
       <div class="card-title page-title">История игр</div>
+      <div class="history-summary" id="historySummary"></div>
+      <div class="history-filters">
+        <button class="tab active" data-hfilter="all">Все</button>
+        <button class="tab" data-hfilter="win">Выигрыши</button>
+        <button class="tab" data-hfilter="lose">Проигрыши</button>
+      </div>
       <div class="list" id="historyList"></div>
     </section>
 
@@ -672,6 +688,38 @@
       <div class="card">
         <div class="card-title">Экономика</div>
         <div class="stats-grid" id="adminEconomy"></div>
+        <div class="admin-econ-actions">
+          <div class="admin-econ-row">
+            <input class="input admin-inp" id="adminEmitUser" type="number" placeholder="ID игрока" min="1">
+            <input class="input admin-inp" id="adminEmitAmount" type="number" placeholder="Сумма" min="0">
+            <select class="input admin-inp" id="adminEmitCur">
+              <option value="gold">Золото</option>
+              <option value="bank">Банк</option>
+              <option value="credits">Кредиты</option>
+              <option value="gems">Гемы</option>
+            </select>
+            <button class="secondary small" id="adminEmitBtn">Эмиссия</button>
+          </div>
+          <div class="admin-econ-row">
+            <input class="input admin-inp" id="adminRateCur" placeholder="Валюта (gem/credit)" list="adminRateList">
+            <input class="input admin-inp" id="adminRateVal" type="number" step="0.1" placeholder="Курс к золоту">
+            <button class="secondary small" id="adminRateBtn">Курс</button>
+          </div>
+          <div class="admin-econ-row">
+            <input class="input admin-inp" id="adminTaxKey" placeholder="trade/guild_market/premium/withdraw" list="adminTaxList">
+            <input class="input admin-inp" id="adminTaxVal" type="number" step="0.1" placeholder="% комиссии">
+            <button class="secondary small" id="adminTaxBtn">Комиссия</button>
+          </div>
+          <div class="admin-econ-row">
+            <input class="input admin-inp" id="adminInflVal" type="number" step="0.1" placeholder="% инфляции">
+            <button class="secondary small" id="adminInflBtn">Инфляция</button>
+            <input class="input admin-inp" id="adminTokensUser" type="number" placeholder="ID игрока" min="1">
+            <input class="input admin-inp" id="adminTokensAmt" type="number" placeholder="Жетоны">
+            <button class="secondary small" id="adminTokensBtn">Дать жетоны</button>
+          </div>
+        </div>
+        <datalist id="adminRateList"><option value="gem"></option><option value="credit"></option><option value="token"></option></datalist>
+        <datalist id="adminTaxList"><option value="trade"></option><option value="guild_market"></option><option value="premium"></option><option value="withdraw"></option></datalist>
       </div>
       <div class="card">
         <div class="card-title">Последние дуэли</div>
@@ -786,11 +834,260 @@
     </div>
   </section>
 
+  <section class="view" id="view-social">
+    <h3 class="view-title">Активности</h3>
+    <div class="social-grid">
+      <div class="social-card">
+        <h4>⚡ Автоигра</h4>
+        <p class="social-hint">Запусти автоматическую серию раундов с выбранной стратегией.</p>
+        <div id="autoPanel"></div>
+      </div>
+      <div class="social-card">
+        <h4>🏆 Турниры</h4>
+        <p class="social-hint">Соревнуйся за призовой фонд.</p>
+        <div id="tournamentBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🔔 Уведомления</h4>
+        <p class="social-hint">События, приглашения и награды.</p>
+        <div id="notificationBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>👥 Кланы</h4>
+        <p class="social-hint">Объединяйся с игроками, получай опыт клана.</p>
+        <div id="clanBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🤝 Друзья</h4>
+        <p class="social-hint">Добавляй друзей и получай заявки.</p>
+        <div id="friendBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🛒 Маркетплейс</h4>
+        <p class="social-hint">Покупай и продавай предметы между игроками.</p>
+        <div id="marketBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🏅 Лиги</h4>
+        <p class="social-hint">Сезонные лиги с наградами за очки.</p>
+        <div id="leagueBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🎯 Достижения</h4>
+        <p class="social-hint">Прогресс по всем достижениям и награды.</p>
+        <div id="achDetailBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>⚔️ Войны кланов</h4>
+        <p class="social-hint">Ставь на исход войн между кланами.</p>
+        <div id="warBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>👹 Клановые рейды</h4>
+        <p class="social-hint">Атакуй боссов вместе с кланом и получай награды.</p>
+        <div id="raidBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🏦 Кредиты</h4>
+        <p class="social-hint">Бери кредиты под проценты и погашай досрочно.</p>
+        <div id="loanBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🔥 Стрики</h4>
+        <p class="social-hint">Ежедневные серии с растущей наградой.</p>
+        <div id="streakBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🎁 Сундуки</h4>
+        <p class="social-hint">Открывай сундуки дня и недели.</p>
+        <div id="chestBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🛠 Крафт</h4>
+        <p class="social-hint">Создавай предметы из материалов.</p>
+        <div id="craftBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>⛵ Корабли</h4>
+        <p class="social-hint">Открывай корабли за опыт и монеты.</p>
+        <div id="shipBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🔍 Поиск игроков</h4>
+        <p class="social-hint">Найди игрока по логину, имени или ID и добавь в друзья.</p>
+        <div id="searchBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>📊 Твои показатели</h4>
+        <p class="social-hint">Краткая сводка достижений.</p>
+        <div id="abilityBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>⭐ Престиж</h4>
+        <p class="social-hint">Перерождайся за уровень и получай бонус к выплатам навсегда.</p>
+        <div id="prestigeBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>📦 Заказы</h4>
+        <p class="social-hint">Выполняй контракты и забирай награды.</p>
+        <div id="orderBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🪙 Жетоны</h4>
+        <p class="social-hint">Обменивай жетоны на полезные предметы.</p>
+        <div id="tokenBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🃏 Карточки</h4>
+        <p class="social-hint">Собирай коллекцию карточек рыб, птиц и сокровищ.</p>
+        <div id="cardBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>⚡ Энергия</h4>
+        <p class="social-hint">Энергия для активностей, восстанавливается со временем.</p>
+        <div id="energyBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>⚔️ Арена</h4>
+        <p class="social-hint">Дуэли со случайным соперником, рейтинг и награды.</p>
+        <div id="arenaBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🔢 Бинго</h4>
+        <p class="social-hint">Собери 2 линии на поле и умножь ставку на 6!</p>
+        <div id="bingoBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>📖 Энциклопедия</h4>
+        <p class="social-hint">Справочник по рыбам, играм и предметам.</p>
+        <div id="encyclopediaBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🔴 Живые ставки</h4>
+        <p class="social-hint">Создавай сессии и ставь против других игроков.</p>
+        <div id="liveBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>✨ Сезонные события</h4>
+        <p class="social-hint">Активные ивенты с призами.</p>
+        <div id="eventBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🍽 Ресторан</h4>
+        <p class="social-hint">Готовь блюда из улова и получай награды.</p>
+        <div id="restaurantBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🏅 Медали</h4>
+        <p class="social-hint">Достижения за особые свершения.</p>
+        <div id="medalBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🎯 Цели дня</h4>
+        <p class="social-hint">Ежедневные цели с наградами.</p>
+        <div id="goalBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🗡 Данж-экспедиции</h4>
+        <p class="social-hint">Сражайся с монстрами и собирай золото.</p>
+        <div id="dungeonBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🎁 Подарки</h4>
+        <p class="social-hint">Отправляй подарки друзьям и получай взамен.</p>
+        <div id="giftBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>⚔ PvP-комнаты</h4>
+        <p class="social-hint">Сражайся с другими игроками на равных ставках.</p>
+        <div id="pvpBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>💼 Рабочие</h4>
+        <p class="social-hint">Нанимай рабочих и получай пассивный доход.</p>
+        <div id="workerBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🌾 Ферма</h4>
+        <p class="social-hint">Выращивай урожай и собирай награды.</p>
+        <div id="farmBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🎫 Премиум-пропуск</h4>
+        <p class="social-hint">Сезонные награды за прохождение уровней.</p>
+        <div id="bpBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>📈 Аналитика</h4>
+        <p class="social-hint">Подробная статистика за неделю и по играм.</p>
+        <div id="analyticsBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🗓 Календарь наград</h4>
+        <p class="social-hint">Забирай награду каждый день.</p>
+        <div id="calendarBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>📰 Новости</h4>
+        <p class="social-hint">Анонсы, события и изменения игры.</p>
+        <div id="newsBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🤝 Партнёрская программа</h4>
+        <p class="social-hint">Приглашай друзей и получай постоянный бонус.</p>
+        <div id="partnerBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>💰 Экономика</h4>
+        <p class="social-hint">Биржа, депозиты и обмен валют.</p>
+        <div id="economyBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🏰 Здания гильдии</h4>
+        <p class="social-hint">Строй, прокачивай и получай бонусы для клана.</p>
+        <div id="guildBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🗺 Глобальная карта</h4>
+        <p class="social-hint">Захватывай провинции и собирай доход.</p>
+        <div id="mapBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🏆 Турнирный сезон</h4>
+        <p class="social-hint">Отбор, плей-офф и крупные призы.</p>
+        <div id="tournamentBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🃏 Коллекция карт</h4>
+        <p class="social-hint">Альбом, дубликаты и торговый рынок.</p>
+        <div id="cardMarketBox"></div>
+      </div>
+      <div class="social-card">
+        <h4>🏘 Улица</h4>
+        <p class="social-hint">Дом, бизнес, работа и джекпот.</p>
+        <div id="streetBox"></div>
+      </div>
+      <div class="social-card club-card">
+        <div class="card-header">♟ Шахматный клуб <span class="card-sub">эндгейм на G-токенах</span></div>
+        <p class="social-hint">Недельный турнир: победи 7 боссов, попади в плей-офф и забери G-токены.</p>
+        <div class="club-body" id="clubBox">Загрузка…</div>
+        <div id="clubHistoryBox"></div>
+      </div>
+      <div class="social-card pet-card">
+        <h4>🥚 Питомец <span class="card-sub">верный помощник</span></h4>
+        <p class="social-hint">Корми его и забирай пассивный доход в G-токенах.</p>
+        <div id="petBox">Загрузка…</div>
+        <div id="petTopBox"></div>
+      </div>
+    </div>
+  </section>
+
   </main>
 
   <nav class="nav">
     <button class="nav-btn active" data-view="game"><span>💣</span>Игра</button>
     <button class="nav-btn" data-view="shop"><span>🛒</span>Активности</button>
+    <button class="nav-btn" data-view="social"><span>⚡</span>Соц</button>
     <button class="nav-btn" data-view="top"><span>🏆</span>Топ</button>
     <button class="nav-btn" data-view="profile"><span>👤</span>Профиль</button>
     <button class="nav-btn" id="adminNav" data-view="admin" hidden><span>🛠</span>Админ</button>
@@ -841,6 +1138,30 @@
         <button class="quick-btn" data-theme="neon"><span>🎨</span>Неон</button>
         <button class="quick-btn" data-theme="gold"><span>🏅</span>Золото</button>
       </div>
+      <div class="drawer-title drawer-subtitle">Настройки</div>
+      <div class="settings-grid">
+        <label class="setting-row">
+          <span class="setting-icon">🔊</span>
+          <span class="setting-main"><b>Звук</b><small>Эффекты и мелодии</small></span>
+          <input type="checkbox" class="switch" id="setSound" checked>
+        </label>
+        <label class="setting-row">
+          <span class="setting-icon">📳</span>
+          <span class="setting-main"><b>Вибрация</b><small>Отклик на действия</small></span>
+          <input type="checkbox" class="switch" id="setVibrate" checked>
+        </label>
+        <label class="setting-row">
+          <span class="setting-icon">🔉</span>
+          <span class="setting-main"><b>Громкость</b><small>Уровень эффектов</small></span>
+          <input type="range" class="slider setting-slider" id="setVolume" min="0" max="100" value="100">
+        </label>
+        <label class="setting-row">
+          <span class="setting-icon">⚡</span>
+          <span class="setting-main"><b>Анимации</b><small>Конфетти и частицы</small></span>
+          <input type="checkbox" class="switch" id="setAnim" checked>
+        </label>
+        <button class="quick-btn setting-clear" id="setClear" type="button"><span>🧹</span>Сбросить настройки</button>
+      </div>
     </div>
   </div>
 
@@ -854,6 +1175,16 @@
       <label class="account-remember"><input type="checkbox" id="gateRemember" checked> Запомнить меня</label>
       <button class="cta" id="gateSubmit">Войти</button>
       <div class="auth-gate-hint">Нет аккаунта? Открой игру через Telegram и задай логин в профиле.</div>
+    </div>
+  </div>
+
+<div class="onboard" id="onboard" hidden>
+    <div class="onboard-card">
+      <div class="onboard-emoji" id="onboardEmoji">💣</div>
+      <div class="onboard-title" id="onboardTitle">Добро пожаловать!</div>
+      <div class="onboard-text" id="onboardText">Открывай клетки, собирай множитель и забирай выигрыш. Внизу — вкладки: Игра, Активности, Топ и Профиль.</div>
+      <div class="onboard-dots" id="onboardDots"></div>
+      <button class="cta" id="onboardNext" type="button">Далее</button>
     </div>
   </div>
 
@@ -878,5 +1209,7 @@
 </div>
 
 <script src="/static/app.js"></script>
+<script src="/static/club_front_block.js"></script>
+<script src="/static/pet_front_block.js"></script>
 </body>
 </html>
