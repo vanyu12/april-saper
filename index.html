@@ -44,12 +44,7 @@
           <span class="bonus-main"><b>Бонус</b><small id="hourlyHint">раз в час</small></span>
           <span class="bonus-badge" id="hourlyBadge">Забрать</span>
         </button>
-        <button class="bonus-card" id="spinCard">
-          <span class="bonus-icon">🎡</span>
-          <span class="bonus-main"><b>Колесо дня</b><small id="spinHint">День 1</small></span>
-          <span class="bonus-badge" id="spinBadge">Крутить</span>
-        </button>
-      </div>
+        </div>
       <div class="game-switch compact" id="gameSwitch">
         <button class="game-picker-btn" id="gamePickerBtn" type="button"
                 aria-haspopup="dialog" aria-expanded="false">
@@ -369,7 +364,7 @@
       <div class="profile-nav" id="profileNav">
         <button class="profile-nav-btn" data-scroll="accountCard">Аккаунт</button>
         <button class="profile-nav-btn" data-scroll="cardTransfer">Перевод</button>
-        <button class="profile-nav-btn" data-scroll="cardPromo">Промокод</button>
+        
         <button class="profile-nav-btn" data-scroll="cardLevel">Уровень</button>
         <button class="profile-nav-btn" data-scroll="achievements">Достижения</button>
       </div>
@@ -464,12 +459,7 @@
         <div class="hint" id="transferHint">Без комиссии. Перевод получает игрок сразу.</div>
       </div>
 
-      <div class="card" id="cardPromo">
-        <div class="card-title">Промокод на GMPOINT</div>
-        <input class="account-input" id="promoRedeemInput" placeholder="Введите промокод">
-        <div class="account-actions">
-          <button class="secondary" id="promoRedeemBtn">Активировать</button>
-        </div>
+
       </div>
 
       <div class="card level-card" id="cardLevel">
@@ -505,11 +495,6 @@
       <div class="card">
         <div class="card-title">Достижения</div>
         <div class="achievements" id="achievements"></div>
-      </div>
-
-      <div class="card">
-        <div class="card-title">Задания дня</div>
-        <div class="quests" id="questsList"></div>
       </div>
 
       <div class="card">
@@ -835,7 +820,7 @@
   </section>
 
   <section class="view" id="view-social">
-    <h3 class="view-title">Активности</h3>
+    <h3 class="view-title">Соц</h3>
     <div class="social-grid">
       <div class="social-card">
         <h4>⚡ Автоигра</h4>
@@ -1055,7 +1040,7 @@
       <div class="social-card">
         <h4>🏆 Турнирный сезон</h4>
         <p class="social-hint">Отбор, плей-офф и крупные призы.</p>
-        <div id="tournamentBox"></div>
+        <div id="tournamentSeasonBox"></div>
       </div>
       <div class="social-card">
         <h4>🃏 Коллекция карт</h4>
@@ -1100,7 +1085,7 @@
       <div class="game-menu-head">
         <div>
           <div class="game-menu-title">Выбери игру</div>
-          <div class="game-menu-sub">6 режимов · один клик</div>
+          <div class="game-menu-sub">9 режимов · один клик</div>
         </div>
         <button class="game-menu-close" id="gameMenuClose" type="button"
                 aria-label="Закрыть">×</button>

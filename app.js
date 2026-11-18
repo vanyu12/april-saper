@@ -308,12 +308,6 @@ function renderBonus() {
     $("hourlyBadge").textContent = u.hourly_ready ? "Забрать" : fmtTime(u.hourly_in);
     $("hourlyHint").textContent = "раз в час · +" + fmt(u.hourly_amount || 100);
   }
-  const spin = $("spinCard");
-  if (spin) {
-    spin.classList.toggle("ready", !!u.spin_ready);
-    $("spinBadge").textContent = u.spin_ready ? "Крутить" : fmtTime(u.spin_in);
-    $("spinHint").textContent = "День " + (u.spin_day || 1);
-  }
   const hint = $("dailySpinHint");
   if (hint) {
     hint.textContent = u.spin_ready
@@ -440,6 +434,7 @@ const HUB_GAMES = [
   ["blackjack", "♠️", "21", "Блэкджек против дилера"],
   ["basket", "🏀", "Баскет", "Один бросок в кольцо ×2,4"],
   ["darts", "🎯", "Дартс", "Яблочко ×5,9 · сектор ×1,98 · мимо ×2,97"],
+  ["fishing", "🎣", "Рыбалка", "Забрось удочку и продай улов"],
 ];
 
 function renderGamesHub() {
@@ -1073,22 +1068,7 @@ async function deletePromo(code) {
   }
 }
 
-async function redeemPromo() {
-  const code = ($("promoRedeemInput").value || "").trim();
-  if (!code) return;
-  try {
-    const data = await api("/api/promo/redeem", { code });
-    state.user.gmpoint = data.gmpoint;
-    toast(`+${fmt(data.amount)} GMPOINT`);
-    $("promoRedeemInput").value = "";
-    sfx.cash();
-    renderAll();
-  } catch (e) {
-    toast(e.message);
-  }
-}
-
-function toggleDrawer(show) {
+async function toggleDrawer(show) {
   const drawer = $("drawer");
   if (!drawer) return;
   drawer.hidden = !show;
@@ -1744,7 +1724,7 @@ function renderWheel() {
 }
 
 function renderQuests() {
-  const boxes = [$("questsList"), $("tasksQuests")].filter(Boolean);
+  const boxes = [$("tasksQuests")].filter(Boolean);
   if (!boxes.length) return;
   const items = state.quests || [];
   const hourItems = state.hourQuests || [];
@@ -4160,7 +4140,6 @@ function bind() {
     const row = btn.closest(".row");
     if (row) deletePromo(row.dataset.code);
   });
-  if ($("promoRedeemBtn")) $("promoRedeemBtn").addEventListener("click", redeemPromo);
 
   $("adminUsers").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-act]");
@@ -4307,7 +4286,6 @@ function bind() {
   bindAdminEconomy();
 
   if ($("hourlyCard")) $("hourlyCard").addEventListener("click", claimHourly);
-  if ($("spinCard")) $("spinCard").addEventListener("click", () => switchView("tasks"));
   if ($("dailySpinBtn")) $("dailySpinBtn").addEventListener("click", spinDaily);
   if ($("inviteList")) $("inviteList").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-step]");
@@ -4615,7 +4593,7 @@ function bind() {
     }
   });
 
-  $("questsList").addEventListener("click", async (e) => {
+  $("tasksQuests").addEventListener("click", async (e) => {
     const btn = e.target.closest(".quest-claim");
     if (!btn || btn.disabled) return;
     try {
@@ -5869,7 +5847,7 @@ async function loadMap() {
 }
 
 function renderTournament() {
-  const box = $("tournamentBox");
+  const box = $("tournamentSeasonBox");
   if (!box) return;
   const data = state.tournament || {};
   const seasons = data.seasons || [];
