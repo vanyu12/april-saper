@@ -2200,10 +2200,490 @@ def build_dispatcher(db: Database) -> Dispatcher:
         ])
         return text, keyboard
 
+    def cars_text(user: dict) -> str:
+        count = len(db.cars(user["user_id"]))
+        return (f"🚗 <b>АВТО</b>\n"
+                "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                f"🛡 Автомобилей: <b>{count}</b>\n\n"
+                "🏬 Магазин — покупай машины и сдавай их в аренду.\n"
+                f"💰 Баланс: <b>{num(user['balance'])}</b>")
+
+    def shop_keyboard() -> InlineKeyboardMarkup:
+        rows = [[InlineKeyboardButton(
+            text=f"{car['icon']} {car['title']} · {num(car['price'])}",
+            callback_data=f"carshop:{car['key']}")]
+            for car in game.CARS]
+        rows.append([InlineKeyboardButton(text="🚗 Мои машины", callback_data="cars:list")])
+        rows.append([webapp_button()])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def my_cars_keyboard(cars: list[dict]) -> InlineKeyboardMarkup:
+        rows = []
+        for car in cars:
+            model = car["model"]
+            c = game.CAR_BY_KEY.get(model)
+            label = c["title"] if c else model
+            rows.append([InlineKeyboardButton(
+                text=f"{c['icon'] if c else '🚗'} {label}",
+                callback_data=f"car:open:{car['id']}")])
+        rows.append([InlineKeyboardButton(text="🏬 Магазин", callback_data="cars:menu")])
+        rows.append([webapp_button()])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def car_view(car: dict) -> tuple[str, InlineKeyboardMarkup]:
+        c = game.CAR_BY_KEY.get(car["model"]) or {}
+        title = c.get("title", car["model"])
+        icon = c.get("icon", "🚗")
+        speed = c.get("speed", 0)
+        fuel_max = int(car["fuel_max"]) or c.get("fuel_max", 0)
+        fuel = int(car["fuel"])
+        left = max(0, int(car["rent_until"]) - int(time.time()))
+        lines = [f"{icon} <b>{title}</b>",
+                 "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
+                 f"🚀 Скорость: {speed} км/ч",
+                 f"⛽ Топливо: {fuel}/{fuel_max}л ({num(game.CAR_FUEL_PRICE)}/л)"]
+        if left > 0:
+            lines.append(f"🛠 В аренде, вернётся через {left_text(left)}")
+        text = "\n".join(lines)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⛽ Заправить", callback_data=f"car:fuel:{car['id']}"),
+             InlineKeyboardButton(text="🏁 Гонки", callback_data=f"car:race:{car['id']}"),
+             InlineKeyboardButton(text="🚕 Такси", callback_data=f"car:taxi:{car['id']}")],
+            [InlineKeyboardButton(text="🗓 В аренду", callback_data=f"car:rent:{car['id']}"),
+             InlineKeyboardButton(text="💵 Продать", callback_data=f"car:sell:{car['id']}")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="cars:list")],
+        ])
+        return text, keyboard
+
+    def car_rent_text(user: dict, car: dict) -> tuple[str, InlineKeyboardMarkup]:
+        c = game.CAR_BY_KEY.get(car["model"]) or {}
+        title = c.get("title", car["model"])
+        icon = c.get("icon", "🚗")
+        text = (f"{icon} <b>{title}</b>\n"
+                "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                "Выбери период сдачи в аренду")
+        rows = [[InlineKeyboardButton(
+            text=f"💵 {h}ч · {num(game.rent_price(car['model'], h))}",
+            callback_data=f"car:rentgo:{car['id']}:{h}")]
+            for h in game.RENT_HOURS]
+        rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"car:open:{car['id']}")])
+        return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
     @dp.message(Command("case", "cases", "keys"))
     async def case_cmd(message: Message) -> None:
         user = get_user(message)
         await message.answer(cases_text(user), reply_markup=cases_keyboard())
+
+    @dp.message(Command("auto", "cars", "avto"))
+    async def auto_cmd(message: Message) -> None:
+        user = get_user(message)
+        await message.answer(cars_text(user), reply_markup=shop_keyboard())
+
+    @dp.callback_query(F.data == "cars:menu")
+    async def cars_menu_cb(callback) -> None:
+        user = get_user(callback)
+        await safe_edit(callback.message, cars_text(user), shop_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data == "cars:list")
+    async def cars_list_cb(callback) -> None:
+        user = get_user(callback)
+        cars = db.cars(user["user_id"])
+        if not cars:
+            await callback.answer("У тебя пока нет машин — купи в магазине",
+                                  show_alert=True)
+            await safe_edit(callback.message, cars_text(user), shop_keyboard())
+            return
+        await safe_edit(callback.message,
+                        ("🚗 <b>ТВОИ АВТОМОБИЛИ</b>\n"
+                         "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                         f"🛡 Машин: <b>{len(cars)}</b>"),
+                        my_cars_keyboard(cars))
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("carshop:"))
+    async def carshop_cb(callback) -> None:
+        key = callback.data.split(":", 1)[-1]
+        car = game.CAR_BY_KEY.get(key)
+        if not car:
+            await callback.answer("Такой машины нет", show_alert=True)
+            return
+        user = get_user(callback)
+        price = int(car["price"])
+        if int(user["balance"]) < price:
+            await callback.answer(f"Не хватает: нужно {num(price)}",
+                                  show_alert=True)
+            return
+        if not db.car_add(user["user_id"], key, price, int(car["fuel_max"])):
+            await callback.answer("Не удалось купить", show_alert=True)
+            return
+        await callback.answer(f"Куплено! −{num(price)}")
+        fresh = db.user(user["user_id"])
+        cars = db.cars(user["user_id"])
+        await safe_edit(callback.message,
+                        ("🚗 <b>ТВОИ АВТОМОБИЛИ</b>\n"
+                         "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                         f"🛡 Машин: <b>{len(cars)}</b>\n\n"
+                         f"💰 Баланс: <b>{num(fresh['balance'])}</b>"),
+                        my_cars_keyboard(cars))
+
+    @dp.callback_query(F.data.startswith("car:open:"))
+    async def car_open_cb(callback) -> None:
+        car_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        car = db.car(user["user_id"], car_id)
+        if not car:
+            await callback.answer("Машина не найдена", show_alert=True)
+            return
+        text, keyboard = car_view(car)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("car:fuel:"))
+    async def car_fuel_cb(callback) -> None:
+        car_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        car = db.car(user["user_id"], car_id)
+        if not car:
+            await callback.answer("Машина не найдена", show_alert=True)
+            return
+        model = car["model"]
+        fuel_max = int(car["fuel_max"]) or int(game.CAR_BY_KEY[model]["fuel_max"])
+        need = fuel_max - int(car["fuel"])
+        price = need * int(game.CAR_FUEL_PRICE)
+        if int(car["fuel"]) >= fuel_max:
+            await callback.answer("Бак уже полный", show_alert=True)
+            return
+        if not db.car_fuel(car_id, user["user_id"], need, price):
+            await callback.answer(f"Не хватает на топливо: {num(price)}",
+                                  show_alert=True)
+            return
+        await callback.answer(f"Заправлено, −{num(price)}")
+        fresh = db.car(user["user_id"], car_id)
+        text, keyboard = car_view(fresh)
+        await safe_edit(callback.message, text, keyboard)
+
+    @dp.callback_query(F.data.startswith("car:race:"))
+    async def car_race_cb(callback) -> None:
+        car_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        car = db.car(user["user_id"], car_id)
+        if not car:
+            await callback.answer("Машина не найдена", show_alert=True)
+            return
+        if int(car["fuel"]) < 10:
+            await callback.answer("Нужно топливо для гонки", show_alert=True)
+            return
+        profit = 5_000 + int(car["fuel_max"]) * 40
+        db.add_balance(user["user_id"], profit)
+        db.car_fuel(car_id, user["user_id"], -10, 0)
+        await callback.answer(f"🏁 Выиграл заезд! +{num(profit)}")
+        fresh = db.car(user["user_id"], car_id)
+        text, keyboard = car_view(fresh)
+        await safe_edit(callback.message, text, keyboard)
+
+    @dp.callback_query(F.data.startswith("car:taxi:"))
+    async def car_taxi_cb(callback) -> None:
+        car_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        car = db.car(user["user_id"], car_id)
+        if not car:
+            await callback.answer("Машина не найдена", show_alert=True)
+            return
+        if int(car["fuel"]) < 5:
+            await callback.answer("Нужно топливо для такси", show_alert=True)
+            return
+        profit = 2_000 + int(car["fuel_max"]) * 15
+        db.add_balance(user["user_id"], profit)
+        db.car_fuel(car_id, user["user_id"], -5, 0)
+        await callback.answer(f"🚕 Заработал таксистом! +{num(profit)}")
+        fresh = db.car(user["user_id"], car_id)
+        text, keyboard = car_view(fresh)
+        await safe_edit(callback.message, text, keyboard)
+
+    @dp.callback_query(F.data.startswith("car:rent:"))
+    async def car_rent_cb(callback) -> None:
+        car_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        car = db.car(user["user_id"], car_id)
+        if not car:
+            await callback.answer("Машина не найдена", show_alert=True)
+            return
+        if int(car["rent_until"]) > int(time.time()):
+            await callback.answer("Машина уже в аренде", show_alert=True)
+            return
+        text, keyboard = car_rent_text(user, car)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("car:rentgo:"))
+    async def car_rentgo_cb(callback) -> None:
+        parts = callback.data.split(":")
+        car_id = int(parts[2])
+        hours = int(parts[3])
+        user = get_user(callback)
+        car = db.car(user["user_id"], car_id)
+        if not car:
+            await callback.answer("Машина не найдена", show_alert=True)
+            return
+        price = game.rent_price(car["model"], hours)
+        if not price:
+            await callback.answer("Такого тарифа нет", show_alert=True)
+            return
+        if int(user["balance"]) < price:
+            await callback.answer(f"Не хватает: нужно {num(price)}",
+                                  show_alert=True)
+            return
+        until = int(time.time()) + hours * 3600
+        db.add_balance(user["user_id"], -price)
+        db.car_set_rent(car_id, user["user_id"], until)
+        await callback.answer(f"Сдано в аренду на {hours}ч, +{num(price)}")
+        fresh = db.car(user["user_id"], car_id)
+        text, keyboard = car_view(fresh)
+        await safe_edit(callback.message, text, keyboard)
+
+    @dp.callback_query(F.data.startswith("car:sell:"))
+    async def car_sell_cb(callback) -> None:
+        car_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        car = db.car(user["user_id"], car_id)
+        if not car:
+            await callback.answer("Машина не найдена", show_alert=True)
+            return
+        model = car["model"]
+        base = int(game.CAR_BY_KEY[model]["price"]) if model in game.CAR_BY_KEY else 0
+        refund = int(base * 0.5)
+        db.car_sell(car_id, user["user_id"], refund)
+        await callback.answer(f"Продана за {num(refund)}")
+        cars = db.cars(user["user_id"])
+        await safe_edit(callback.message,
+                        ("🚗 <b>ТВОИ АВТОМОБИЛИ</b>\n"
+                         "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                         f"🛡 Машин: <b>{len(cars)}</b>"),
+                        my_cars_keyboard(cars))
+
+    def yachts_text(user: dict) -> str:
+        count = len(db.yachts(user["user_id"]))
+        return (f"🛥️ <b>ЯХТЫ</b>\n"
+                "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                f"🛡 Яхт: <b>{count}</b>\n\n"
+                "🏬 Магазин — покупай яхты, катай круизы и лови рыбу.\n"
+                f"💰 Баланс: <b>{num(user['balance'])}</b>")
+
+    def yacht_shop_keyboard() -> InlineKeyboardMarkup:
+        rows = [[InlineKeyboardButton(
+            text=f"{y['icon']} {y['title']} · {num(y['price'])}",
+            callback_data=f"yachtshop:{y['key']}")]
+            for y in game.YACHTS]
+        rows.append([InlineKeyboardButton(text="🛥️ Мои яхты", callback_data="yachts:list")])
+        rows.append([webapp_button()])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def my_yachts_keyboard(yachts: list[dict]) -> InlineKeyboardMarkup:
+        rows = []
+        for yacht in yachts:
+            model = yacht["model"]
+            y = game.YACHT_BY_KEY.get(model)
+            label = y["title"] if y else model
+            rows.append([InlineKeyboardButton(
+                text=f"{y['icon'] if y else '🛥️'} {label}",
+                callback_data=f"yacht:open:{yacht['id']}")])
+        rows.append([InlineKeyboardButton(text="🏬 Магазин", callback_data="yachts:menu")])
+        rows.append([webapp_button()])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def yacht_view(yacht: dict) -> tuple[str, InlineKeyboardMarkup]:
+        y = game.YACHT_BY_KEY.get(yacht["model"]) or {}
+        title = y.get("title", yacht["model"])
+        icon = y.get("icon", "🛥️")
+        capacity = y.get("capacity", 0)
+        fuel_max = int(yacht["fuel_max"]) or y.get("fuel_max", 0)
+        fuel = int(yacht["fuel"])
+        now = int(time.time())
+        left = max(0, int(yacht["cruise_until"]) - now)
+        fish_left = max(0, int(yacht["fish_at"]) + game.YACHT_FISH_COOLDOWN - now)
+        lines = [f"{icon} <b>{title}</b>",
+                 "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
+                 f"👤 Вместимость: {num(capacity)}чел",
+                 f"⛽ Топливо: {fuel}/{fuel_max}л "
+                 f"({num(y.get('fuel_price', 0))}/л)"]
+        if left > 0:
+            lines.append(f"🛳️ В круизе, вернётся через {left_text(left)}")
+        if fish_left > 0:
+            lines.append(f"🎣 Рыбалка через {left_text(fish_left)}")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⛽ Заправить", callback_data=f"yacht:fuel:{yacht['id']}"),
+             InlineKeyboardButton(text="🎣 Рыбалка", callback_data=f"yacht:fish:{yacht['id']}"),
+             InlineKeyboardButton(text="🛳️ Круиз", callback_data=f"yacht:cruise:{yacht['id']}")],
+            [InlineKeyboardButton(text="💵 Продать", callback_data=f"yacht:sell:{yacht['id']}")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="yachts:list")],
+        ])
+        return "\n".join(lines), keyboard
+
+    @dp.message(Command("yachts", "yacht"))
+    async def yachts_cmd(message: Message) -> None:
+        user = get_user(message)
+        await message.answer(yachts_text(user), reply_markup=yacht_shop_keyboard())
+
+    @dp.callback_query(F.data == "yachts:menu")
+    async def yachts_menu_cb(callback) -> None:
+        user = get_user(callback)
+        await safe_edit(callback.message, yachts_text(user), yacht_shop_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data == "yachts:list")
+    async def yachts_list_cb(callback) -> None:
+        user = get_user(callback)
+        yachts = db.yachts(user["user_id"])
+        if not yachts:
+            await callback.answer("У тебя пока нет яхт — купи в магазине",
+                                  show_alert=True)
+            await safe_edit(callback.message, yachts_text(user), yacht_shop_keyboard())
+            return
+        await safe_edit(callback.message,
+                        ("🛥️ <b>ТВОИ ЯХТЫ</b>\n"
+                         "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                         f"🛡 Яхт: <b>{len(yachts)}</b>"),
+                        my_yachts_keyboard(yachts))
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("yachtshop:"))
+    async def yachtshop_cb(callback) -> None:
+        key = callback.data.split(":", 1)[-1]
+        yacht = game.YACHT_BY_KEY.get(key)
+        if not yacht:
+            await callback.answer("Такой яхты нет", show_alert=True)
+            return
+        user = get_user(callback)
+        price = int(yacht["price"])
+        if int(user["balance"]) < price:
+            await callback.answer(f"Не хватает: нужно {num(price)}",
+                                  show_alert=True)
+            return
+        if not db.yacht_add(user["user_id"], key, price, int(yacht["fuel_max"])):
+            await callback.answer("Не удалось купить", show_alert=True)
+            return
+        await callback.answer(f"Куплено! −{num(price)}")
+        fresh = db.user(user["user_id"])
+        yachts = db.yachts(user["user_id"])
+        await safe_edit(callback.message,
+                        ("🛥️ <b>ТВОИ ЯХТЫ</b>\n"
+                         "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                         f"🛡 Яхт: <b>{len(yachts)}</b>\n\n"
+                         f"💰 Баланс: <b>{num(fresh['balance'])}</b>"),
+                        my_yachts_keyboard(yachts))
+
+    @dp.callback_query(F.data.startswith("yacht:open:"))
+    async def yacht_open_cb(callback) -> None:
+        yacht_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        yacht = db.yacht(user["user_id"], yacht_id)
+        if not yacht:
+            await callback.answer("Яхта не найдена", show_alert=True)
+            return
+        text, keyboard = yacht_view(yacht)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("yacht:fuel:"))
+    async def yacht_fuel_cb(callback) -> None:
+        yacht_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        yacht = db.yacht(user["user_id"], yacht_id)
+        if not yacht:
+            await callback.answer("Яхта не найдена", show_alert=True)
+            return
+        model = yacht["model"]
+        y = game.YACHT_BY_KEY.get(model) or {}
+        fuel_max = int(yacht["fuel_max"]) or int(y.get("fuel_max", 0))
+        need = fuel_max - int(yacht["fuel"])
+        if need <= 0:
+            await callback.answer("Бак уже полный", show_alert=True)
+            return
+        price = need * int(y.get("fuel_price", 0))
+        if not db.yacht_fuel(yacht_id, user["user_id"], need, price):
+            await callback.answer(f"Не хватает на топливо: {num(price)}",
+                                  show_alert=True)
+            return
+        await callback.answer(f"Заправлено, −{num(price)}")
+        fresh = db.yacht(user["user_id"], yacht_id)
+        text, keyboard = yacht_view(fresh)
+        await safe_edit(callback.message, text, keyboard)
+
+    @dp.callback_query(F.data.startswith("yacht:fish:"))
+    async def yacht_fish_cb(callback) -> None:
+        yacht_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        yacht = db.yacht(user["user_id"], yacht_id)
+        if not yacht:
+            await callback.answer("Яхта не найдена", show_alert=True)
+            return
+        now = int(time.time())
+        if int(yacht["fish_at"]) + game.YACHT_FISH_COOLDOWN > now:
+            left = int(yacht["fish_at"]) + game.YACHT_FISH_COOLDOWN - now
+            await callback.answer(f"Рыбалка через {left_text(left)}", show_alert=True)
+            return
+        if int(yacht["fuel"]) < game.YACHT_FISH_FUEL:
+            await callback.answer("Нужно топливо для рыбалки", show_alert=True)
+            return
+        profit = game.yacht_fish_profit(yacht["model"])
+        db.yacht_fuel(yacht_id, user["user_id"], -game.YACHT_FISH_FUEL, 0)
+        db.yacht_set_fish(yacht_id, user["user_id"], now)
+        db.add_balance(user["user_id"], profit)
+        await callback.answer(f"🎣 Улов! +{num(profit)}")
+        fresh = db.yacht(user["user_id"], yacht_id)
+        text, keyboard = yacht_view(fresh)
+        await safe_edit(callback.message, text, keyboard)
+
+    @dp.callback_query(F.data.startswith("yacht:cruise:"))
+    async def yacht_cruise_cb(callback) -> None:
+        yacht_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        yacht = db.yacht(user["user_id"], yacht_id)
+        if not yacht:
+            await callback.answer("Яхта не найдена", show_alert=True)
+            return
+        now = int(time.time())
+        if int(yacht["cruise_until"]) > now:
+            left = int(yacht["cruise_until"]) - now
+            await callback.answer(f"Яхта в круизе: {left_text(left)}", show_alert=True)
+            return
+        y = game.YACHT_BY_KEY.get(yacht["model"]) or {}
+        fuel_need = 21
+        if int(yacht["fuel"]) < fuel_need:
+            await callback.answer(f"Нужно {fuel_need} л топлива", show_alert=True)
+            return
+        hours = int(y.get("cruise_hours", 1))
+        profit = int(y.get("cruise_profit", 0))
+        db.yacht_fuel(yacht_id, user["user_id"], -fuel_need, 0)
+        db.yacht_set_cruise(yacht_id, user["user_id"], now + hours * 3600)
+        db.add_balance(user["user_id"], profit)
+        await callback.answer(f"🛳️ Круиз! +{num(profit)}")
+        fresh = db.yacht(user["user_id"], yacht_id)
+        text, keyboard = yacht_view(fresh)
+        await safe_edit(callback.message,
+                        f"🛳️ Круиз начался, прибыль +{num(profit)}\n\n{text}",
+                        keyboard)
+
+    @dp.callback_query(F.data.startswith("yacht:sell:"))
+    async def yacht_sell_cb(callback) -> None:
+        yacht_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        yacht = db.yacht(user["user_id"], yacht_id)
+        if not yacht:
+            await callback.answer("Яхта не найдена", show_alert=True)
+            return
+        model = yacht["model"]
+        base = int(game.YACHT_BY_KEY[model]["price"]) if model in game.YACHT_BY_KEY else 0
+        refund = int(base * 0.5)
+        db.yacht_sell(yacht_id, user["user_id"], refund)
+        await callback.answer(f"Продана за {num(refund)}")
+        yachts = db.yachts(user["user_id"])
+        await safe_edit(callback.message,
+                        ("🛥️ <b>ТВОИ ЯХТЫ</b>\n"
+                         "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                         f"🛡 Яхт: <b>{len(yachts)}</b>"),
+                        my_yachts_keyboard(yachts))
 
     @dp.callback_query(F.data == "case:menu")
     async def case_menu_cb(callback) -> None:
@@ -2327,6 +2807,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "/bonus — часовой и ежедневный бонусы\n"
             "/deposit — вклады под процент\n"
             "/case — кейсы за GMPOINT\n"
+            "/auto — автомобили: купить, заправить, сдать в аренду\n"
+            "/yachts — яхты: заправка, рыбалка, круиз\n"
             "/tasks — приглашения и спонсоры\n"
             "/achievements — уровни и достижения\n"
             "/top — рейтинг игроков\n"
@@ -3691,6 +4173,8 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="spin", description="Колесо дня"),
         BotCommand(command="bonus", description="Бонусы"),
         BotCommand(command="case", description="Кейсы за GMPOINT"),
+        BotCommand(command="auto", description="Автомобили и аренда"),
+        BotCommand(command="yachts", description="Яхты: круиз и рыбалка"),
         BotCommand(command="balance", description="Профиль и статистика"),
         BotCommand(command="prefix", description="Префиксы и оформление ника"),
         BotCommand(command="deposit", description="Депозиты"),

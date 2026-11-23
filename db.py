@@ -57,6 +57,29 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS cars (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id   INTEGER NOT NULL,
+        model     TEXT NOT NULL,
+        fuel      INTEGER NOT NULL DEFAULT 0,
+        fuel_max  INTEGER NOT NULL DEFAULT 0,
+        rent_until INTEGER NOT NULL DEFAULT 0,
+        bought_at INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS yachts (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id    INTEGER NOT NULL,
+        model      TEXT NOT NULL,
+        fuel       INTEGER NOT NULL DEFAULT 0,
+        fuel_max   INTEGER NOT NULL DEFAULT 0,
+        cruise_until INTEGER NOT NULL DEFAULT 0,
+        fish_at    INTEGER NOT NULL DEFAULT 0,
+        bought_at  INTEGER NOT NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS users (
         user_id          INTEGER PRIMARY KEY,
         username         TEXT,
@@ -2987,6 +3010,117 @@ class Database:
                    (user_id,))
         self.add_balance(user_id, total)
         return total, len(rows)
+
+    # --- автомобили ------------------------------------------------------
+    def car_add(self, user_id: int, model: str, price: int, fuel_max: int) -> int:
+        """Купить машину: списать price и вернуть id новой записи (0 при нехватке средств)."""
+        balance = self._row("SELECT balance FROM users WHERE user_id = ?",
+                            (user_id,))
+        if not balance or int(balance["balance"]) < price:
+            return 0
+        self.add_balance(user_id, -price)
+        self._exec(
+            """INSERT INTO cars (user_id, model, fuel, fuel_max, rent_until, bought_at)
+               VALUES (?, ?, 0, ?, 0, ?)""",
+            (user_id, model, int(fuel_max), int(time.time())))
+        row = self._row("SELECT MAX(id) AS id FROM cars WHERE user_id = ?",
+                        (user_id,))
+        return int(row["id"]) if row and row["id"] else 0
+
+    def cars(self, user_id: int) -> list[dict]:
+        return self._rows(
+            "SELECT * FROM cars WHERE user_id = ? ORDER BY id ASC", (user_id,))
+
+    def car(self, user_id: int, car_id: int) -> dict | None:
+        return self._row(
+            "SELECT * FROM cars WHERE id = ? AND user_id = ?", (car_id, user_id))
+
+    def car_fuel(self, car_id: int, user_id: int, qty: int, price: int) -> bool:
+        """Заправить машину: списать цену топлива, вернуть True при успехе."""
+        balance = self._row("SELECT balance FROM users WHERE user_id = ?",
+                            (user_id,))
+        if not balance or int(balance["balance"]) < price:
+            return False
+        self.add_balance(user_id, -price)
+        self._exec(
+            "UPDATE cars SET fuel = MIN(fuel + ?, fuel_max) WHERE id = ? AND user_id = ?",
+            (qty, car_id, user_id))
+        return True
+
+    def car_set_rent(self, car_id: int, user_id: int, until: int) -> bool:
+        self._exec(
+            "UPDATE cars SET rent_until = ? WHERE id = ? AND user_id = ?",
+            (until, car_id, user_id))
+        return True
+
+    def car_sell(self, car_id: int, user_id: int, refund: int) -> bool:
+        row = self._row("SELECT model FROM cars WHERE id = ? AND user_id = ?",
+                        (car_id, user_id))
+        if not row:
+            return False
+        self._exec("DELETE FROM cars WHERE id = ? AND user_id = ?",
+                   (car_id, user_id))
+        self.add_balance(user_id, refund)
+        return True
+
+    # --- яхты -------------------------------------------------------------
+    def yacht_add(self, user_id: int, model: str, price: int, fuel_max: int) -> int:
+        """Купить яхту: списать price и вернуть id новой записи (0 при нехватке средств)."""
+        balance = self._row("SELECT balance FROM users WHERE user_id = ?",
+                            (user_id,))
+        if not balance or int(balance["balance"]) < price:
+            return 0
+        self.add_balance(user_id, -price)
+        self._exec(
+            """INSERT INTO yachts (user_id, model, fuel, fuel_max,
+                   cruise_until, fish_at, bought_at)
+               VALUES (?, ?, 0, ?, 0, 0, ?)""",
+            (user_id, model, int(fuel_max), int(time.time())))
+        row = self._row("SELECT MAX(id) AS id FROM yachts WHERE user_id = ?",
+                        (user_id,))
+        return int(row["id"]) if row and row["id"] else 0
+
+    def yachts(self, user_id: int) -> list[dict]:
+        return self._rows(
+            "SELECT * FROM yachts WHERE user_id = ? ORDER BY id ASC", (user_id,))
+
+    def yacht(self, user_id: int, yacht_id: int) -> dict | None:
+        return self._row(
+            "SELECT * FROM yachts WHERE id = ? AND user_id = ?",
+            (yacht_id, user_id))
+
+    def yacht_fuel(self, yacht_id: int, user_id: int, qty: int, price: int) -> bool:
+        """Заправить яхту: списать стоимость топлива."""
+        balance = self._row("SELECT balance FROM users WHERE user_id = ?",
+                            (user_id,))
+        if not balance or int(balance["balance"]) < price:
+            return False
+        if price:
+            self.add_balance(user_id, -price)
+        self._exec(
+            "UPDATE yachts SET fuel = MAX(0, MIN(fuel + ?, fuel_max)) "
+            "WHERE id = ? AND user_id = ?", (qty, yacht_id, user_id))
+        return True
+
+    def yacht_set_cruise(self, yacht_id: int, user_id: int, until: int) -> None:
+        self._exec(
+            "UPDATE yachts SET cruise_until = ? WHERE id = ? AND user_id = ?",
+            (until, yacht_id, user_id))
+
+    def yacht_set_fish(self, yacht_id: int, user_id: int, at: int) -> None:
+        self._exec(
+            "UPDATE yachts SET fish_at = ? WHERE id = ? AND user_id = ?",
+            (at, yacht_id, user_id))
+
+    def yacht_sell(self, yacht_id: int, user_id: int, refund: int) -> bool:
+        row = self._row("SELECT model FROM yachts WHERE id = ? AND user_id = ?",
+                        (yacht_id, user_id))
+        if not row:
+            return False
+        self._exec("DELETE FROM yachts WHERE id = ? AND user_id = ?",
+                   (yacht_id, user_id))
+        self.add_balance(user_id, refund)
+        return True
 
     # --- кланы -----------------------------------------------------------
     def create_clan(self, clan_id: str, name: str, tag: str, owner_id: int,

@@ -1360,6 +1360,65 @@ MEDALS = [
      "desc": "Поймай 5 разных видов рыб."},
     {"key": "combo_master", "title": "Мастер комбо", "icon": "🎯",
      "desc": "Соверши серию из 10 побед в игре «Сапёр»."},
-    {"key": "lucky", "title": "Везунчик", "icon": "🍀",
+{"key": "lucky", "title": "Везунчик", "icon": "🍀",
      "desc": "Поймай легендарную рыбу."},
 ]
+
+
+# --- автомобили ------------------------------------------------------
+# Цены и тарифы соразмерны экономике игры, механика один в один с эталоном.
+CAR_FUEL_PRICE = 30  # стоимость 1 л топлива в mCoin (эталон: 30$/л)
+
+CARS = [
+    {"key": "sedan", "title": "Седан", "icon": "🚗", "speed": 180,
+     "fuel_max": 60, "price": 50_000, "rent": {1: 90_000, 4: 120_000, 8: 180_000}},
+    {"key": "sport", "title": "Спортивный", "icon": "🏎️", "speed": 300,
+     "fuel_max": 90, "price": 150_000, "rent": {1: 250_000, 4: 350_000, 8: 500_000}},
+    {"key": "bugatti", "title": "Bugatti Divo", "icon": "🚘", "speed": 420,
+     "fuel_max": 110, "price": 400_000,
+     "rent": {1: 600_000, 4: 800_000, 8: 1_200_000}},
+    {"key": "super", "title": "Суперкар", "icon": "🛞", "speed": 520,
+     "fuel_max": 130, "price": 1_000_000,
+     "rent": {1: 1_500_000, 4: 2_000_000, 8: 3_000_000}},
+]
+
+CAR_BY_KEY = {car["key"]: car for car in CARS}
+
+
+def rent_price(model: str, hours: int) -> int:
+    """Стоимость сдачи машины в аренду на `hours` часов (эталон: 1ч/4ч/8ч)."""
+    car = CAR_BY_KEY.get(model)
+    if not car or hours not in car["rent"]:
+        return 0
+    return car["rent"][hours]
+
+
+RENT_HOURS = (1, 4, 8)
+
+
+# --- яхты -------------------------------------------------------------
+# Механика один в один с эталоном: заправка, рыбалка, круиз, продажа.
+YACHT_FISH_FUEL = 10        # литров на рыбалку
+YACHT_FISH_COOLDOWN = 600   # секунд между рыбалками
+
+YACHTS = [
+    {"key": "boat", "title": "Катер", "icon": "🚤", "capacity": 200,
+     "fuel_max": 200, "fuel_price": 40, "price": 300_000,
+     "cruise_hours": 1, "cruise_profit": 25_000},
+    {"key": "eclipse", "title": "Яхта «Eclipse»", "icon": "🛥️",
+     "capacity": 30_000, "fuel_max": 500, "fuel_price": 70,
+     "price": 800_000, "cruise_hours": 1, "cruise_profit": 81_000},
+    {"key": "mega", "title": "Мега-яхта", "icon": "🛳️", "capacity": 60_000,
+     "fuel_max": 900, "fuel_price": 90, "price": 1_800_000,
+     "cruise_hours": 1, "cruise_profit": 160_000},
+]
+
+YACHT_BY_KEY = {yacht["key"]: yacht for yacht in YACHTS}
+
+
+def yacht_fish_profit(model: str) -> int:
+    """Улов с рыбалки на яхте: доля от круиза."""
+    yacht = YACHT_BY_KEY.get(model)
+    if not yacht:
+        return 0
+    return int(yacht["cruise_profit"] * 0.15)
