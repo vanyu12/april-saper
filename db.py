@@ -49,6 +49,14 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS islands (
+        user_id   INTEGER PRIMARY KEY,
+        islands   TEXT NOT NULL DEFAULT '{}',
+        income_at INTEGER NOT NULL DEFAULT 0,
+        total_earned INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS users (
         user_id          INTEGER PRIMARY KEY,
         username         TEXT,
@@ -6041,6 +6049,147 @@ class Database:
     PET_HUNGER_SEC = 4 * 3600
     PET_MAX_LEVEL = 10
     PET_PLAY_COOLDOWN = 300
+
+    # --- острова (пассивный доход за GMPOINT) --------------------------
+    ISLAND_TYPES = {
+        "sand":  {"name": "Песчаный",  "emoji": "🏝️", "cost": 0,   "income": 2,   "base": 0},
+        "palm":  {"name": "Пальмовый", "emoji": "🌴", "cost": 150, "income": 6,   "base": 1},
+        "volcano": {"name": "Вулкан",  "emoji": "🌋", "cost": 400, "income": 14,  "base": 2},
+        "ice":   {"name": "Ледяной",   "emoji": "🧊", "cost": 900, "income": 30,  "base": 3},
+        "city":  {"name": "Мегаполис", "emoji": "🏙️", "cost": 2000, "income": 65, "base": 4},
+        "zen":   {"name": "Храм",      "emoji": "⛩️", "cost": 5000, "income": 140, "base": 5},
+    }
+    ISLAND_COLLECT_SEC = 3600
+    ISLAND_MAX_LEVEL = 5
+
+    def _ensure_islands(self, user_id: int) -> dict:
+        row = self._row("SELECT * FROM islands WHERE user_id = ?", (user_id,))
+        if row:
+            return dict(row)
+        self._exec(
+            "INSERT INTO islands (user_id, islands, income_at, total_earned) "
+            "VALUES (?, '{}', ?, 0)",
+            (user_id, int(time.time())))
+        row = self._row("SELECT * FROM islands WHERE user_id = ?", (user_id,))
+        return dict(row) if row else {}
+
+    def _user_gmpoint(self, user_id: int) -> int:
+        row = self._row("SELECT gmpoint FROM users WHERE user_id = ?", (user_id,))
+        return int(row["gmpoint"]) if row else 0
+
+    def _decode_islands(self, raw: str) -> dict:
+        try:
+            data = json.loads(raw or "{}")
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        for key in self.ISLAND_TYPES:
+            if key not in data:
+                data[key] = {"owned": False, "level": 1}
+            if not isinstance(data[key], dict):
+                data[key] = {"owned": False, "level": 1}
+        return data
+
+    def _encode_islands(self, data: dict) -> str:
+        return json.dumps(data, ensure_ascii=False)
+
+    def islands_state(self, user_id: int) -> dict:
+        rec = self._ensure_islands(user_id)
+        data = self._decode_islands(rec["islands"])
+        now = int(time.time())
+        gained = self._island_gained(rec, data, now)
+        return {
+            "islands": data,
+            "types": [
+                {"key": k, "name": v["name"], "emoji": v["emoji"],
+                 "cost": v["cost"], "income": v["income"],
+                 "max_level": self.ISLAND_MAX_LEVEL}
+                for k, v in self.ISLAND_TYPES.items()
+            ],
+            "income_gained": gained,
+            "income_rate": self._island_rate(data),
+            "total_earned": int(rec["total_earned"]),
+            "gmpoint": self._user_gmpoint(user_id),
+        }
+
+    def _island_rate(self, data: dict) -> int:
+        total = 0
+        for key, spec in self.ISLAND_TYPES.items():
+            item = data.get(key) or {}
+            if item.get("owned"):
+                total += int(spec["income"]) * max(1, int(item.get("level") or 1))
+        return total
+
+    def _island_gained(self, rec: dict, data: dict, now: int) -> int:
+        rate = self._island_rate(data)
+        if rate <= 0:
+            return 0
+        last = int(rec["income_at"]) or now
+        cycles = (now - last) // self.ISLAND_COLLECT_SEC
+        if cycles <= 0:
+            return 0
+        return cycles * rate
+
+    def island_buy(self, user_id: int, key: str) -> dict | None:
+        spec = self.ISLAND_TYPES.get(key)
+        if not spec:
+            return None
+        with self._lock:
+            rec = self._ensure_islands(user_id)
+            data = self._decode_islands(rec["islands"])
+            if data[key]["owned"]:
+                return None
+            cost = int(spec["cost"])
+            if (self._user_gmpoint(user_id) or 0) < cost:
+                return None
+            if not self.spend_gmpoint(user_id, cost):
+                return None
+            self.log_gmpoint(user_id, -cost, "island_buy")
+            data[key] = {"owned": True, "level": 1}
+            self._exec(
+                "UPDATE islands SET islands = ? WHERE user_id = ?",
+                (self._encode_islands(data), user_id))
+            return self.islands_state(user_id)
+
+    def island_upgrade(self, user_id: int, key: str) -> dict | None:
+        spec = self.ISLAND_TYPES.get(key)
+        if not spec:
+            return None
+        with self._lock:
+            rec = self._ensure_islands(user_id)
+            data = self._decode_islands(rec["islands"])
+            item = data[key]
+            if not item["owned"]:
+                return None
+            level = int(item.get("level") or 1)
+            if level >= self.ISLAND_MAX_LEVEL:
+                return None
+            cost = int(spec["cost"]) * level
+            if (self._user_gmpoint(user_id) or 0) < cost:
+                return None
+            if not self.spend_gmpoint(user_id, cost):
+                return None
+            self.log_gmpoint(user_id, -cost, "island_upgrade")
+            data[key]["level"] = level + 1
+            self._exec(
+                "UPDATE islands SET islands = ? WHERE user_id = ?",
+                (self._encode_islands(data), user_id))
+            return self.islands_state(user_id)
+
+    def island_collect(self, user_id: int) -> dict | None:
+        with self._lock:
+            rec = self._ensure_islands(user_id)
+            data = self._decode_islands(rec["islands"])
+            now = int(time.time())
+            gained = self._island_gained(rec, data, now)
+            if gained > 0:
+                self.add_gmpoint(user_id, gained)
+                self.log_gmpoint(user_id, gained, "island_collect")
+            self._exec(
+                "UPDATE islands SET income_at = ?, total_earned = total_earned + ? "
+                "WHERE user_id = ?", (now, gained, user_id))
+            return self.islands_state(user_id)
 
     def _ensure_pet(self, user_id: int) -> dict:
         row = self._row(

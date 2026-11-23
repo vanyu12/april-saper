@@ -2930,6 +2930,7 @@ function renderAllNow() {
 
 let socialInited = false;
 function renderSocialOnce() {
+  const activeCat = activeSocialCat();
   renderAutoPanel();
   renderTournaments();
   renderNotifications();
@@ -2937,11 +2938,45 @@ function renderSocialOnce() {
   renderFriends();
   renderLeagues();
   renderAchievementsDetail();
-  renderNewPanels();
+  renderSocialPanelsFor(activeCat);
   if (socialInited) return;
   socialInited = true;
   loadSocialExtras();
   loadAllNew();
+  initSocialTabs();
+}
+
+function activeSocialCat() {
+  const btn = document.querySelector("#socialTabs .tab.active");
+  return btn ? btn.dataset.cat : "prog";
+}
+
+function initSocialTabs() {
+  const tabs = document.getElementById("socialTabs");
+  if (!tabs || tabs.dataset.bound) return;
+  tabs.dataset.bound = "1";
+  tabs.addEventListener("click", (e) => {
+    const btn = e.target.closest(".tab");
+    if (!btn) return;
+    tabs.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    btn.classList.add("active");
+    renderSocialPanelsFor(btn.dataset.cat);
+  });
+}
+
+function renderSocialPanelsFor(cat) {
+  document.querySelectorAll(".social-group").forEach(g => {
+    g.hidden = g.dataset.cat !== cat;
+  });
+  // Рисуем лениво только панели активной категории, чтобы не нагружать рендер.
+  const lazyRenders = {
+    prog: () => { renderStreaks(); renderChests(); renderPrestige(); renderGoals(); renderCalendar(); renderBattlepass(); renderAnalytics(); renderTournament(); renderProfileAbilities(); },
+    social: () => { renderClans(); renderFriends(); renderLeagues(); renderWars(); renderRaids(); renderUserSearch(); renderGifts(); renderPvp(); renderLive(); renderGuild(); renderPartners(); renderNews(); },
+    biz: () => { renderLoans(); renderWorkers(); renderFarm(); renderOrders(); renderEconomy(); renderMap(); renderStreet(); renderRestaurant(); renderTokens(); renderShips(); renderCraft(); },
+    fun: () => { renderCards(); renderEnergy(); renderArena(); renderBingo(); renderEncyclopedia(); renderEvents(); renderMedals(); renderDungeon(); renderCardMarket(); renderClub(); renderPet(); },
+  };
+  const fn = lazyRenders[cat];
+  try { if (fn) fn(); } catch (e) {}
 }
 
 const socialCacheTTL = 60000;
@@ -2970,8 +3005,9 @@ function loadSocialLazy() {
     ["tour", loadTournament],
     ["cards", loadCardMarket],
     ["street", loadStreet],
-    ["club", loadClub],
-    ["pet", loadPet],
+["club", loadClub],
+  ["pet", loadPet],
+  ["islands", loadIslands],
   ];
   for (const [key, fn] of jobs) {
     if (socialCache(key)) continue;
@@ -3640,6 +3676,7 @@ function renderNewPanels() {
   renderStreet();
   renderClub();
   renderPet();
+  renderIslands();
 }
 
 async function loadSocialExtras() {

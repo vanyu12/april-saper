@@ -3343,6 +3343,9 @@ body::after {
 
 /* ---- соц-вьюха: автоигра, кланы, друзья, маркет, лиги, ачивки ---- */
 .social-grid { display: grid; gap: 14px; padding: 12px 0 20px; }
+.social-group[hidden] { display: none; }
+.social-group { display: grid; gap: 14px; }
+.social-tabs { position: sticky; top: 0; z-index: 5; background: var(--panel, #0f1620); }
 .social-card {
   background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
   border: 1px solid rgba(255,255,255,0.08);
@@ -4212,4 +4215,108 @@ body::after {
 .club-hist-winner {
   color: var(--gold, #ffcc4d);
   font-weight: 600;
+}
+
+/* ---- Острова ---- */
+.isl-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.isl-stat {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 10px;
+  padding: 8px;
+  text-align: center;
+}
+.isl-stat span {
+  display: block;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  margin-bottom: 2px;
+}
+.isl-stat b {
+  font-size: 13px;
+}
+.isl-collect-btn {
+  width: 100%;
+  margin-bottom: 12px;
+}
+.isl-collect-btn:disabled {
+  opacity: 0.5;
+}
+.isl-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+.isl-card {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.isl-img-wrap {
+  position: relative;
+  height: 92px;
+  overflow: hidden;
+}
+.isl-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  filter: saturate(0.7);
+}
+.isl-owned .isl-img {
+  filter: none;
+}
+.isl-lvl {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 20px;
+}
+.isl-lock {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  font-size: 26px;
+}
+.isl-info {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.isl-name {
+  font-weight: 700;
+  font-size: 13px;
+}
+.isl-income {
+  color: var(--gold, #ffcc4d);
+  font-size: 12px;
+}
+.isl-max {
+  color: var(--gold, #ffcc4d);
+  font-weight: 700;
+  font-size: 12px;
+}
+.isl-bal {
+  margin: 12px 0 0;
+  font-size: 13px;
+  text-align: center;
+}
+.isl-card .secondary {
+  width: 100%;
 }

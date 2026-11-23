@@ -6492,6 +6492,49 @@ class Api:
                           f"action_ban {action}")
         return self._json({"ok": True, "bans": self.db.admin_action_bans()})
 
+    # ==================== ОСТРОВА ====================
+
+    async def islands_view(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        return self._json({"ok": True, **self.db.islands_state(user["user_id"])})
+
+    async def island_buy(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        try:
+            body = await request.json()
+        except Exception:
+            return self._fail("bad_request")
+        key = str(body.get("key") or "").strip()
+        state = self.db.island_buy(user["user_id"], key)
+        if not state:
+            return self._json({"ok": False, "error": "no_funds_or_owned"})
+        return self._json({"ok": True, **state})
+
+    async def island_upgrade(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        try:
+            body = await request.json()
+        except Exception:
+            return self._fail("bad_request")
+        key = str(body.get("key") or "").strip()
+        state = self.db.island_upgrade(user["user_id"], key)
+        if not state:
+            return self._json({"ok": False, "error": "no_funds_or_max"})
+        return self._json({"ok": True, **state})
+
+    async def island_collect(self, request: web.Request) -> web.Response:
+        user = self._auth(request)
+        if not user:
+            return self._fail("unauthorized", 401)
+        return self._json({"ok": True,
+                           **self.db.island_collect(user["user_id"])})
+
 
 def build_app(db: Database) -> web.Application:
     api = Api(db)
@@ -6754,6 +6797,10 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/pet/play", api.pet_play)
     app.router.add_post("/api/pet/top", api.pet_top)
     app.router.add_post("/api/club/history", api.club_history)
+    app.router.add_post("/api/islands", api.islands_view)
+    app.router.add_post("/api/island/buy", api.island_buy)
+    app.router.add_post("/api/island/upgrade", api.island_upgrade)
+    app.router.add_post("/api/island/collect", api.island_collect)
 
     here = __import__("os").path.dirname(__file__)
     web_dir = __import__("os").path.join(here, "web")
