@@ -2300,6 +2300,12 @@ class Database:
     def admin_set_role(self, user_id: int, role: str) -> None:
         self._exec("UPDATE users SET role = ? WHERE user_id = ?", (role, user_id))
 
+    def admin_exists(self) -> bool:
+        """Есть ли в базе хоть один админ или модератор."""
+        row = self._row(
+            "SELECT COUNT(*) AS c FROM users WHERE role IN ('admin', 'moderator')")
+        return bool(row and int(row["c"]) > 0)
+
     def admin_reset_cooldowns(self, user_id: int) -> None:
         """Сбросить бонусы и колесо, чтобы админ мог выдать их повторно."""
         self._exec(

@@ -194,12 +194,13 @@ def build_dispatcher(db: Database) -> Dispatcher:
         "mines", "saper", "bonus", "daily",
         "auto", "cars", "avto", "yachts", "yacht", "biz", "business",
         "balance", "profile", "me",
-        "admin", "setbal", "addbal", "role", "give", "gmp", "setgmp",
+        "admin", "owner", "adminboot",
+        "setbal", "addbal", "role", "give", "gmp", "setgmp",
         "xp", "energy", "pref", "givecar", "giveyacht", "resetcd",
         "ban", "unban", "logs", "stats", "player", "maint", "game",
-        "broadcast", "treasury", "treasury_give", "donate", "vznos",
+        "broadcast", "treasury", "kazna", "treasury_give", "donate", "vznos",
         "promo_new",
-        "promo_list", "promo_off", "promo_post", "giveaway", "bind",
+        "promo_list", "promo_off", "promo_post", "giveaway", "rozysh", "bind",
         "chatid", "roles",
     }
 
@@ -235,7 +236,15 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if user["user_id"] in config.admin_ids:
             return True
         name = (user.get("username") or "").lower()
-        return bool(name) and name in config.admin_usernames
+        if name and name in config.admin_usernames:
+            return True
+        # Если ADMIN_IDS не задан, владельцем считается админ из базы.
+        return (user.get("role") or "user") == "admin"
+
+    def has_any_admin() -> bool:
+        if config.admin_ids or config.admin_usernames:
+            return True
+        return db.admin_exists()
 
     def role_of(user: dict) -> str:
         if is_owner(user):
@@ -3456,7 +3465,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if len(parts) < 3:
             await message.answer("Формат: <code>/setbal 123456789 5000</code>")
             return
-        target = find_user(parts[1])
+        target = resolve_target(actor, parts[1])
         try:
             value = int(parts[2])
         except ValueError:
@@ -3482,7 +3491,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await message.answer("Формат: <code>/addbal 123456789 500</code> "
                                  "(минус — списать)")
             return
-        target = find_user(parts[1])
+        target = resolve_target(actor, parts[1])
         try:
             delta = int(parts[2])
         except ValueError:
@@ -3513,7 +3522,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 "Формат: <code>/role 123456789 moderator</code>\n"
                 "Роли: user, moderator, admin.")
             return
-        target = find_user(parts[1])
+        target = resolve_target(actor, parts[1])
         role = parts[2].lower()
         if not target:
             await message.answer("Игрок не найден.")
@@ -3546,7 +3555,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await message.answer("Формат: <code>/give 123456789 insurance 2</code>\n"
                                  "Предметы: " + ", ".join(sorted(known)))
             return
-        target = find_user(parts[1])
+        target = resolve_target(actor, parts[1])
         item = parts[2].strip()
         try:
             qty = int(parts[3]) if len(parts) > 3 else 1
@@ -4066,6 +4075,23 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await message.answer("Распоряжаться казной может только владелец.")
             return
         await _treasury_give(message, actor)
+
+    @dp.message(Command("owner", "adminboot"))
+    async def owner_boot_cmd(message: Message) -> None:
+        user = get_user(message)
+        if has_any_admin():
+            await message.answer("Админ уже назначен. Используй "
+                                 "<code>/role ID admin</code>.")
+            return
+        if getattr(message.chat, "type", "") != "private":
+            await message.answer("Первого админа назначай в личке с ботом.")
+            return
+        db.admin_set_role(user["user_id"], "admin")
+        db.admin_log(user["user_id"], user["user_id"], "owner_bootstrap", {})
+        await message.answer(
+            "✅ Ты назначен админом.\n"
+            "Теперь работают /setbal, /addbal, /gmp, /give, /givecar "
+            "и остальные админ-команды.")
 
     @dp.message(Command("admin"))
     async def admin_cmd(message: Message) -> None:
