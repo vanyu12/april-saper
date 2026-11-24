@@ -2665,7 +2665,7 @@ class Database:
             "SELECT th.user_id, SUM(th.amount) AS total, "
             "MAX(u.username) AS username, MAX(u.first_name) AS first_name "
             "FROM treasury_history th LEFT JOIN users u ON u.user_id = th.user_id "
-            "WHERE th.kind = 'loss' AND th.user_id IS NOT NULL "
+            "WHERE th.kind IN ('loss', 'donate') AND th.user_id IS NOT NULL "
             "GROUP BY th.user_id ORDER BY total DESC LIMIT ?", (int(limit),))
 
     def treasury_losers(self, limit: int = 10) -> list[dict]:

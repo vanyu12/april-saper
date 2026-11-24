@@ -135,8 +135,9 @@ def main_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🚗 Авто", callback_data="cars:menu"),
          InlineKeyboardButton(text="🛥️ Яхты", callback_data="yachts:menu")],
         [InlineKeyboardButton(text="💼 Бизнес", callback_data="biz:menu"),
-         InlineKeyboardButton(text="👤 Профиль", callback_data="menu:balance")],
-        [InlineKeyboardButton(text="ℹ️ Меню", callback_data="help:menu")],
+         InlineKeyboardButton(text="💰 Казна", callback_data="treasury:menu")],
+        [InlineKeyboardButton(text="👤 Профиль", callback_data="menu:balance"),
+         InlineKeyboardButton(text="ℹ️ Меню", callback_data="help:menu")],
     ] + ([[chat_button()]] if chat_button() else []))
 
 
@@ -148,7 +149,8 @@ def play_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🚗 Авто", callback_data="cars:menu"),
          InlineKeyboardButton(text="🛥️ Яхты", callback_data="yachts:menu")],
         [InlineKeyboardButton(text="💼 Бизнес", callback_data="biz:menu"),
-         InlineKeyboardButton(text="ℹ️ Меню", callback_data="help:menu")],
+         InlineKeyboardButton(text="💰 Казна", callback_data="treasury:menu")],
+        [InlineKeyboardButton(text="ℹ️ Меню", callback_data="help:menu")],
     ])
 
 
@@ -195,7 +197,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
         "admin", "setbal", "addbal", "role", "give", "gmp", "setgmp",
         "xp", "energy", "pref", "givecar", "giveyacht", "resetcd",
         "ban", "unban", "logs", "stats", "player", "maint", "game",
-        "broadcast", "treasury", "treasury_give", "promo_new",
+        "broadcast", "treasury", "treasury_give", "donate", "vznos",
+        "promo_new",
         "promo_list", "promo_off", "promo_post", "giveaway", "bind",
         "chatid", "roles",
     }
@@ -2487,6 +2490,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer("Такого тарифа нет", show_alert=True)
             return
         net, tax = game.after_tax(price, game.TAX_CAR_RENT)
+        if tax:
+            db.add_treasury(tax)
+            db.treasury_log("tax", user["user_id"], tax)
         model = game.CAR_BY_KEY.get(car["model"]) or {}
         tank = {"fuel_max": int(car["fuel_max"]) or model.get("fuel_max", 0)}
         need = game.rent_fuel_needed(tank, hours)
@@ -2759,6 +2765,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
             return
         gross = game.fish_reward(yacht["model"])
         net, tax = game.after_tax(gross, game.TAX_YACHT_FISH)
+        if tax:
+            db.add_treasury(tax)
+            db.treasury_log("tax", user["user_id"], tax)
         db.add_balance(user["user_id"], net)
         db.yacht_set_fish(yacht_id, user["user_id"],
                           now + game.YACHT_FISH_SUCCESS_COOLDOWN)
@@ -2789,6 +2798,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
         hours = int(y.get("cruise_hours", 1))
         net, tax = game.after_tax(int(y.get("cruise_profit", 0)),
                                   game.TAX_YACHT_CRUISE)
+        if tax:
+            db.add_treasury(tax)
+            db.treasury_log("tax", user["user_id"], tax)
         db.yacht_fuel(yacht_id, user["user_id"], -fuel_need, 0)
         db.yacht_set_cruise(yacht_id, user["user_id"], now + hours * 3600)
         db.add_balance(user["user_id"], net)
@@ -2968,6 +2980,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
         count = len(db.businesses(user["user_id"]))
         net, tax = game.after_tax(int(b.get("income", 0)),
                                   game.business_tax(count))
+        if tax:
+            db.add_treasury(tax)
+            db.treasury_log("tax", user["user_id"], tax)
         db.add_balance(user["user_id"], net)
         db.business_set_collect(biz_id, user["user_id"], now)
         await callback.answer(f"Собрано +{num(net)}, налог {num(tax)}")
@@ -3132,7 +3147,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
             [InlineKeyboardButton(text="🚗 Авто", callback_data="cars:menu"),
              InlineKeyboardButton(text="🛥️ Яхты", callback_data="yachts:menu")],
             [InlineKeyboardButton(text="💼 Бизнес", callback_data="biz:menu"),
-             InlineKeyboardButton(text="👤 Профиль", callback_data="menu:balance")],
+             InlineKeyboardButton(text="💰 Казна", callback_data="treasury:menu")],
+            [InlineKeyboardButton(text="👤 Профиль", callback_data="menu:balance")],
             [webapp_button()],
         ]
         if chat_button():
@@ -3880,8 +3896,15 @@ def build_dispatcher(db: Database) -> Dispatcher:
                      {"sent": sent, "failed": failed})
         await message.answer(f"📣 Рассылка: отправлено {sent}, ошибок {failed}.")
 
-    @dp.message(Command("treasury", "kazna"))
-    async def treasury_cmd(message: Message) -> None:
+    TREASURY_PRESETS = (1_000, 10_000, 100_000)
+
+    def treasury_here(message) -> bool:
+        """Казна работает только в основном чате, если он привязан."""
+        if not config.chat_id:
+            return True
+        return int(getattr(message.chat, "id", 0) or 0) == int(config.chat_id)
+
+    def treasury_text() -> str:
         contributors = db.treasury_contributors(10)
         losers = db.treasury_losers(10)
         contrib_lines = []
@@ -3896,7 +3919,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
         blocks = [
             "💰 <b>Казна игры</b>\n",
             f"Сейчас в казне: <b>{num(db.treasury())}</b> mCoin\n",
-            "Сюда идёт 1% с каждой проигранной ставки.",
+            "Сюда идут налоги с аренды, круизов, улова и бизнеса,",
+            "1% с проигранных ставок и добровольные взносы.",
         ]
         if contrib_lines:
             blocks.append("\n<b>Кто пополнил казну:</b>\n" + "\n".join(contrib_lines))
@@ -3904,14 +3928,95 @@ def build_dispatcher(db: Database) -> Dispatcher:
             blocks.append("\nКазну пока никто не пополнял.")
         if loser_lines:
             blocks.append("\n<b>Кто больше всех проиграл:</b>\n" + "\n".join(loser_lines))
-        await message.answer("\n".join(blocks))
+        return "\n".join(blocks)
 
-    @dp.message(Command("treasury_give"))
-    async def treasury_give_cmd(message: Message) -> None:
-        actor = get_user(message)
-        if not is_owner(actor):
-            await message.answer("Распоряжаться казной может только владелец.")
+    def treasury_keyboard(user: dict) -> InlineKeyboardMarkup:
+        rows = []
+        pair = []
+        for amount in TREASURY_PRESETS:
+            pair.append(InlineKeyboardButton(
+                text=f"💰 +{num(amount)}",
+                callback_data=f"treasury:donate:{amount}"))
+            if len(pair) == 2:
+                rows.append(pair)
+                pair = []
+        if pair:
+            rows.append(pair)
+        if is_owner(user):
+            rows.append([InlineKeyboardButton(
+                text="🎁 Раздать казну", callback_data="treasury:give")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    @dp.message(Command("treasury", "kazna"))
+    async def treasury_cmd(message: Message) -> None:
+        user = get_user(message)
+        if not treasury_here(message):
+            await message.answer("Казна доступна только в основном чате.")
             return
+        await message.answer(treasury_text(),
+                             reply_markup=treasury_keyboard(user))
+
+    @dp.callback_query(F.data == "treasury:menu")
+    async def treasury_menu_cb(callback) -> None:
+        user = get_user(callback)
+        if not treasury_here(callback.message):
+            await callback.answer("Казна только в основном чате",
+                                  show_alert=True)
+            return
+        await safe_edit(callback.message, treasury_text(),
+                        treasury_keyboard(user))
+        await callback.answer()
+
+    @dp.message(Command("donate", "vznos"))
+    async def donate_cmd(message: Message) -> None:
+        user = get_user(message)
+        if not treasury_here(message):
+            await message.answer("Казна доступна только в основном чате.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            await message.answer("Формат: <code>/donate 5000</code>")
+            return
+        amount = int(parts[1])
+        if amount <= 0:
+            await message.answer("Сумма должна быть больше нуля.")
+            return
+        if int(user["balance"]) < amount:
+            await message.answer("Не хватает mCoin.")
+            return
+        db.add_balance(user["user_id"], -amount)
+        total = db.add_treasury(amount)
+        db.treasury_log("donate", user["user_id"], amount)
+        await message.answer(f"💰 В казну внесено <b>{num(amount)}</b> mCoin.\n"
+                             f"В казне: <b>{num(total)}</b>.")
+
+    @dp.callback_query(F.data.startswith("treasury:donate:"))
+    async def treasury_donate_cb(callback) -> None:
+        user = get_user(callback)
+        if not treasury_here(callback.message):
+            await callback.answer("Казна только в основном чате",
+                                  show_alert=True)
+            return
+        try:
+            amount = int(callback.data.split(":", 2)[-1])
+        except ValueError:
+            await callback.answer()
+            return
+        if amount <= 0:
+            await callback.answer("Сумма должна быть больше нуля",
+                                  show_alert=True)
+            return
+        if int(user["balance"]) < amount:
+            await callback.answer("Не хватает mCoin", show_alert=True)
+            return
+        db.add_balance(user["user_id"], -amount)
+        db.add_treasury(amount)
+        db.treasury_log("donate", user["user_id"], amount)
+        await callback.answer(f"Внесено +{num(amount)}")
+        await safe_edit(callback.message, treasury_text(),
+                        treasury_keyboard(user))
+
+    async def _treasury_give(message, actor: dict) -> None:
         total = db.take_treasury()
         if total <= 0:
             await message.answer("Казна пуста.")
@@ -3933,9 +4038,34 @@ def build_dispatcher(db: Database) -> Dispatcher:
             db.add_treasury(total - spent)
         db.admin_log(actor["user_id"], None, "treasury_give",
                      {"total": total, "share": share, "players": len(ids)})
+        db.treasury_log("give", None, -spent)
         await message.answer(
             f"💰 Казна раздана: по <b>{num(share)}</b> mCoin "
             f"на {len(ids)} игроков.\nВсего роздано: {num(spent)} mCoin.")
+
+    @dp.callback_query(F.data == "treasury:give")
+    async def treasury_give_cb(callback) -> None:
+        user = get_user(callback)
+        if not treasury_here(callback.message):
+            await callback.answer("Казна только в основном чате",
+                                  show_alert=True)
+            return
+        if not is_owner(user):
+            await callback.answer("Распоряжаться казной может только владелец",
+                                  show_alert=True)
+            return
+        await _treasury_give(callback.message, user)
+
+    @dp.message(Command("treasury_give"))
+    async def treasury_give_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not treasury_here(message):
+            await message.answer("Казна доступна только в основном чате.")
+            return
+        if not is_owner(actor):
+            await message.answer("Распоряжаться казной может только владелец.")
+            return
+        await _treasury_give(message, actor)
 
     @dp.message(Command("admin"))
     async def admin_cmd(message: Message) -> None:
