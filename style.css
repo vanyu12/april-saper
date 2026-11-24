@@ -4320,3 +4320,16 @@ body::after {
 .isl-card .secondary {
   width: 100%;
 }
+
+/* Мини-апп срезан до сапёра: только игра, бонусы и баланс. */
+.nav {
+  display: none !important;
+}
+.view:not(#view-game) {
+  display: none !important;
+}
+#gameSwitch,
+#gameMenu,
+#drawer {
+  display: none !important;
+}

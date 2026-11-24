@@ -193,7 +193,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         "start", "help", "play", "app", "chat", "updates", "news",
         "mines", "saper", "bonus", "daily",
         "auto", "cars", "avto", "yachts", "yacht", "biz", "business",
-        "balance", "profile", "me",
+        "balance", "profile", "me", "deposit", "bank",
         "admin", "owner", "adminboot",
         "setbal", "addbal", "role", "give", "gmp", "setgmp",
         "xp", "energy", "pref", "givecar", "giveyacht", "resetcd",
