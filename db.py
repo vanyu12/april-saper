@@ -2283,6 +2283,18 @@ class Database:
     def admin_set_role(self, user_id: int, role: str) -> None:
         self._exec("UPDATE users SET role = ? WHERE user_id = ?", (role, user_id))
 
+    def admin_reset_cooldowns(self, user_id: int) -> None:
+        """Сбросить бонусы и колесо, чтобы админ мог выдать их повторно."""
+        self._exec(
+            "UPDATE users SET last_daily = 0, last_hourly = 0, last_spin = 0 "
+            "WHERE user_id = ?", (user_id,))
+
+    def admin_set_energy(self, user_id: int, value: int) -> int:
+        value = max(0, int(value))
+        self._exec("UPDATE users SET energy = ?, energy_at = ? WHERE user_id = ?",
+                   (value, int(time.time()), user_id))
+        return value
+
     def admin_log(self, admin_id: int, target_id: int | None, action: str,
                   detail: dict | None = None) -> None:
         self._exec(

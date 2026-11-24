@@ -3141,6 +3141,257 @@ def build_dispatcher(db: Database) -> Dispatcher:
                      {"item": item, "qty": qty})
         await message.answer(f"🎁 Выдано {item} ×{qty}. Всего у игрока: {total}.")
 
+    def resolve_target(actor: dict, raw: str) -> dict | None:
+        """Для админ-команд: me/я — сам вызывающий, иначе ID или @username."""
+        raw = (raw or "").strip()
+        if raw.lower() in ("me", "я", "self", "мне", "себе"):
+            return actor
+        return find_user(raw)
+
+    @dp.message(Command("gmp"))
+    async def gmp_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer(
+                "Формат: <code>/gmp me 100</code> или "
+                "<code>/gmp 123456789 -50</code>")
+            return
+        target = resolve_target(actor, parts[1])
+        try:
+            delta = int(parts[2])
+        except ValueError:
+            await message.answer("Сумма должна быть числом.")
+            return
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        if delta == 0:
+            await message.answer("Сумма не может быть нулём.")
+            return
+        left = db.add_gmpoint(int(target["user_id"]), delta)
+        if left is None:
+            await message.answer("Не хватает GMPOINT для списания.")
+            return
+        db.log_gmpoint(int(target["user_id"]), delta,
+                       f"admin:{actor['user_id']}", int(actor["user_id"]))
+        db.admin_log(actor["user_id"], int(target["user_id"]), "gmp",
+                     {"delta": delta})
+        await message.answer(f"💎 GMPOINT <code>{target['user_id']}</code>: "
+                             f"{num(left)}")
+
+    @dp.message(Command("setgmp"))
+    async def setgmp_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer("Формат: <code>/setgmp me 500</code>")
+            return
+        target = resolve_target(actor, parts[1])
+        try:
+            value = int(parts[2])
+        except ValueError:
+            await message.answer("Значение должно быть числом.")
+            return
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        if value < 0:
+            await message.answer("GMPOINT не может быть отрицательным.")
+            return
+        old = int(target.get("gmpoint") or 0)
+        new_value = db.set_gmpoint(int(target["user_id"]), value)
+        if new_value != old:
+            db.log_gmpoint(int(target["user_id"]), new_value - old,
+                           f"admin_set:{actor['user_id']}",
+                           int(actor["user_id"]))
+        db.admin_log(actor["user_id"], int(target["user_id"]), "setgmp",
+                     {"value": value})
+        await message.answer(f"💎 GMPOINT <code>{target['user_id']}</code>: "
+                             f"{num(new_value)}")
+
+    @dp.message(Command("xp"))
+    async def xp_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer("Формат: <code>/xp me 1000</code> "
+                                 "(минус — списать)")
+            return
+        target = resolve_target(actor, parts[1])
+        try:
+            delta = int(parts[2])
+        except ValueError:
+            await message.answer("Сумма должна быть числом.")
+            return
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        if int(target.get("xp") or 0) + delta < 0:
+            await message.answer("XP не может уйти в минус.")
+            return
+        new_xp = db.add_xp(int(target["user_id"]), delta)
+        db.admin_log(actor["user_id"], int(target["user_id"]), "xp",
+                     {"delta": delta})
+        await message.answer(
+            f"⭐ XP <code>{target['user_id']}</code>: {num(new_xp)} "
+            f"(уровень {game.level_from_xp(new_xp)})")
+
+    @dp.message(Command("energy"))
+    async def energy_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer("Формат: <code>/energy me 100</code> "
+                                 "(минус — списать)")
+            return
+        target = resolve_target(actor, parts[1])
+        try:
+            delta = int(parts[2])
+        except ValueError:
+            await message.answer("Сумма должна быть числом.")
+            return
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        uid = int(target["user_id"])
+        if delta >= 0:
+            new_energy = db.add_energy(uid, delta)
+        else:
+            if not db.spend_energy(uid, -delta):
+                await message.answer("Не хватает энергии для списания.")
+                return
+            new_energy = db.energy(uid)["energy"]
+        db.admin_log(actor["user_id"], uid, "energy", {"delta": delta})
+        await message.answer(f"⚡ Энергия <code>{uid}</code>: {num(new_energy)}")
+
+    @dp.message(Command("pref"))
+    async def pref_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer(
+                "Формат: <code>/pref me pro</code>\n"
+                "Ключи: " + ", ".join(sorted(game.PREFIX_BY_KEY)))
+            return
+        target = resolve_target(actor, parts[1])
+        key = parts[2].strip()
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        if key not in game.PREFIX_BY_KEY and not db.get_custom_prefix(key):
+            await message.answer("Неизвестный префикс. Доступно: "
+                                 + ", ".join(sorted(game.PREFIX_BY_KEY)))
+            return
+        if not db.add_prefix(int(target["user_id"]), key):
+            await message.answer("У игрока уже есть этот префикс.")
+            return
+        db.admin_log(actor["user_id"], int(target["user_id"]), "pref",
+                     {"prefix": key})
+        await message.answer(f"🏷 Префикс <b>{key}</b> выдан "
+                             f"<code>{target['user_id']}</code>.")
+
+    @dp.message(Command("givecar"))
+    async def givecar_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer(
+                "Формат: <code>/givecar me sedan</code>\n"
+                "Модели: " + ", ".join(game.CAR_BY_KEY))
+            return
+        target = resolve_target(actor, parts[1])
+        model = parts[2].strip()
+        car = game.CAR_BY_KEY.get(model)
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        if not car:
+            await message.answer("Неизвестная модель. Доступно: "
+                                 + ", ".join(game.CAR_BY_KEY))
+            return
+        car_id = db.car_add(int(target["user_id"]), model, 0,
+                            int(car["fuel_max"]))
+        if not car_id:
+            await message.answer("Не удалось выдать машину.")
+            return
+        db.admin_log(actor["user_id"], int(target["user_id"]), "givecar",
+                     {"model": model, "car_id": car_id})
+        await message.answer(f"🚗 Выдана машина <b>{car['title']}</b> "
+                             f"(id {car_id}) игроку "
+                             f"<code>{target['user_id']}</code>.")
+
+    @dp.message(Command("giveyacht"))
+    async def giveyacht_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.answer(
+                "Формат: <code>/giveyacht me eclipse</code>\n"
+                "Модели: " + ", ".join(game.YACHT_BY_KEY))
+            return
+        target = resolve_target(actor, parts[1])
+        model = parts[2].strip()
+        yacht = game.YACHT_BY_KEY.get(model)
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        if not yacht:
+            await message.answer("Неизвестная модель. Доступно: "
+                                 + ", ".join(game.YACHT_BY_KEY))
+            return
+        yacht_id = db.yacht_add(int(target["user_id"]), model, 0,
+                                int(yacht["fuel_max"]))
+        if not yacht_id:
+            await message.answer("Не удалось выдать яхту.")
+            return
+        db.admin_log(actor["user_id"], int(target["user_id"]), "giveyacht",
+                     {"model": model, "yacht_id": yacht_id})
+        await message.answer(f"🛥️ Выдана яхта <b>{yacht['title']}</b> "
+                             f"(id {yacht_id}) игроку "
+                             f"<code>{target['user_id']}</code>.")
+
+    @dp.message(Command("resetcd"))
+    async def resetcd_cmd(message: Message) -> None:
+        actor = get_user(message)
+        if not can(actor, "admin"):
+            await message.answer("Команда доступна админам.")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.answer("Формат: <code>/resetcd me</code> или "
+                                 "<code>/resetcd 123456789</code>")
+            return
+        target = resolve_target(actor, parts[1])
+        if not target:
+            await message.answer("Игрок не найден.")
+            return
+        db.admin_reset_cooldowns(int(target["user_id"]))
+        db.admin_log(actor["user_id"], int(target["user_id"]), "resetcd", {})
+        await message.answer("♻️ Кулдауны сброшены: бонусы, час-бонус, "
+                             f"колесо — <code>{target['user_id']}</code>.")
+
     @dp.message(Command("maint"))
     async def maint_cmd(message: Message) -> None:
         actor = get_user(message)
@@ -3301,6 +3552,15 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "/ban ID · /unban ID\n"
             "/setbal ID сумма · /addbal ID сумма\n"
             "/role ID moderator · /give ID предмет\n"
+            f"{DIV}\n"
+            "<b>Выдача без мини-апы</b>\n"
+            "<i>Вместо ID можно писать me — выдаст себе.</i>\n"
+            "/gmp ID сумма · /setgmp ID сумма — GMPOINT\n"
+            "/xp ID сумма — опыт, /energy ID сумма — энергия\n"
+            "/pref ID ключ — префикс\n"
+            "/givecar ID модель · /giveyacht ID модель\n"
+            "/resetcd ID — сбросить бонусы и колесо\n"
+            f"{DIV}\n"
             "/promo_new · /promo_list · /promo_post · /promo_off\n"
             "/maint on|off · /game имя on|off · /broadcast текст\n"
             "/chatid — ID группы или канала",
