@@ -1519,9 +1519,27 @@ BUSINESSES = [
      "income": 210_000, "hours": 12},
     {"key": "it", "title": "IT-компания", "icon": "💻", "price": 6_000_000,
      "income": 560_000, "hours": 24},
+    {"key": "taxi", "title": "Такси-парк", "icon": "🚕", "price": 1_200_000,
+     "income": 110_000, "hours": 8},
+    {"key": "hotel", "title": "Отель", "icon": "🏨", "price": 4_000_000,
+     "income": 340_000, "hours": 12},
+    {"key": "oil", "title": "Нефтевышка", "icon": "🛢️", "price": 9_000_000,
+     "income": 820_000, "hours": 24},
 ]
 
 BUSINESS_BY_KEY = {biz["key"]: biz for biz in BUSINESSES}
 
 BUSINESS_COOLDOWN = {biz["key"]: int(biz["hours"]) * 3600 for biz in BUSINESSES}
+
+# Прогрессивный налог: 30% за первый бизнес, +2% за каждый следующий, максимум 45%.
+BASE_TAX_BUSINESS = TAX_BUSINESS
+TAX_PER_BUSINESS = 0.02
+TAX_BUSINESS_MAX = 0.45
+
+
+def business_tax(count: int) -> float:
+    """Ставка налога для владельца `count` бизнесов."""
+    count = max(0, int(count))
+    return min(TAX_BUSINESS_MAX,
+               BASE_TAX_BUSINESS + TAX_PER_BUSINESS * max(0, count - 1))
 

@@ -5,7 +5,7 @@ import time
 import uuid
 from pathlib import Path
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import BaseMiddleware, Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
@@ -131,29 +131,24 @@ def main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [webapp_button()],
         [InlineKeyboardButton(text="💣 Сапёр в чате", callback_data="menu:mines"),
-         InlineKeyboardButton(text="🎲 Кости", callback_data="menu:dice")],
-        [InlineKeyboardButton(text="🎁 Бонусы", callback_data="menu:bonus"),
-         InlineKeyboardButton(text="🏦 Банк", callback_data="menu:bank")],
-        [InlineKeyboardButton(text="👤 Профиль", callback_data="menu:balance"),
-         InlineKeyboardButton(text="🏅 Достижения", callback_data="menu:ach")],
-        [InlineKeyboardButton(text="🎁 Награды за уровень", callback_data="level:menu"),
-         InlineKeyboardButton(text="🎯 Задания", callback_data="menu:tasks")],
-        [InlineKeyboardButton(text="🏆 Топы", callback_data="top:menu"),
-         InlineKeyboardButton(text="🎰 Игры", callback_data="menu:games")],
-        [InlineKeyboardButton(text="⚔️ Дуэли", callback_data="menu:duel"),
-         InlineKeyboardButton(text="🔐 Честность", callback_data="fair")],
+         InlineKeyboardButton(text="🎁 Бонусы", callback_data="menu:bonus")],
+        [InlineKeyboardButton(text="🚗 Авто", callback_data="cars:menu"),
+         InlineKeyboardButton(text="🛥️ Яхты", callback_data="yachts:menu")],
+        [InlineKeyboardButton(text="💼 Бизнес", callback_data="biz:menu"),
+         InlineKeyboardButton(text="👤 Профиль", callback_data="menu:balance")],
+        [InlineKeyboardButton(text="ℹ️ Меню", callback_data="help:menu")],
     ] + ([[chat_button()]] if chat_button() else []))
 
 
 def play_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [webapp_button()],
-        [InlineKeyboardButton(text="💣 Сапёр в чате", callback_data="menu:mines"),
-         InlineKeyboardButton(text="🎲 Кости", callback_data="menu:dice")],
-        [InlineKeyboardButton(text="🎰 Игры", callback_data="menu:games"),
-         InlineKeyboardButton(text="⚔️ Дуэли", callback_data="menu:duel")],
-        [InlineKeyboardButton(text="🏆 Топ игроков", callback_data="top"),
-         InlineKeyboardButton(text="🔐 Честность игры", callback_data="fair")],
+        [InlineKeyboardButton(text="💣 Сапёр", callback_data="menu:mines"),
+         InlineKeyboardButton(text="🎁 Бонусы", callback_data="menu:bonus")],
+        [InlineKeyboardButton(text="🚗 Авто", callback_data="cars:menu"),
+         InlineKeyboardButton(text="🛥️ Яхты", callback_data="yachts:menu")],
+        [InlineKeyboardButton(text="💼 Бизнес", callback_data="biz:menu"),
+         InlineKeyboardButton(text="ℹ️ Меню", callback_data="help:menu")],
     ])
 
 
@@ -190,6 +185,34 @@ async def safe_edit(message: Message, text: str,
 
 def build_dispatcher(db: Database) -> Dispatcher:
     dp = Dispatcher()
+
+    # Бот срезан до минимума: сапёр, рыбалка, бонусы и бизнес.
+    CORE_COMMANDS = {
+        "start", "help", "play", "app", "chat", "updates", "news",
+        "mines", "saper", "bonus", "daily",
+        "auto", "cars", "avto", "yachts", "yacht", "biz", "business",
+        "balance", "profile", "me",
+        "admin", "setbal", "addbal", "role", "give", "gmp", "setgmp",
+        "xp", "energy", "pref", "givecar", "giveyacht", "resetcd",
+        "ban", "unban", "logs", "stats", "player", "maint", "game",
+        "broadcast", "treasury", "treasury_give", "promo_new",
+        "promo_list", "promo_off", "promo_post", "giveaway", "bind",
+        "chatid", "roles",
+    }
+
+    class CoreOnlyMiddleware(BaseMiddleware):
+        async def __call__(self, handler, event, data):
+            text = (getattr(event, "text", "") or "").strip()
+            if text.startswith("/"):
+                cmd = text[1:].split()[0].split("@")[0].lower()
+                if cmd and cmd not in CORE_COMMANDS:
+                    await event.answer(
+                        "⛔ Команда отключена. Осталось: сапёр, рыбалка "
+                        "и бонусы.\nМеню: /help")
+                    return
+            return await handler(event, data)
+
+    dp.message.outer_middleware(CoreOnlyMiddleware())
 
     def get_user(source) -> dict:
         return db.ensure_user(source.from_user.id, source.from_user.username,
@@ -2799,12 +2822,14 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     def businesses_text(user: dict) -> str:
         count = len(db.businesses(user["user_id"]))
+        rate = game.business_tax(count)
         return (f"💼 <b>БИЗНЕС</b>\n"
                 "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
                 f"🏢 Бизнесов: <b>{count}</b>\n\n"
                 "Покупай дело и собирай доход.\n"
-                f"Налог {int(game.TAX_BUSINESS * 100)}% удерживается "
-                "при сборе.\n"
+                f"Твой налог: <b>{int(rate * 100)}%</b> "
+                f"(растёт с числом бизнесов, максимум "
+                f"{int(game.TAX_BUSINESS_MAX * 100)}%).\n"
                 f"💰 Баланс: <b>{num(int(user['balance']))}</b>")
 
     def business_shop_keyboard() -> InlineKeyboardMarkup:
@@ -2830,12 +2855,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
         rows.append([webapp_button()])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
-    def business_view(biz: dict) -> tuple[str, InlineKeyboardMarkup]:
+    def business_view(biz: dict,
+                      rate: float) -> tuple[str, InlineKeyboardMarkup]:
         b = game.BUSINESS_BY_KEY.get(biz["model"]) or {}
         title = b.get("title", biz["model"])
         icon = b.get("icon", "💼")
-        net, tax = game.after_tax(int(b.get("income", 0)),
-                                  game.TAX_BUSINESS)
+        net, tax = game.after_tax(int(b.get("income", 0)), rate)
         cd = game.BUSINESS_COOLDOWN.get(biz["model"], 0)
         now = int(time.time())
         left = max(0, int(biz["last_collect"]) + cd - now)
@@ -2919,7 +2944,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if not biz:
             await callback.answer("Бизнес не найден", show_alert=True)
             return
-        text, keyboard = business_view(biz)
+        rate = game.business_tax(len(db.businesses(user["user_id"])))
+        text, keyboard = business_view(biz, rate)
         await safe_edit(callback.message, text, keyboard)
         await callback.answer()
 
@@ -2939,11 +2965,15 @@ def build_dispatcher(db: Database) -> Dispatcher:
                                   show_alert=True)
             return
         b = game.BUSINESS_BY_KEY.get(biz["model"]) or {}
-        net, tax = game.after_tax(int(b.get("income", 0)), game.TAX_BUSINESS)
+        count = len(db.businesses(user["user_id"]))
+        net, tax = game.after_tax(int(b.get("income", 0)),
+                                  game.business_tax(count))
         db.add_balance(user["user_id"], net)
         db.business_set_collect(biz_id, user["user_id"], now)
         await callback.answer(f"Собрано +{num(net)}, налог {num(tax)}")
-        text, keyboard = business_view(db.business(user["user_id"], biz_id))
+        text, keyboard = business_view(
+            db.business(user["user_id"], biz_id),
+            game.business_tax(count))
         await safe_edit(callback.message,
                         f"💰 Собрано: <b>+{num(net)}</b> "
                         f"(налог {num(tax)})\n\n{text}", keyboard)
@@ -3068,41 +3098,23 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     HELP_SECTIONS = {
         "games": {
-            "emoji": "🎮", "title": "Игры",
-            "desc": "Игры идут в чате, ставка указывается в команде.\n"
-                    "Нажми на игру — откроется её меню.",
+            "emoji": "🎮", "title": "Игра",
+            "desc": "Осталась одна игра — сапёр. Рыбалка живёт на яхтах.",
+            "buttons": [("💣 Сапёр", "menu:mines")],
+        },
+        "biz": {
+            "emoji": "💼", "title": "Бизнес",
+            "desc": "Авто, яхты и бизнесы: доход, налоги и перерывы.",
             "buttons": [
-                ("💣 Сапёр", "menu:mines"), ("🎲 Кости", "menu:dice"),
-                ("🎰 Рулетка", "menu:roulette"), ("🎰 Слоты", "menu:slots"),
-                ("📈 Краш", "menu:crash"), ("🪙 Монета", "menu:coin"),
-                ("🏀 Баскет", "menu:basket"), ("🎯 Дартс", "menu:darts"),
-                ("⚔️ Дуэль", "menu:duel"),
+                ("🚗 Авто", "cars:menu"), ("🛥️ Яхты", "yachts:menu"),
+                ("💼 Бизнесы", "biz:menu"),
             ],
         },
         "money": {
-            "emoji": "💰", "title": "Баланс и бонусы",
-            "desc": "Бонусы, банк, кейсы, задания и рейтинги.",
+            "emoji": "💰", "title": "Бонусы",
+            "desc": "Бонусы и профиль.",
             "buttons": [
-                ("👤 Профиль", "menu:balance"), ("🎁 Бонусы", "menu:bonus"),
-                ("🏦 Банк", "menu:bank"), ("🎁 Кейсы", "case:menu"),
-                ("🎯 Задания", "menu:tasks"), ("🏅 Достижения", "menu:ach"),
-                ("🏆 Топ", "top:menu"),
-            ],
-        },
-        "profile": {
-            "emoji": "👤", "title": "Профиль",
-            "desc": "Статистика, оформление ника и достижения.",
-            "buttons": [
-                ("👤 Профиль", "menu:balance"),
-                ("🏷 Префиксы", "menu:prefixes"),
-                ("🏅 Достижения", "menu:ach"), ("🏆 Топ", "top:menu"),
-            ],
-        },
-        "biz": {
-            "emoji": "🚗", "title": "Бизнес",
-            "desc": "Машины и яхты: покупай, заправляй, сдавай в аренду.",
-            "buttons": [
-                ("🚗 Автомобили", "cars:menu"), ("🛥️ Яхты", "yachts:menu"),
+                ("🎁 Бонусы", "menu:bonus"), ("👤 Профиль", "menu:balance"),
             ],
         },
     }
@@ -3115,10 +3127,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     def help_menu_keyboard(user: dict) -> InlineKeyboardMarkup:
         rows = [
-            [InlineKeyboardButton(text="🎮 Игры", callback_data="help:sec:games"),
-             InlineKeyboardButton(text="💰 Баланс", callback_data="help:sec:money")],
-            [InlineKeyboardButton(text="👤 Профиль", callback_data="help:sec:profile"),
-             InlineKeyboardButton(text="🚗 Бизнес", callback_data="help:sec:biz")],
+            [InlineKeyboardButton(text="💣 Сапёр", callback_data="menu:mines"),
+             InlineKeyboardButton(text="🎁 Бонусы", callback_data="menu:bonus")],
+            [InlineKeyboardButton(text="🚗 Авто", callback_data="cars:menu"),
+             InlineKeyboardButton(text="🛥️ Яхты", callback_data="yachts:menu")],
+            [InlineKeyboardButton(text="💼 Бизнес", callback_data="biz:menu"),
+             InlineKeyboardButton(text="👤 Профиль", callback_data="menu:balance")],
             [webapp_button()],
         ]
         if chat_button():
