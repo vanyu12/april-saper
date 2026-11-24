@@ -3055,7 +3055,8 @@ class Database:
             return False
         self.add_balance(user_id, -price)
         self._exec(
-            "UPDATE cars SET fuel = MIN(fuel + ?, fuel_max) WHERE id = ? AND user_id = ?",
+            "UPDATE cars SET fuel = MAX(0, MIN(fuel + ?, fuel_max)) "
+            "WHERE id = ? AND user_id = ?",
             (qty, car_id, user_id))
         return True
 

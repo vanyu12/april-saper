@@ -2237,13 +2237,18 @@ def build_dispatcher(db: Database) -> Dispatcher:
         speed = c.get("speed", 0)
         fuel_max = int(car["fuel_max"]) or c.get("fuel_max", 0)
         fuel = int(car["fuel"])
-        left = max(0, int(car["rent_until"]) - int(time.time()))
+        now = int(time.time())
+        left = max(0, int(car["rent_until"]) - now)
         lines = [f"{icon} <b>{title}</b>",
                  "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
                  f"🚀 Скорость: {speed} км/ч",
                  f"⛽ Топливо: {fuel}/{fuel_max}л ({num(game.CAR_FUEL_PRICE)}/л)"]
         if left > 0:
-            lines.append(f"🛠 В аренде, вернётся через {left_text(left)}")
+            lines.append(f"🛠 В аренде, следующая сдача через {left_text(left)}")
+        else:
+            income = game.rent_price(car["model"], 8)
+            lines.append(f"🗓 Аренда 8ч: <b>+{num(income)}</b>, "
+                         f"перерыв {8 * game.RENT_COOLDOWN_MULT}ч")
         text = "\n".join(lines)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⛽ Заправить", callback_data=f"car:fuel:{car['id']}"),
@@ -2259,11 +2264,17 @@ def build_dispatcher(db: Database) -> Dispatcher:
         c = game.CAR_BY_KEY.get(car["model"]) or {}
         title = c.get("title", car["model"])
         icon = c.get("icon", "🚗")
+        tank = {"fuel_max": int(car["fuel_max"]) or c.get("fuel_max", 0)}
         text = (f"{icon} <b>{title}</b>\n"
                 "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
-                "Выбери период сдачи в аренду")
+                "Сдай машину в аренду — деньги приходят сразу.\n"
+                f"Потом перерыв: 1ч → {game.RENT_COOLDOWN_MULT}ч, "
+                f"4ч → {4 * game.RENT_COOLDOWN_MULT}ч, "
+                f"8ч → {8 * game.RENT_COOLDOWN_MULT}ч.\n"
+                f"⛽ Бензин {num(game.CAR_FUEL_PRICE)}/л сжигается за сдачу.")
         rows = [[InlineKeyboardButton(
-            text=f"💵 {h}ч · {num(game.rent_price(car['model'], h))}",
+            text=f"💵 {h}ч · +{num(game.rent_price(car['model'], h))} · "
+                 f"−{game.rent_fuel_needed(tank, h)}л",
             callback_data=f"car:rentgo:{car['id']}:{h}")]
             for h in game.RENT_HOURS]
         rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"car:open:{car['id']}")])
@@ -2371,6 +2382,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if not car:
             await callback.answer("Машина не найдена", show_alert=True)
             return
+        if int(car["rent_until"]) > int(time.time()):
+            await callback.answer("Машина в аренде — недоступна",
+                                  show_alert=True)
+            return
         if int(car["fuel"]) < 10:
             await callback.answer("Нужно топливо для гонки", show_alert=True)
             return
@@ -2389,6 +2404,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
         car = db.car(user["user_id"], car_id)
         if not car:
             await callback.answer("Машина не найдена", show_alert=True)
+            return
+        if int(car["rent_until"]) > int(time.time()):
+            await callback.answer("Машина в аренде — недоступна",
+                                  show_alert=True)
             return
         if int(car["fuel"]) < 5:
             await callback.answer("Нужно топливо для такси", show_alert=True)
@@ -2426,21 +2445,33 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if not car:
             await callback.answer("Машина не найдена", show_alert=True)
             return
+        now = int(time.time())
+        left = int(car["rent_until"]) - now
+        if left > 0:
+            await callback.answer(f"Ещё в аренде: {left_text(left)}",
+                                  show_alert=True)
+            return
         price = game.rent_price(car["model"], hours)
         if not price:
             await callback.answer("Такого тарифа нет", show_alert=True)
             return
-        if int(user["balance"]) < price:
-            await callback.answer(f"Не хватает: нужно {num(price)}",
-                                  show_alert=True)
+        model = game.CAR_BY_KEY.get(car["model"]) or {}
+        tank = {"fuel_max": int(car["fuel_max"]) or model.get("fuel_max", 0)}
+        need = game.rent_fuel_needed(tank, hours)
+        if int(car["fuel"]) < need:
+            await callback.answer(
+                f"Нужно {need} л топлива — сначала заправь", show_alert=True)
             return
-        until = int(time.time()) + hours * 3600
-        db.add_balance(user["user_id"], -price)
-        db.car_set_rent(car_id, user["user_id"], until)
-        await callback.answer(f"Сдано в аренду на {hours}ч, +{num(price)}")
+        db.add_balance(user["user_id"], price)
+        db.car_fuel(car_id, user["user_id"], -need, 0)
+        db.car_set_rent(car_id, user["user_id"],
+                        now + game.rent_cooldown(hours))
+        await callback.answer(f"Сдано на {hours}ч: +{num(price)}, −{need} л")
         fresh = db.car(user["user_id"], car_id)
         text, keyboard = car_view(fresh)
-        await safe_edit(callback.message, text, keyboard)
+        await safe_edit(callback.message,
+                        f"💵 Аренда {hours}ч: <b>+{num(price)}</b>, "
+                        f"бензин −{need} л\n\n{text}", keyboard)
 
     @dp.callback_query(F.data.startswith("car:sell:"))
     async def car_sell_cb(callback) -> None:
@@ -2784,46 +2815,129 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "Сменить seed и увидеть старый можно в приложении на вкладке «Честность»."
         )
 
+    HELP_SECTIONS = {
+        "games": {
+            "emoji": "🎮", "title": "Игры",
+            "desc": "Игры идут в чате, ставка указывается в команде.\n"
+                    "Нажми на игру — откроется её меню.",
+            "buttons": [
+                ("💣 Сапёр", "menu:mines"), ("🎲 Кости", "menu:dice"),
+                ("🎰 Рулетка", "menu:roulette"), ("🎰 Слоты", "menu:slots"),
+                ("📈 Краш", "menu:crash"), ("🪙 Монета", "menu:coin"),
+                ("🏀 Баскет", "menu:basket"), ("🎯 Дартс", "menu:darts"),
+                ("⚔️ Дуэль", "menu:duel"),
+            ],
+        },
+        "money": {
+            "emoji": "💰", "title": "Баланс и бонусы",
+            "desc": "Бонусы, банк, кейсы, задания и рейтинги.",
+            "buttons": [
+                ("👤 Профиль", "menu:balance"), ("🎁 Бонусы", "menu:bonus"),
+                ("🏦 Банк", "menu:bank"), ("🎁 Кейсы", "case:menu"),
+                ("🎯 Задания", "menu:tasks"), ("🏅 Достижения", "menu:ach"),
+                ("🏆 Топ", "top:menu"),
+            ],
+        },
+        "profile": {
+            "emoji": "👤", "title": "Профиль",
+            "desc": "Статистика, оформление ника и достижения.",
+            "buttons": [
+                ("👤 Профиль", "menu:balance"),
+                ("🏷 Префиксы", "menu:prefixes"),
+                ("🏅 Достижения", "menu:ach"), ("🏆 Топ", "top:menu"),
+            ],
+        },
+        "biz": {
+            "emoji": "🚗", "title": "Бизнес",
+            "desc": "Машины и яхты: покупай, заправляй, сдавай в аренду.",
+            "buttons": [
+                ("🚗 Автомобили", "cars:menu"), ("🛥️ Яхты", "yachts:menu"),
+            ],
+        },
+    }
+
+    def help_menu_text(user: dict) -> str:
+        return (head("💣", "Меню") + "\n"
+                "Выбери раздел — внутри игры, бонусы и бизнес.\n\n"
+                f"💰 Баланс: <b>{num(int(user['balance']))}</b> mCoin\n"
+                f"💎 GMPOINT: <b>{num(int(user.get('gmpoint') or 0))}</b>")
+
+    def help_menu_keyboard(user: dict) -> InlineKeyboardMarkup:
+        rows = [
+            [InlineKeyboardButton(text="🎮 Игры", callback_data="help:sec:games"),
+             InlineKeyboardButton(text="💰 Баланс", callback_data="help:sec:money")],
+            [InlineKeyboardButton(text="👤 Профиль", callback_data="help:sec:profile"),
+             InlineKeyboardButton(text="🚗 Бизнес", callback_data="help:sec:biz")],
+            [webapp_button()],
+        ]
+        if chat_button():
+            rows.append([chat_button()])
+        if is_admin(user):
+            rows.append([InlineKeyboardButton(text="🛠 Админ",
+                                              callback_data="help:sec:admin")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def help_section_keyboard(key: str) -> InlineKeyboardMarkup:
+        section = HELP_SECTIONS.get(key)
+        rows = []
+        pair: list[InlineKeyboardButton] = []
+        for text, data in (section["buttons"] if section else []):
+            pair.append(InlineKeyboardButton(text=text, callback_data=data))
+            if len(pair) == 2:
+                rows.append(pair)
+                pair = []
+        if pair:
+            rows.append(pair)
+        rows.append([InlineKeyboardButton(text="◀️ Меню",
+                                          callback_data="help:menu")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
     @dp.message(Command("help"))
     async def help_cmd(message: Message) -> None:
-        await message.answer(
-            head("💣", "Что умеет бот") + "\n"
-            "🎮 <b>Играть в чате</b>\n"
-            "/mines 100 5 — сапёр: ставка и число мин\n"
-            "/dice 100 чёт — кости, выплата ×1,96\n"
-            "/roulette 100 красное — рулетка (зеро ×36)\n"
-            "/slots 100 — слоты (тройки до ×200)\n"
-            "/crash 100 2.5 — краш с целью ×1,20–×10\n"
-            "/coin 100 орёл — орёл и решка, ×1,96\n"
-            "/basket 100 попадёт — баскет: забросит мяч или нет\n"
-            "/darts 100 яблочко — дартс: яблочко, сектор или мимо\n"
-            "/duel 100 @username — дуэль 1×1 на бросок\n"
-            "/spin — колесо дня раз в 12 часов\n"
-            f"{DIV}\n"
-            "💰 <b>Баланс и бонусы</b>\n"
-            "/balance — профиль, ID и статистика\n"
-            "/pay 100 @ник — перевод другому игроку\n"
-            "/promo КОД — активировать промокод\n"
-            "/bonus — часовой и ежедневный бонусы\n"
-            "/deposit — вклады под процент\n"
-            "/case — кейсы за GMPOINT\n"
-            "/auto — автомобили: купить, заправить, сдать в аренду\n"
-            "/yachts — яхты: заправка, рыбалка, круиз\n"
-            "/tasks — приглашения и спонсоры\n"
-            "/achievements — уровни и достижения\n"
-            "/top — рейтинг игроков\n"
-            f"{DIV}\n"
-            "📱 <b>Приложение</b>\n"
-            "/play — полное поле, магазин и история\n"
-            "/ref — ссылка для друзей\n"
-            "/fair — проверка честности\n"
-            f"{DIV}\n"
-            "👥 <b>В группах</b>\n"
-            "Добавьте бота в чат — игры и команды работают там же,\n"
-            "/chatid покажет ID чата для настроек.\n\n"
-            "Валюта mCoin виртуальная: реальные деньги не принимаются и не выводятся.",
-            reply_markup=main_keyboard(),
-        )
+        user = get_user(message)
+        await message.answer(help_menu_text(user),
+                             reply_markup=help_menu_keyboard(user))
+
+    @dp.callback_query(F.data == "help:menu")
+    async def help_menu_cb(callback) -> None:
+        user = get_user(callback)
+        await safe_edit(callback.message, help_menu_text(user),
+                        help_menu_keyboard(user))
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("help:sec:"))
+    async def help_section_cb(callback) -> None:
+        key = callback.data.split(":", 2)[-1]
+        user = get_user(callback)
+        if key == "admin":
+            if not is_admin(user):
+                await callback.answer("Только для админов", show_alert=True)
+                return
+            await safe_edit(
+                callback.message,
+                head("🛠", "Админ") + "\n"
+                "Выдача без мини-апы (вместо ID можно писать me):\n"
+                "/gmp · /setgmp · /xp · /energy · /pref\n"
+                "/givecar · /giveyacht · /resetcd\n"
+                "/setbal · /addbal · /give · /role · /ban · /unban\n"
+                "/promo_new · /promo_list · /promo_off · /broadcast\n"
+                "/logs · /stats · /player · /maint · /game",
+                InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="👥 Все игроки",
+                                          callback_data="adm:pl:1")],
+                    [InlineKeyboardButton(text="◀️ Меню",
+                                          callback_data="help:menu")]]))
+            await callback.answer()
+            return
+        section = HELP_SECTIONS.get(key)
+        if not section:
+            await callback.answer("Раздел не найден", show_alert=True)
+            return
+        await safe_edit(callback.message,
+                        head(section["emoji"], section["title"]) + "\n"
+                        + section["desc"],
+                        help_section_keyboard(key))
+        await callback.answer()
 
     @dp.message(Command("roles"))
     async def roles_cmd(message: Message) -> None:
@@ -4407,44 +4521,9 @@ async def setup_bot(bot: Bot) -> None:
             menu_button=MenuButtonWebApp(
                 text="Играть", web_app=WebAppInfo(url=f"{config.public_url}/")))
     commands = [
-        BotCommand(command="play", description="Открыть приложение"),
-        BotCommand(command="mines", description="Сапёр в чате"),
-        BotCommand(command="dice", description="Кости в чате"),
-        BotCommand(command="roulette", description="Рулетка"),
-        BotCommand(command="slots", description="Слоты"),
-        BotCommand(command="crash", description="Краш"),
-        BotCommand(command="coin", description="Орёл и решка"),
-        BotCommand(command="basket", description="Баскет: бросок в кольцо"),
-        BotCommand(command="darts", description="Дартс: яблочко, сектор или мимо"),
-        BotCommand(command="pay", description="Перевод другому игроку"),
-        BotCommand(command="promo", description="Активировать промокод"),
-        BotCommand(command="updates", description="Что нового"),
-        BotCommand(command="roles", description="Роли и права"),
-        BotCommand(command="chatid", description="ID этого чата"),
-        BotCommand(command="promo_new", description="Админ: создать промокод"),
-        BotCommand(command="promo_list", description="Админ: список промокодов"),
-        BotCommand(command="promo_post", description="Админ: промокод в канал"),
-        BotCommand(command="promo_off", description="Админ: выключить промокод"),
-        BotCommand(command="treasury", description="Казна игры"),
-        BotCommand(command="treasury_top", description="Кто внёс и кто проиграл"),
-        BotCommand(command="giveaway", description="Владелец: розыгрыш казны"),
-        BotCommand(command="bind", description="Владелец: привязать канал и чат"),
-        BotCommand(command="duel", description="Дуэль 1×1"),
-        BotCommand(command="spin", description="Колесо дня"),
-        BotCommand(command="bonus", description="Бонусы"),
-        BotCommand(command="case", description="Кейсы за GMPOINT"),
-        BotCommand(command="auto", description="Автомобили и аренда"),
-        BotCommand(command="yachts", description="Яхты: круиз и рыбалка"),
-        BotCommand(command="balance", description="Профиль и статистика"),
-        BotCommand(command="prefix", description="Префиксы и оформление ника"),
-        BotCommand(command="deposit", description="Депозиты"),
-        BotCommand(command="tasks", description="Задания"),
-        BotCommand(command="achievements", description="Уровни и достижения"),
-        BotCommand(command="top", description="Топ игроков"),
-        BotCommand(command="ref", description="Пригласить друга"),
-        BotCommand(command="fair", description="Честность игры"),
+        BotCommand(command="help", description="Меню и разделы"),
         BotCommand(command="chat", description="Чат игроков"),
-        BotCommand(command="help", description="Помощь"),
+        BotCommand(command="updates", description="Что нового"),
     ]
     try:
         await bot.set_my_commands(commands)
