@@ -1365,28 +1365,68 @@ MEDALS = [
 ]
 
 
+# --- экономика бизнеса ------------------------------------------------
+# Налоги забираются сразу при получении дохода.
+TAX_CAR_RENT = 0.25
+TAX_YACHT_CRUISE = 0.25
+TAX_YACHT_FISH = 0.20
+TAX_BUSINESS = 0.30
+
+
+def after_tax(amount: int, rate: float) -> tuple[int, int]:
+    """Возвращает (на руки, налог)."""
+    amount = max(0, int(amount))
+    tax = int(round(amount * float(rate)))
+    return amount - tax, tax
+
+
 # --- автомобили ------------------------------------------------------
-# Цены и тарифы соразмерны экономике игры, механика один в один с эталоном.
-CAR_FUEL_PRICE = 500  # стоимость 1 л топлива в mCoin
+CAR_FUEL_PRICE = 500  # базовая цена литра, если у модели не указана своя
 
 CARS = [
-    {"key": "sedan", "title": "Седан", "icon": "🚗", "speed": 180,
-     "fuel_max": 60, "price": 50_000, "rent": {1: 90_000, 4: 120_000, 8: 180_000}},
+    {"key": "volga", "title": "Волга", "icon": "🚙", "speed": 140,
+     "fuel_max": 50, "fuel_price": 60, "price": 15_000,
+     "rent": {1: 1_500, 4: 4_500, 8: 7_500}},
+    {"key": "moskvich", "title": "Москвич", "icon": "🚗", "speed": 160,
+     "fuel_max": 55, "fuel_price": 80, "price": 35_000,
+     "rent": {1: 3_000, 4: 9_000, 8: 15_000}},
+    {"key": "sedan", "title": "Седан", "icon": "🚘", "speed": 180,
+     "fuel_max": 60, "fuel_price": 100, "price": 60_000,
+     "rent": {1: 5_000, 4: 15_000, 8: 25_000}},
     {"key": "sport", "title": "Спортивный", "icon": "🏎️", "speed": 300,
-     "fuel_max": 90, "price": 150_000, "rent": {1: 250_000, 4: 350_000, 8: 500_000}},
+     "fuel_max": 90, "fuel_price": 200, "price": 150_000,
+     "rent": {1: 12_000, 4: 36_000, 8: 60_000}},
+    {"key": "bmw", "title": "BMW M5", "icon": "🚗", "speed": 330,
+     "fuel_max": 95, "fuel_price": 250, "price": 250_000,
+     "rent": {1: 20_000, 4: 60_000, 8: 100_000}},
+    {"key": "gelik", "title": "Mercedes G", "icon": "🚙", "speed": 280,
+     "fuel_max": 110, "fuel_price": 300, "price": 350_000,
+     "rent": {1: 26_000, 4: 78_000, 8: 130_000}},
     {"key": "bugatti", "title": "Bugatti Divo", "icon": "🚘", "speed": 420,
-     "fuel_max": 110, "price": 400_000,
-     "rent": {1: 600_000, 4: 800_000, 8: 1_200_000}},
+     "fuel_max": 110, "fuel_price": 400, "price": 500_000,
+     "rent": {1: 38_000, 4: 114_000, 8: 190_000}},
+    {"key": "ferrari", "title": "Ferrari", "icon": "🏎️", "speed": 460,
+     "fuel_max": 120, "fuel_price": 450, "price": 750_000,
+     "rent": {1: 56_000, 4: 168_000, 8: 280_000}},
+    {"key": "lambo", "title": "Lamborghini", "icon": "🏎️", "speed": 500,
+     "fuel_max": 130, "fuel_price": 500, "price": 1_200_000,
+     "rent": {1: 88_000, 4: 264_000, 8: 440_000}},
     {"key": "super", "title": "Суперкар", "icon": "🛞", "speed": 520,
-     "fuel_max": 130, "price": 1_000_000,
-     "rent": {1: 1_500_000, 4: 2_000_000, 8: 3_000_000}},
+     "fuel_max": 140, "fuel_price": 600, "price": 2_000_000,
+     "rent": {1: 140_000, 4: 420_000, 8: 700_000}},
 ]
 
 CAR_BY_KEY = {car["key"]: car for car in CARS}
 
 
+def car_fuel_price(model: str) -> int:
+    """Цена литра для конкретной модели."""
+    car = CAR_BY_KEY.get(model) or {}
+    return int(car.get("fuel_price") or CAR_FUEL_PRICE)
+
+
 def rent_price(model: str, hours: int) -> int:
-    """Стоимость сдачи машины в аренду на `hours` часов (эталон: 1ч/4ч/8ч)."""
+    """Доход со сдачи машины в аренду на `hours` часов (1ч/4ч/8ч)."""
     car = CAR_BY_KEY.get(model)
     if not car or hours not in car["rent"]:
         return 0
@@ -1416,28 +1456,72 @@ def rent_fuel_needed(car: dict, hours: int) -> int:
 
 
 # --- яхты -------------------------------------------------------------
-# Механика один в один с эталоном: заправка, рыбалка, круиз, продажа.
-YACHT_FISH_FUEL = 10        # литров на рыбалку
-YACHT_FISH_COOLDOWN = 600   # секунд между рыбалками
+# Заправка, круиз, продажа и мини-игра «рыбалка» на поле 3×3.
+FISH_GRID = 3
+FISH_CELLS = FISH_GRID * FISH_GRID
+FISH_WINDOW = 3            # секунд, чтобы успеть нажать на рыбу
+FISH_PENALTY = 15          # секунд запрета после промаха
+YACHT_FISH_SUCCESS_COOLDOWN = 90   # откат после удачной рыбалки
 
 YACHTS = [
     {"key": "boat", "title": "Катер", "icon": "🚤", "capacity": 200,
-     "fuel_max": 200, "fuel_price": 40, "price": 300_000,
-     "cruise_hours": 1, "cruise_profit": 25_000},
+     "fuel_max": 200, "fuel_price": 60, "price": 300_000,
+     "cruise_hours": 1, "cruise_profit": 20_000},
+    {"key": "sail", "title": "Парусник", "icon": "⛵", "capacity": 600,
+     "fuel_max": 300, "fuel_price": 70, "price": 500_000,
+     "cruise_hours": 1, "cruise_profit": 34_000},
     {"key": "eclipse", "title": "Яхта «Eclipse»", "icon": "🛥️",
-     "capacity": 30_000, "fuel_max": 500, "fuel_price": 70,
-     "price": 800_000, "cruise_hours": 1, "cruise_profit": 81_000},
+     "capacity": 30_000, "fuel_max": 500, "fuel_price": 90,
+     "price": 900_000, "cruise_hours": 1, "cruise_profit": 60_000},
+    {"key": "sub", "title": "Подлодка", "icon": "🚢", "capacity": 1_000,
+     "fuel_max": 700, "fuel_price": 110, "price": 1_600_000,
+     "cruise_hours": 1, "cruise_profit": 105_000},
     {"key": "mega", "title": "Мега-яхта", "icon": "🛳️", "capacity": 60_000,
-     "fuel_max": 900, "fuel_price": 90, "price": 1_800_000,
-     "cruise_hours": 1, "cruise_profit": 160_000},
+     "fuel_max": 900, "fuel_price": 130, "price": 2_500_000,
+     "cruise_hours": 1, "cruise_profit": 165_000},
+    {"key": "liner", "title": "Лайнер", "icon": "🚢", "capacity": 120_000,
+     "fuel_max": 1_500, "fuel_price": 160, "price": 6_000_000,
+     "cruise_hours": 1, "cruise_profit": 380_000},
 ]
 
 YACHT_BY_KEY = {yacht["key"]: yacht for yacht in YACHTS}
 
 
-def yacht_fish_profit(model: str) -> int:
-    """Улов с рыбалки на яхте: доля от круиза."""
+def yacht_cruise_fuel(yacht: dict) -> int:
+    """Топливо на круиз: 5% бака, минимум 15 л."""
+    tank = int(yacht.get("fuel_max", 0) or 0)
+    return max(15, int(round(tank * 0.05)))
+
+
+def yacht_fish_fuel(yacht: dict) -> int:
+    """Топливо на рыбалку: 2% бака, минимум 5 л."""
+    tank = int(yacht.get("fuel_max", 0) or 0)
+    return max(5, int(round(tank * 0.02)))
+
+
+def fish_reward(model: str) -> int:
+    """Деньги за пойманную рыбу (до налога)."""
     yacht = YACHT_BY_KEY.get(model)
     if not yacht:
         return 0
-    return int(yacht["cruise_profit"] * 0.15)
+    return int(yacht["cruise_profit"] * 0.10)
+
+
+# --- бизнесы ----------------------------------------------------------
+BUSINESSES = [
+    {"key": "coffee", "title": "Кофейня", "icon": "☕", "price": 120_000,
+     "income": 9_000, "hours": 4},
+    {"key": "wash", "title": "Автомойка", "icon": "🧽", "price": 300_000,
+     "income": 22_000, "hours": 6},
+    {"key": "shop", "title": "Магазин", "icon": "🏪", "price": 700_000,
+     "income": 55_000, "hours": 8},
+    {"key": "plant", "title": "Завод", "icon": "🏭", "price": 2_500_000,
+     "income": 210_000, "hours": 12},
+    {"key": "it", "title": "IT-компания", "icon": "💻", "price": 6_000_000,
+     "income": 560_000, "hours": 24},
+]
+
+BUSINESS_BY_KEY = {biz["key"]: biz for biz in BUSINESSES}
+
+BUSINESS_COOLDOWN = {biz["key"]: int(biz["hours"]) * 3600 for biz in BUSINESSES}
+

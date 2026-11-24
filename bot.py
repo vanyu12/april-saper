@@ -2242,12 +2242,15 @@ def build_dispatcher(db: Database) -> Dispatcher:
         lines = [f"{icon} <b>{title}</b>",
                  "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
                  f"🚀 Скорость: {speed} км/ч",
-                 f"⛽ Топливо: {fuel}/{fuel_max}л ({num(game.CAR_FUEL_PRICE)}/л)"]
+                 f"⛽ Топливо: {fuel}/{fuel_max}л "
+                 f"({num(game.car_fuel_price(car['model']))}/л)"]
         if left > 0:
             lines.append(f"🛠 В аренде, следующая сдача через {left_text(left)}")
         else:
-            income = game.rent_price(car["model"], 8)
-            lines.append(f"🗓 Аренда 8ч: <b>+{num(income)}</b>, "
+            net, tax = game.after_tax(game.rent_price(car["model"], 8),
+                                      game.TAX_CAR_RENT)
+            lines.append(f"🗓 Аренда 8ч: <b>+{num(net)}</b> "
+                         f"(налог {num(tax)}), "
                          f"перерыв {8 * game.RENT_COOLDOWN_MULT}ч")
         text = "\n".join(lines)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -2268,15 +2271,20 @@ def build_dispatcher(db: Database) -> Dispatcher:
         text = (f"{icon} <b>{title}</b>\n"
                 "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
                 "Сдай машину в аренду — деньги приходят сразу.\n"
+                f"Налог {int(game.TAX_CAR_RENT * 100)}% удерживается из дохода.\n"
                 f"Потом перерыв: 1ч → {game.RENT_COOLDOWN_MULT}ч, "
                 f"4ч → {4 * game.RENT_COOLDOWN_MULT}ч, "
                 f"8ч → {8 * game.RENT_COOLDOWN_MULT}ч.\n"
-                f"⛽ Бензин {num(game.CAR_FUEL_PRICE)}/л сжигается за сдачу.")
-        rows = [[InlineKeyboardButton(
-            text=f"💵 {h}ч · +{num(game.rent_price(car['model'], h))} · "
-                 f"−{game.rent_fuel_needed(tank, h)}л",
-            callback_data=f"car:rentgo:{car['id']}:{h}")]
-            for h in game.RENT_HOURS]
+                f"⛽ Бензин {num(game.car_fuel_price(car['model']))}/л "
+                "сжигается за сдачу.")
+        rows = []
+        for h in game.RENT_HOURS:
+            net, _ = game.after_tax(game.rent_price(car["model"], h),
+                                    game.TAX_CAR_RENT)
+            rows.append([InlineKeyboardButton(
+                text=f"💵 {h}ч · +{num(net)} · "
+                     f"−{game.rent_fuel_needed(tank, h)}л",
+                callback_data=f"car:rentgo:{car['id']}:{h}")])
         rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"car:open:{car['id']}")])
         return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -2361,7 +2369,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         model = car["model"]
         fuel_max = int(car["fuel_max"]) or int(game.CAR_BY_KEY[model]["fuel_max"])
         need = fuel_max - int(car["fuel"])
-        price = need * int(game.CAR_FUEL_PRICE)
+        price = need * game.car_fuel_price(model)
         if int(car["fuel"]) >= fuel_max:
             await callback.answer("Бак уже полный", show_alert=True)
             return
@@ -2455,6 +2463,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if not price:
             await callback.answer("Такого тарифа нет", show_alert=True)
             return
+        net, tax = game.after_tax(price, game.TAX_CAR_RENT)
         model = game.CAR_BY_KEY.get(car["model"]) or {}
         tank = {"fuel_max": int(car["fuel_max"]) or model.get("fuel_max", 0)}
         need = game.rent_fuel_needed(tank, hours)
@@ -2462,16 +2471,18 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer(
                 f"Нужно {need} л топлива — сначала заправь", show_alert=True)
             return
-        db.add_balance(user["user_id"], price)
+        db.add_balance(user["user_id"], net)
         db.car_fuel(car_id, user["user_id"], -need, 0)
         db.car_set_rent(car_id, user["user_id"],
                         now + game.rent_cooldown(hours))
-        await callback.answer(f"Сдано на {hours}ч: +{num(price)}, −{need} л")
+        await callback.answer(f"Сдано на {hours}ч: +{num(net)}, "
+                              f"налог {num(tax)}")
         fresh = db.car(user["user_id"], car_id)
         text, keyboard = car_view(fresh)
         await safe_edit(callback.message,
-                        f"💵 Аренда {hours}ч: <b>+{num(price)}</b>, "
-                        f"бензин −{need} л\n\n{text}", keyboard)
+                        f"💵 Аренда {hours}ч: <b>+{num(net)}</b> "
+                        f"(налог {num(tax)}), бензин −{need} л\n\n{text}",
+                        keyboard)
 
     @dp.callback_query(F.data.startswith("car:sell:"))
     async def car_sell_cb(callback) -> None:
@@ -2532,7 +2543,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         fuel = int(yacht["fuel"])
         now = int(time.time())
         left = max(0, int(yacht["cruise_until"]) - now)
-        fish_left = max(0, int(yacht["fish_at"]) + game.YACHT_FISH_COOLDOWN - now)
+        fish_left = max(0, int(yacht["fish_at"]) - now)
         lines = [f"{icon} <b>{title}</b>",
                  "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
                  f"👤 Вместимость: {num(capacity)}чел",
@@ -2641,6 +2652,19 @@ def build_dispatcher(db: Database) -> Dispatcher:
         text, keyboard = yacht_view(fresh)
         await safe_edit(callback.message, text, keyboard)
 
+    def fish_grid_keyboard(yacht_id: int, game_id: int) -> InlineKeyboardMarkup:
+        rows = []
+        for r in range(game.FISH_GRID):
+            row = []
+            for c in range(game.FISH_GRID):
+                cell = r * game.FISH_GRID + c
+                row.append(InlineKeyboardButton(
+                    text="🌊", callback_data=f"fish:{game_id}:{cell}"))
+            rows.append(row)
+        rows.append([InlineKeyboardButton(
+            text="◀️ К яхте", callback_data=f"yacht:open:{yacht_id}")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
     @dp.callback_query(F.data.startswith("yacht:fish:"))
     async def yacht_fish_cb(callback) -> None:
         yacht_id = int(callback.data.split(":", 2)[-1])
@@ -2650,21 +2674,76 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer("Яхта не найдена", show_alert=True)
             return
         now = int(time.time())
-        if int(yacht["fish_at"]) + game.YACHT_FISH_COOLDOWN > now:
-            left = int(yacht["fish_at"]) + game.YACHT_FISH_COOLDOWN - now
-            await callback.answer(f"Рыбалка через {left_text(left)}", show_alert=True)
+        wait = int(yacht["fish_at"]) - now
+        if wait > 0:
+            await callback.answer(f"Рыбалка через {left_text(wait)}",
+                                  show_alert=True)
             return
-        if int(yacht["fuel"]) < game.YACHT_FISH_FUEL:
-            await callback.answer("Нужно топливо для рыбалки", show_alert=True)
+        y = game.YACHT_BY_KEY.get(yacht["model"]) or {}
+        fuel_need = game.yacht_fish_fuel(y)
+        if int(yacht["fuel"]) < fuel_need:
+            await callback.answer(f"Нужно {fuel_need} л топлива",
+                                  show_alert=True)
             return
-        profit = game.yacht_fish_profit(yacht["model"])
-        db.yacht_fuel(yacht_id, user["user_id"], -game.YACHT_FISH_FUEL, 0)
-        db.yacht_set_fish(yacht_id, user["user_id"], now)
-        db.add_balance(user["user_id"], profit)
-        await callback.answer(f"🎣 Улов! +{num(profit)}")
-        fresh = db.yacht(user["user_id"], yacht_id)
-        text, keyboard = yacht_view(fresh)
-        await safe_edit(callback.message, text, keyboard)
+        db.yacht_fuel(yacht_id, user["user_id"], -fuel_need, 0)
+        cell = random.randrange(game.FISH_CELLS)
+        db.fish_game_start(user["user_id"], yacht_id, cell, now)
+        text = ("🎣 <b>Рыбалка</b>\n"
+                "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                "Рыба появилась на поле — успей нажать на неё!\n"
+                f"⏱ У тебя {game.FISH_WINDOW} сек, "
+                f"промах — откат {game.FISH_PENALTY} сек.\n"
+                f"⛽ Бензин −{fuel_need} л")
+        await safe_edit(callback.message, text,
+                        fish_grid_keyboard(yacht_id, now))
+        await callback.answer("Рыба на поле!")
+
+    @dp.callback_query(F.data.startswith("fish:"))
+    async def fish_cell_cb(callback) -> None:
+        parts = callback.data.split(":")
+        if len(parts) < 3:
+            await callback.answer()
+            return
+        try:
+            game_id = int(parts[1])
+            cell = int(parts[2])
+        except ValueError:
+            await callback.answer()
+            return
+        user = get_user(callback)
+        state = db.fish_game_get(user["user_id"])
+        if not state or int(state["created_at"]) != game_id:
+            await callback.answer("Эта рыбалка уже закрыта", show_alert=True)
+            return
+        yacht_id = int(state["yacht_id"])
+        yacht = db.yacht(user["user_id"], yacht_id)
+        if not yacht:
+            db.fish_game_clear(user["user_id"])
+            await callback.answer("Яхта не найдена", show_alert=True)
+            return
+        now = int(time.time())
+        elapsed = now - game_id
+        hit = cell == int(state["cell"])
+        db.fish_game_clear(user["user_id"])
+        if not hit or elapsed > game.FISH_WINDOW:
+            db.yacht_set_fish(yacht_id, user["user_id"],
+                              now + game.FISH_PENALTY)
+            reason = "Рыба уплыла" if hit else "Пусто"
+            await callback.answer(
+                f"{reason}! Откат {game.FISH_PENALTY} сек", show_alert=True)
+            text, keyboard = yacht_view(db.yacht(user["user_id"], yacht_id))
+            await safe_edit(callback.message, text, keyboard)
+            return
+        gross = game.fish_reward(yacht["model"])
+        net, tax = game.after_tax(gross, game.TAX_YACHT_FISH)
+        db.add_balance(user["user_id"], net)
+        db.yacht_set_fish(yacht_id, user["user_id"],
+                          now + game.YACHT_FISH_SUCCESS_COOLDOWN)
+        await callback.answer(f"🎣 Поймал! +{num(net)}")
+        text, keyboard = yacht_view(db.yacht(user["user_id"], yacht_id))
+        await safe_edit(callback.message,
+                        f"🎣 Улов: <b>+{num(net)}</b> "
+                        f"(налог {num(tax)})\n\n{text}", keyboard)
 
     @dp.callback_query(F.data.startswith("yacht:cruise:"))
     async def yacht_cruise_cb(callback) -> None:
@@ -2680,20 +2759,22 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer(f"Яхта в круизе: {left_text(left)}", show_alert=True)
             return
         y = game.YACHT_BY_KEY.get(yacht["model"]) or {}
-        fuel_need = 21
+        fuel_need = game.yacht_cruise_fuel(y)
         if int(yacht["fuel"]) < fuel_need:
             await callback.answer(f"Нужно {fuel_need} л топлива", show_alert=True)
             return
         hours = int(y.get("cruise_hours", 1))
-        profit = int(y.get("cruise_profit", 0))
+        net, tax = game.after_tax(int(y.get("cruise_profit", 0)),
+                                  game.TAX_YACHT_CRUISE)
         db.yacht_fuel(yacht_id, user["user_id"], -fuel_need, 0)
         db.yacht_set_cruise(yacht_id, user["user_id"], now + hours * 3600)
-        db.add_balance(user["user_id"], profit)
-        await callback.answer(f"🛳️ Круиз! +{num(profit)}")
+        db.add_balance(user["user_id"], net)
+        await callback.answer(f"🛳️ Круиз! +{num(net)}, налог {num(tax)}")
         fresh = db.yacht(user["user_id"], yacht_id)
         text, keyboard = yacht_view(fresh)
         await safe_edit(callback.message,
-                        f"🛳️ Круиз начался, прибыль +{num(profit)}\n\n{text}",
+                        f"🛳️ Круиз начался: <b>+{num(net)}</b> "
+                        f"(налог {num(tax)}), бензин −{fuel_need} л\n\n{text}",
                         keyboard)
 
     @dp.callback_query(F.data.startswith("yacht:sell:"))
@@ -2715,6 +2796,176 @@ def build_dispatcher(db: Database) -> Dispatcher:
                          "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
                          f"🛡 Яхт: <b>{len(yachts)}</b>"),
                         my_yachts_keyboard(yachts))
+
+    def businesses_text(user: dict) -> str:
+        count = len(db.businesses(user["user_id"]))
+        return (f"💼 <b>БИЗНЕС</b>\n"
+                "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                f"🏢 Бизнесов: <b>{count}</b>\n\n"
+                "Покупай дело и собирай доход.\n"
+                f"Налог {int(game.TAX_BUSINESS * 100)}% удерживается "
+                "при сборе.\n"
+                f"💰 Баланс: <b>{num(int(user['balance']))}</b>")
+
+    def business_shop_keyboard() -> InlineKeyboardMarkup:
+        rows = [[InlineKeyboardButton(
+            text=f"{b['icon']} {b['title']} · {num(b['price'])}",
+            callback_data=f"bizshop:{b['key']}")]
+            for b in game.BUSINESSES]
+        rows.append([InlineKeyboardButton(text="💼 Мои бизнесы",
+                                          callback_data="biz:list")])
+        rows.append([webapp_button()])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def my_businesses_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
+        rows = []
+        for biz in items:
+            b = game.BUSINESS_BY_KEY.get(biz["model"]) or {}
+            label = b.get("title", biz["model"])
+            rows.append([InlineKeyboardButton(
+                text=f"{b.get('icon', '💼')} {label}",
+                callback_data=f"biz:open:{biz['id']}")])
+        rows.append([InlineKeyboardButton(text="🏬 Магазин",
+                                          callback_data="biz:menu")])
+        rows.append([webapp_button()])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def business_view(biz: dict) -> tuple[str, InlineKeyboardMarkup]:
+        b = game.BUSINESS_BY_KEY.get(biz["model"]) or {}
+        title = b.get("title", biz["model"])
+        icon = b.get("icon", "💼")
+        net, tax = game.after_tax(int(b.get("income", 0)),
+                                  game.TAX_BUSINESS)
+        cd = game.BUSINESS_COOLDOWN.get(biz["model"], 0)
+        now = int(time.time())
+        left = max(0, int(biz["last_collect"]) + cd - now)
+        lines = [f"{icon} <b>{title}</b>",
+                 "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
+                 f"💰 Доход: <b>+{num(net)}</b> за {cd // 3600}ч "
+                 f"(налог {num(tax)})"]
+        lines.append(f"⏳ Доход через {left_text(left)}" if left > 0
+                     else "✅ Доход можно забрать")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💰 Собрать · +{num(net)}",
+                                  callback_data=f"biz:collect:{biz['id']}")],
+            [InlineKeyboardButton(text="💵 Продать",
+                                  callback_data=f"biz:sell:{biz['id']}")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="biz:list")],
+        ])
+        return "\n".join(lines), keyboard
+
+    @dp.message(Command("biz", "business"))
+    async def biz_cmd(message: Message) -> None:
+        user = get_user(message)
+        await message.answer(businesses_text(user),
+                             reply_markup=business_shop_keyboard())
+
+    @dp.callback_query(F.data == "biz:menu")
+    async def biz_menu_cb(callback) -> None:
+        user = get_user(callback)
+        await safe_edit(callback.message, businesses_text(user),
+                        business_shop_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data == "biz:list")
+    async def biz_list_cb(callback) -> None:
+        user = get_user(callback)
+        items = db.businesses(user["user_id"])
+        if not items:
+            await callback.answer("Бизнесов нет — купи в магазине",
+                                  show_alert=True)
+            await safe_edit(callback.message, businesses_text(user),
+                            business_shop_keyboard())
+            return
+        await safe_edit(callback.message,
+                        ("💼 <b>ТВОИ БИЗНЕСЫ</b>\n"
+                         "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                         f"🏢 Всего: <b>{len(items)}</b>"),
+                        my_businesses_keyboard(items))
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("bizshop:"))
+    async def bizshop_cb(callback) -> None:
+        key = callback.data.split(":", 1)[-1]
+        b = game.BUSINESS_BY_KEY.get(key)
+        if not b:
+            await callback.answer("Такого бизнеса нет", show_alert=True)
+            return
+        user = get_user(callback)
+        price = int(b["price"])
+        if int(user["balance"]) < price:
+            await callback.answer(f"Не хватает: нужно {num(price)}",
+                                  show_alert=True)
+            return
+        biz_id = db.business_add(user["user_id"], key, price)
+        if not biz_id:
+            await callback.answer("Не удалось купить", show_alert=True)
+            return
+        await callback.answer(f"Куплено! −{num(price)}")
+        fresh = db.user(user["user_id"])
+        items = db.businesses(user["user_id"])
+        await safe_edit(callback.message,
+                        ("💼 <b>ТВОИ БИЗНЕСЫ</b>\n"
+                         "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                         f"🏢 Всего: <b>{len(items)}</b>\n\n"
+                         f"💰 Баланс: <b>{num(int(fresh['balance']))}</b>"),
+                        my_businesses_keyboard(items))
+
+    @dp.callback_query(F.data.startswith("biz:open:"))
+    async def biz_open_cb(callback) -> None:
+        biz_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        biz = db.business(user["user_id"], biz_id)
+        if not biz:
+            await callback.answer("Бизнес не найден", show_alert=True)
+            return
+        text, keyboard = business_view(biz)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("biz:collect:"))
+    async def biz_collect_cb(callback) -> None:
+        biz_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        biz = db.business(user["user_id"], biz_id)
+        if not biz:
+            await callback.answer("Бизнес не найден", show_alert=True)
+            return
+        now = int(time.time())
+        cd = game.BUSINESS_COOLDOWN.get(biz["model"], 0)
+        left = int(biz["last_collect"]) + cd - now
+        if left > 0:
+            await callback.answer(f"Доход через {left_text(left)}",
+                                  show_alert=True)
+            return
+        b = game.BUSINESS_BY_KEY.get(biz["model"]) or {}
+        net, tax = game.after_tax(int(b.get("income", 0)), game.TAX_BUSINESS)
+        db.add_balance(user["user_id"], net)
+        db.business_set_collect(biz_id, user["user_id"], now)
+        await callback.answer(f"Собрано +{num(net)}, налог {num(tax)}")
+        text, keyboard = business_view(db.business(user["user_id"], biz_id))
+        await safe_edit(callback.message,
+                        f"💰 Собрано: <b>+{num(net)}</b> "
+                        f"(налог {num(tax)})\n\n{text}", keyboard)
+
+    @dp.callback_query(F.data.startswith("biz:sell:"))
+    async def biz_sell_cb(callback) -> None:
+        biz_id = int(callback.data.split(":", 2)[-1])
+        user = get_user(callback)
+        biz = db.business(user["user_id"], biz_id)
+        if not biz:
+            await callback.answer("Бизнес не найден", show_alert=True)
+            return
+        b = game.BUSINESS_BY_KEY.get(biz["model"]) or {}
+        refund = int(int(b.get("price", 0)) * 0.5)
+        db.business_sell(biz_id, user["user_id"], refund)
+        await callback.answer(f"Продано за {num(refund)}")
+        items = db.businesses(user["user_id"])
+        await safe_edit(callback.message,
+                        ("💼 <b>ТВОИ БИЗНЕСЫ</b>\n"
+                         "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                         f"🏢 Всего: <b>{len(items)}</b>"),
+                        my_businesses_keyboard(items))
 
     @dp.callback_query(F.data == "case:menu")
     async def case_menu_cb(callback) -> None:
@@ -2913,15 +3164,44 @@ def build_dispatcher(db: Database) -> Dispatcher:
             if not is_admin(user):
                 await callback.answer("Только для админов", show_alert=True)
                 return
+            items = ", ".join(sorted(
+                {it["key"] for it in game.SHOP_ITEMS}
+                | {"insurance", "double_daily", "charm"}))
             await safe_edit(
                 callback.message,
                 head("🛠", "Админ") + "\n"
-                "Выдача без мини-апы (вместо ID можно писать me):\n"
-                "/gmp · /setgmp · /xp · /energy · /pref\n"
-                "/givecar · /giveyacht · /resetcd\n"
-                "/setbal · /addbal · /give · /role · /ban · /unban\n"
-                "/promo_new · /promo_list · /promo_off · /broadcast\n"
-                "/logs · /stats · /player · /maint · /game",
+                "<i>Вместо ID можно писать me, @username или ник.</i>\n"
+                f"{DIV}\n"
+                "<b>Деньги и опыт</b>\n"
+                "/setbal ID 5000 — задать mCoin\n"
+                "/addbal ID 500 — mCoin ± (минус списывает)\n"
+                "/gmp ID 500 — GMPOINT ±\n"
+                "/setgmp ID 500 — задать GMPOINT\n"
+                "/xp ID 1000 — опыт ± (в ответе уровень)\n"
+                "/energy ID 50 — энергия ±\n"
+                f"{DIV}\n"
+                "<b>Имущество</b>\n"
+                "/give ID insurance 2 — предметы:\n"
+                f"<i>{items}</i>\n"
+                "/givecar ID bugatti — машина:\n"
+                f"<i>{', '.join(game.CAR_BY_KEY)}</i>\n"
+                "/giveyacht ID eclipse — яхта:\n"
+                f"<i>{', '.join(game.YACHT_BY_KEY)}</i>\n"
+                "/pref ID pro — префикс\n"
+                "/resetcd ID — сбросить бонусы и колесо\n"
+                f"{DIV}\n"
+                "<b>Модерация</b>\n"
+                "/ban ID — заблокировать · /unban ID — снять\n"
+                "/role ID moderator — роль (user/moderator/admin)\n"
+                "/logs — действия · /player ID — карточка\n"
+                f"{DIV}\n"
+                "<b>Промокоды и режим</b>\n"
+                "/promo_new СУММА АКТИВАЦИИ ЧАСЫ ВАЛЮТА [КОД]\n"
+                "/promo_list · /promo_off КОД · /promo_post КОД\n"
+                "/maint on|off — техработы\n"
+                "/game mines on|off — игра вкл/выкл\n"
+                "/broadcast текст — рассылка\n"
+                "/chatid — ID этого чата",
                 InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="👥 Все игроки",
                                           callback_data="adm:pl:1")],
@@ -3677,7 +3957,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
             f"{DIV}\n"
             "/promo_new · /promo_list · /promo_post · /promo_off\n"
             "/maint on|off · /game имя on|off · /broadcast текст\n"
-            "/chatid — ID группы или канала",
+            "/chatid — ID группы или канала\n"
+            f"{DIV}\n"
+            "Подробные подсказки по каждой команде: /help → 🛠 Админ",
             reply_markup=keyboard,
         )
 

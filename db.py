@@ -80,6 +80,23 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS businesses (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id      INTEGER NOT NULL,
+        model        TEXT NOT NULL,
+        last_collect INTEGER NOT NULL DEFAULT 0,
+        bought_at    INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS fish_game (
+        user_id    INTEGER PRIMARY KEY,
+        yacht_id   INTEGER NOT NULL,
+        cell       INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS users (
         user_id          INTEGER PRIMARY KEY,
         username         TEXT,
@@ -3134,6 +3151,66 @@ class Database:
                    (yacht_id, user_id))
         self.add_balance(user_id, refund)
         return True
+
+    # --- бизнесы ----------------------------------------------------------
+    def business_add(self, user_id: int, model: str, price: int) -> int:
+        """Купить бизнес: вернуть id записи (0 при нехватке средств)."""
+        balance = self._row("SELECT balance FROM users WHERE user_id = ?",
+                            (user_id,))
+        if not balance or int(balance["balance"]) < price:
+            return 0
+        self.add_balance(user_id, -price)
+        self._exec(
+            """INSERT INTO businesses (user_id, model, last_collect, bought_at)
+               VALUES (?, ?, 0, ?)""",
+            (user_id, model, int(time.time())))
+        row = self._row("SELECT MAX(id) AS id FROM businesses WHERE user_id = ?",
+                        (user_id,))
+        return int(row["id"]) if row and row["id"] else 0
+
+    def businesses(self, user_id: int) -> list[dict]:
+        return self._rows(
+            "SELECT * FROM businesses WHERE user_id = ? ORDER BY id ASC",
+            (user_id,))
+
+    def business(self, user_id: int, biz_id: int) -> dict | None:
+        return self._row(
+            "SELECT * FROM businesses WHERE id = ? AND user_id = ?",
+            (biz_id, user_id))
+
+    def business_set_collect(self, biz_id: int, user_id: int, ts: int) -> None:
+        self._exec(
+            "UPDATE businesses SET last_collect = ? WHERE id = ? AND user_id = ?",
+            (ts, biz_id, user_id))
+
+    def business_sell(self, biz_id: int, user_id: int, refund: int) -> bool:
+        row = self._row("SELECT model FROM businesses WHERE id = ? AND user_id = ?",
+                        (biz_id, user_id))
+        if not row:
+            return False
+        self._exec("DELETE FROM businesses WHERE id = ? AND user_id = ?",
+                   (biz_id, user_id))
+        self.add_balance(user_id, refund)
+        return True
+
+    # --- мини-игра «рыбалка» ---------------------------------------------
+    def fish_game_start(self, user_id: int, yacht_id: int, cell: int,
+                        now: int) -> None:
+        self._exec(
+            """INSERT INTO fish_game (user_id, yacht_id, cell, created_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT (user_id) DO UPDATE SET
+                   yacht_id = excluded.yacht_id,
+                   cell = excluded.cell,
+                   created_at = excluded.created_at""",
+            (user_id, yacht_id, cell, now))
+
+    def fish_game_get(self, user_id: int) -> dict | None:
+        return self._row("SELECT * FROM fish_game WHERE user_id = ?",
+                         (user_id,))
+
+    def fish_game_clear(self, user_id: int) -> None:
+        self._exec("DELETE FROM fish_game WHERE user_id = ?", (user_id,))
 
     # --- кланы -----------------------------------------------------------
     def create_clan(self, clan_id: str, name: str, tag: str, owner_id: int,
