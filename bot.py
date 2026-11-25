@@ -177,6 +177,9 @@ def finished_keyboard() -> InlineKeyboardMarkup:
 async def safe_edit(message: Message, text: str,
                     keyboard: InlineKeyboardMarkup | None = None) -> None:
     try:
+        if getattr(message, "photo", None):
+            await message.edit_caption(caption=text, reply_markup=keyboard)
+            return
         await message.edit_text(text, reply_markup=keyboard)
     except TelegramBadRequest as exc:
         if "not modified" in str(exc).lower():
@@ -3060,56 +3063,80 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     # --- майнинг-ферма ----------------------------------------------------
     def mining_text(user: dict) -> str:
-        row = db.mining(user["user_id"])
-        if not row:
-            return "⛏ <b>Майнинг-ферма</b>\n┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\nФерма ещё не создана."
+        row = db.mining(user["user_id"]) or {}
         now = int(time.time())
-        gpus = int(row["gpus"])
-        slots = int(row["slots"])
-        earned = game.mining_income(gpus, now - int(row["last_collect"]))
-        per_hour = game.mining_income(gpus, 3600)
-        return "\n".join([
-            "⛏ <b>Майнинг-ферма</b>",
-            "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
-            f"🖥 Видеокарты: <b>{gpus}</b> / {slots}",
-            f"📈 Доход: <b>+{num(per_hour)}</b> mCoin в час",
-            f"💰 Накоплено: <b>+{num(earned)}</b>",
-        ])
+        gpus = int(row.get("gpus") or 0)
+        slots = int(row.get("slots") or game.MINING_SLOTS_BASE)
+        btc = float(row.get("btc") or 0)
+        power = int(row.get("power_until") or 0)
+        per_hour = game.mining_btc(gpus, 3600)
+        lines = [
+            f"🖥 <b>{user.get('first_name') or 'Игрок'}</b>, "
+            "ваша майнинг-ферма:",
+            "",
+            f"💲 Баланс BTC: <b>{btc:.4f} BTC</b>",
+            f"🔄 Курс обмена: 1 BTC → {num(game.MINING_BTC_RATE)} mCoin",
+            "",
+            f"🖥 Количество видеокарт: <b>{gpus}</b> / {slots}",
+            f"💵 Прибыль видеокарт: <b>{per_hour:.4f} BTC</b> в час",
+        ]
+        clan = db.clan_bonus(user["user_id"])
+        if clan:
+            lines.append(f"📈 Бонус клана: +{clan}%")
+        if power <= now:
+            lines.append("⛔ Майнинг остановлен, так как вы не оплатили "
+                         "электричество")
+        else:
+            lines.append("⚡️ Электричество оплачено: ещё "
+                         f"{left_text(power - now)}")
+        return "\n".join(lines)
 
     def mining_keyboard(user: dict) -> InlineKeyboardMarkup:
         row = db.mining(user["user_id"]) or {}
         slots = int(row.get("slots") or game.MINING_SLOTS_BASE)
-        rows = [[InlineKeyboardButton(
-            text=f"🖥 Купить видеокарту · {num(game.MINING_GPU_PRICE)}",
-            callback_data="mine:gpu")]]
+        gpus = int(row.get("gpus") or 0)
+        rows = [
+            [InlineKeyboardButton(
+                text=f"🛒 Купить видеокарту [{num(game.MINING_GPU_PRICE)}]",
+                callback_data="mine:gpu")],
+            [InlineKeyboardButton(text="💵 Обменять BTC на mCoin",
+                                  callback_data="mine:exchange")],
+            [InlineKeyboardButton(
+                text="⚡️ Оплатить электричество "
+                     f"[{num(game.mining_power_cost(gpus))}]",
+                callback_data="mine:power")],
+        ]
         if slots < game.MINING_SLOTS_MAX:
             rows.append([InlineKeyboardButton(
                 text=(f"➕ +{game.MINING_SLOTS_STEP} мест · "
                       f"{num(game.mining_slot_price(slots))}"),
                 callback_data="mine:slots")])
-        rows.append([InlineKeyboardButton(text="💰 Собрать доход",
-                                          callback_data="mine:collect")])
         rows.append([webapp_button()])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
-    def mining_settle(user: dict) -> int:
+    def mining_settle(user: dict) -> float:
         now = int(time.time())
         db.mining_ensure(user["user_id"], game.MINING_SLOTS_BASE, now)
         row = db.mining(user["user_id"])
-        earned = game.mining_income(int(row["gpus"]),
-                                    now - int(row["last_collect"]))
-        if earned > 0:
-            db.add_balance(user["user_id"], earned)
-            db.mining_set_time(user["user_id"], now)
-        return earned
+        gpus = int(row["gpus"])
+        btc = float(row["btc"] or 0)
+        last = int(row["last_collect"])
+        power = int(row["power_until"] or 0)
+        span = max(0, now - last)
+        if gpus > 0 and power > last and span > 0:
+            bonus = 1 + db.clan_bonus(user["user_id"]) / 100.0
+            btc += game.mining_btc(gpus, min(span, power - last)) * bonus
+        db.mining_set_btc(user["user_id"], btc, now)
+        return btc
 
     @dp.message(Command("mine", "mining"))
     async def mine_cmd(message: Message) -> None:
         user = get_user(message)
         db.mining_ensure(user["user_id"], game.MINING_SLOTS_BASE,
                          int(time.time()))
-        await message.answer(mining_text(user),
-                             reply_markup=mining_keyboard(user))
+        mining_settle(user)
+        await send_card(message, "card-mine.jpg", mining_text(user),
+                        mining_keyboard(user), "card-business.jpg")
 
     @dp.callback_query(F.data == "mine:gpu")
     async def mine_gpu_cb(callback) -> None:
@@ -3147,14 +3174,40 @@ def build_dispatcher(db: Database) -> Dispatcher:
         await safe_edit(callback.message, mining_text(user),
                         mining_keyboard(user))
 
-    @dp.callback_query(F.data == "mine:collect")
-    async def mine_collect_cb(callback) -> None:
+    @dp.callback_query(F.data == "mine:exchange")
+    async def mine_exchange_cb(callback) -> None:
         user = get_user(callback)
-        earned = mining_settle(user)
-        if earned <= 0:
-            await callback.answer("Пока нечего собирать", show_alert=True)
+        btc = mining_settle(user)
+        now = int(time.time())
+        if btc <= 0:
+            await callback.answer("На ферме пока нет BTC", show_alert=True)
         else:
-            await callback.answer(f"Собрано +{num(earned)}")
+            coins = int(btc * game.MINING_BTC_RATE)
+            db.mining_set_btc(user["user_id"], 0.0, now)
+            db.add_balance(user["user_id"], coins)
+            await callback.answer(f"Обменяно: +{num(coins)} mCoin")
+        await safe_edit(callback.message, mining_text(user),
+                        mining_keyboard(user))
+
+    @dp.callback_query(F.data == "mine:power")
+    async def mine_power_cb(callback) -> None:
+        user = get_user(callback)
+        mining_settle(user)
+        row = db.mining(user["user_id"]) or {}
+        gpus = int(row.get("gpus") or 0)
+        cost = game.mining_power_cost(gpus)
+        profile = db.user(user["user_id"])
+        if int(profile["balance"]) < cost:
+            await callback.answer("Не хватает mCoin на электричество",
+                                  show_alert=True)
+        else:
+            now = int(time.time())
+            current = int(row.get("power_until") or 0)
+            until = max(now, current) + game.MINING_POWER_HOURS * 3600
+            db.add_balance(user["user_id"], -cost)
+            db.mining_set_power(user["user_id"], until, now)
+            await callback.answer("Электричество оплачено на "
+                                  f"{game.MINING_POWER_HOURS} ч")
         await safe_edit(callback.message, mining_text(user),
                         mining_keyboard(user))
 

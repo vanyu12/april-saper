@@ -1554,11 +1554,15 @@ TAX_BUSINESS_MAX = 0.45
 MINING_SLOTS_BASE = 50
 MINING_SLOTS_STEP = 10
 MINING_SLOTS_MAX = 2000
-MINING_GPU_PRICE = 120_000      # цена одной видеокарты
-MINING_GPU_INCOME = 2_500       # mCoin в час с одной карты
-MINING_SLOT_PRICE = 300_000     # первая пачка +10 мест
-MINING_SLOT_GROWTH = 1.35       # каждая следующая пачка дороже
-MINING_CAP_SECONDS = 24 * 3600  # больше суток доход не копится
+MINING_GPU_PRICE = 812_000        # цена одной видеокарты
+MINING_BTC_PER_GPU_HOUR = 0.3223  # BTC в час с одной карты
+MINING_BTC_RATE = 58_548          # сколько mCoin дают за 1 BTC
+MINING_SLOT_PRICE = 300_000       # первая пачка +10 мест
+MINING_SLOT_GROWTH = 1.35         # каждая следующая пачка дороже
+MINING_CAP_SECONDS = 24 * 3600    # больше суток доход не копится
+MINING_POWER_BASE = 150_000       # электричество на сутки: базовая часть
+MINING_POWER_PER_GPU = 30_000     # плюс за каждую видеокарту
+MINING_POWER_HOURS = 24
 
 
 def mining_slot_price(slots: int) -> int:
@@ -1567,10 +1571,15 @@ def mining_slot_price(slots: int) -> int:
     return int(MINING_SLOT_PRICE * (MINING_SLOT_GROWTH ** steps))
 
 
-def mining_income(gpus: int, seconds: int) -> int:
-    """Доход фермы за отрезок времени с ограничением накопления."""
+def mining_btc(gpus: int, seconds: int) -> float:
+    """Сколько BTC намайнит ферма за отрезок времени."""
     seconds = min(max(0, int(seconds)), MINING_CAP_SECONDS)
-    return int(int(gpus) * MINING_GPU_INCOME * seconds / 3600)
+    return float(gpus) * MINING_BTC_PER_GPU_HOUR * seconds / 3600.0
+
+
+def mining_power_cost(gpus: int) -> int:
+    """Стоимость электричества на сутки для текущей фермы."""
+    return int(MINING_POWER_BASE + MINING_POWER_PER_GPU * int(gpus))
 
 
 def business_tax(count: int) -> float:

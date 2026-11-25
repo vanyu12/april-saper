@@ -101,6 +101,8 @@ SCHEMA_STATEMENTS = [
         user_id      INTEGER PRIMARY KEY,
         gpus         INTEGER NOT NULL DEFAULT 0,
         slots        INTEGER NOT NULL DEFAULT 50,
+        btc          REAL NOT NULL DEFAULT 0,
+        power_until  INTEGER NOT NULL DEFAULT 0,
         last_collect INTEGER NOT NULL DEFAULT 0,
         bought_at    INTEGER NOT NULL DEFAULT 0
     )
@@ -1559,6 +1561,16 @@ class Database:
                 self._exec(
                     "ALTER TABLE pet_inventory ADD COLUMN "
                     "last_play_at INTEGER NOT NULL DEFAULT 0")
+        if "mining" in [r["name"] for r in self._rows(
+                "SELECT name FROM sqlite_master WHERE type='table'")]:
+            mining_cols = self._table_columns("mining")
+            if "btc" not in mining_cols:
+                self._exec(
+                    "ALTER TABLE mining ADD COLUMN btc REAL NOT NULL DEFAULT 0")
+            if "power_until" not in mining_cols:
+                self._exec(
+                    "ALTER TABLE mining ADD COLUMN "
+                    "power_until INTEGER NOT NULL DEFAULT 0")
         for key, value in DEFAULT_SETTINGS.items():
             self._exec(
                 "INSERT INTO settings (key, value) VALUES (?, ?) "
@@ -3226,6 +3238,21 @@ class Database:
     def mining_set_time(self, user_id: int, ts: int) -> None:
         self._exec("UPDATE mining SET last_collect = ? WHERE user_id = ?",
                    (ts, user_id))
+
+    def mining_set_btc(self, user_id: int, btc: float, ts: int) -> None:
+        self._exec("UPDATE mining SET btc = ?, last_collect = ? WHERE user_id = ?",
+                   (float(btc), ts, user_id))
+
+    def mining_set_power(self, user_id: int, until: int, ts: int) -> None:
+        self._exec(
+            "UPDATE mining SET power_until = ?, last_collect = ? WHERE user_id = ?",
+            (int(until), ts, user_id))
+
+    def clan_bonus(self, user_id: int) -> int:
+        """Процент к прибыли фермы за членство в клане."""
+        row = self._row("SELECT 1 AS ok FROM clan_members WHERE user_id = ?",
+                        (user_id,))
+        return 3 if row else 0
 
     def mining_buy_gpu(self, user_id: int, price: int, now: int) -> str:
         row = self.mining(user_id)
