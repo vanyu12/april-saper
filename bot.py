@@ -38,7 +38,7 @@ WELCOME = (
     "💣 <b>Апрельский сапёр</b>\n\n"
     "Играть можно и в приложении, и прямо здесь — в чате.\n\n"
     "• /mines 100 5 — поле 5×5, ставка 100, пять мин\n"
-    "• /dice 100 чёт — кости, выплата ×1,96\n"
+    "• /dice 100 чёт — кости, выплата ×1,78\n"
     "• /basket 100 попадёт — бросок в кольцо, попадёт или промах\n"
     "• /spin — колесо дня раз в 12 часов\n"
     "• /bonus — часовой и ежедневный бонусы\n"
@@ -673,7 +673,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
                                               callback_data="prefix:off")])
         rows.append([InlineKeyboardButton(text="🎨 Аватар и фон",
                                           callback_data="menu:cosmetics")])
-        rows.append([InlineKeyboardButton(text="⬅️ Профиль", callback_data="menu:profile")])
+        rows.append([InlineKeyboardButton(text="⬅️ Профиль", callback_data="menu:balance")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def cosmetics_menu_text(user: dict) -> str:
@@ -1200,7 +1200,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 "💬 <code>/dice [ставка] чёт|нечёт</code>\n"
                 "Пример: <code>/dice 100 чёт</code>\n"
                 f"{DIV}\n"
-                "💸 Выплата при победе — ×1,96\n"
+                "💸 Выплата при победе — ×1,78\n"
                 f"💰 Ставка: {num(settings.get('min_bet', game.MIN_BET))} — "
                 f"{num(settings.get('max_bet', game.MAX_BET))} mCoin\n"
                 f"{DIV}\n"
@@ -1218,8 +1218,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 "🎡 <code>/roulette 100 красное</code> — рулетка (×2, зеро ×36)\n"
                 "🎰 <code>/slots 100</code> — слоты (пара ×1,2, тройка до ×200)\n"
                 "💥 <code>/crash 100 2.5</code> — краш, цель от ×1,20 до ×10\n"
-                "🪙 <code>/coin 100 орёл</code> — монета, выплата ×1,96\n"
-                "🏀 <code>/basket 100</code> — бросок в кольцо, выплата ×2,4\n"
+                "🪙 <code>/coin 100 орёл</code> — монета, выплата ×1,84\n"
+                "🏀 <code>/basket 100</code> — бросок в кольцо, выплата ×2,3\n"
                 f"{DIV}\n"
                 "Результат считается из твоего seed — проверить можно /fair.")
 
@@ -1400,7 +1400,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 "💬 <code>/coin [ставка] орёл|решка</code>\n"
                 "Пример: <code>/coin 100 орёл</code>\n"
                 f"{DIV}\n"
-                "💸 Выплата при победе — ×1,96\n"
+                "💸 Выплата при победе — ×1,84\n"
                 f"{DIV}\n"
                 "Быстрый старт:")
 
@@ -1459,7 +1459,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 "Пример: <code>/basket 100 попадёт</code>\n"
                 f"{DIV}\n"
                 "🎬 Бот отправляет анимацию 🏀 из Telegram — она и решает\n"
-                "💰 Попадание платит ×2,4 · промах ×1,6\n"
+                "💰 Попадание платит ×2,3 · промах ×1,53\n"
                 f"💰 Ставка: {num(settings.get('min_bet', game.MIN_BET))} — "
                 f"{num(settings.get('max_bet', game.MAX_BET))} mCoin\n"
                 f"{DIV}\n"
@@ -1519,9 +1519,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 "💬 <code>/darts [ставка] яблочко|сектор|мимо</code>\n"
                 "Пример: <code>/darts 100 яблочко</code>\n"
                 f"{DIV}\n"
-                "🎯 <b>яблочко</b> — центр мишени, ×5,9\n"
-                "🎯 <b>сектор</b> — поле мишени, ×1,98\n"
-                "🎯 <b>мимо</b> — промах, ×2,97\n"
+                "🎯 <b>яблочко</b> — центр мишени, ×5,5\n"
+                "🎯 <b>сектор</b> — поле мишени, ×1,84\n"
+                "🎯 <b>мимо</b> — промах, ×2,4\n"
                 f"{DIV}\n"
                 "🎬 Бот отправляет анимацию 🎯 из Telegram — она и решает\n"
                 f"💰 Ставка: {num(settings.get('min_bet', game.MIN_BET))} — "
@@ -2324,8 +2324,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             net, tax = game.after_tax(game.rent_price(car["model"], 8),
                                       game.TAX_CAR_RENT)
             lines.append(f"🗓 Аренда 8ч: <b>+{num(net)}</b> "
-                         f"(налог {num(tax)}), "
-                         f"перерыв {8 * game.RENT_COOLDOWN_MULT}ч")
+                         f"(налог {num(tax)}), без перерыва")
         text = "\n".join(lines)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⛽ Заправить", callback_data=f"car:fuel:{car['id']}"),
@@ -2346,9 +2345,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
                 "Сдай машину в аренду — деньги приходят сразу.\n"
                 f"Налог {int(game.TAX_CAR_RENT * 100)}% удерживается из дохода.\n"
-                f"Потом перерыв: 1ч → {game.RENT_COOLDOWN_MULT}ч, "
-                f"4ч → {4 * game.RENT_COOLDOWN_MULT}ч, "
-                f"8ч → {8 * game.RENT_COOLDOWN_MULT}ч.\n"
+                "Без перерыва — сдавать можно сразу снова.\n"
                 f"⛽ Бензин {num(game.car_fuel_price(car['model']))}/л "
                 "сжигается за сдачу.")
         rows = []
@@ -3354,7 +3351,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         },
         "biz": {
             "emoji": "💼", "title": "Бизнес",
-            "desc": "Авто, яхты и бизнесы: доход, налоги и перерывы.",
+            "desc": "Авто, яхты и бизнесы: доход и налоги.",
             "buttons": [
                 ("🚗 Авто", "cars:menu"), ("🛥️ Яхты", "yachts:menu"),
                 ("💼 Бизнесы", "biz:menu"),

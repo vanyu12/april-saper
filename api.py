@@ -6407,8 +6407,11 @@ class Api:
             body = await request.json()
         except Exception:
             return self._fail("bad_request")
-        user_id = int(body.get("user_id", 0))
-        amount = int(body.get("amount", 0))
+        try:
+            user_id = int(body.get("user_id", 0))
+            amount = int(body.get("amount", 0))
+        except (TypeError, ValueError):
+            return self._fail("bad_args")
         currency = str(body.get("currency", "gold"))
         reason = str(body.get("reason", "admin"))
         if user_id <= 0 or amount == 0:
