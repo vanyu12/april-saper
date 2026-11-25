@@ -6,6 +6,7 @@ import time
 CELLS = 25
 SIDE = 5
 RTP = 0.92
+MAX_PAYOUT_BONUS = 0.05  # потолок суммы бонусов: 0.92 * 1.05 всё ещё меньше 100%
 MIN_BET = 10
 MAX_BET = 100_000
 MAX_WIN = 1_000_000
@@ -285,6 +286,19 @@ def next_chance(mines: int, opened: int) -> float:
 
 def payout_for(bet: int, mult: float) -> int:
     return int(math.floor(bet * mult))
+
+
+def cap_payout_bonus(base: int, final: int) -> int:
+    """Ограничивает сумму бонусов к выплате долей MAX_PAYOUT_BONUS.
+
+    base — выплата по чистому множителю, final — выплата после бонусов.
+    Без ограничения сложенные бусты (талисман, реликвия, gold_pick, префикс,
+    буст) дают больше 100% возврата, и игра начинает печатать деньги.
+    """
+    if base <= 0:
+        return final
+    limit = base + int(round(base * MAX_PAYOUT_BONUS))
+    return min(final, limit)
 
 
 def ladder(mines: int, opened: int, steps: int = 5) -> list[dict]:
@@ -970,7 +984,7 @@ def coinflip(server_seed: str, client_seed: str, nonce: int) -> str:
 
 BASKET_CHANCE = 0.40
 BASKET_MULTIPLIER = 2.3
-BASKET_MISS_MULTIPLIER = 1.6
+BASKET_MISS_MULTIPLIER = 1.53
 BASKET_SCORE_MIN = 4
 
 
@@ -985,7 +999,7 @@ DARTS_SECTORS = (
     {"key": "miss", "title": "Мимо", "icon": "💨", "values": (1, 2),
      "multiplier": 2.4, "desc": "дротик уйдёт мимо мишени"},
     {"key": "sector", "title": "Сектор", "icon": "🎯", "values": (3, 4, 5),
-     "multiplier": 1.88, "desc": "дротик попадёт в поле"},
+     "multiplier": 1.84, "desc": "дротик попадёт в поле"},
     {"key": "bull", "title": "Яблочко", "icon": "🔴", "values": (6,),
      "multiplier": 5.5, "desc": "дротик попадёт в центр"},
 )

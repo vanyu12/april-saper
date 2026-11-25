@@ -628,12 +628,14 @@ class Api:
         target = float(rnd.get("auto_target") or 0)
         auto = bool(target) and not finished and mult >= target
         payout = game.payout_for(rnd["bet"], mult) if (finished or auto) else 0
+        _pb = payout
         if finished or auto:
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "mines", payout)
             payout = self._gold_pick(user, payout)
         status = "won" if len(opened) >= safe else ("cashed" if (auto or capped) else "active")
         payout = self._prefix_bonus(user, payout)
+        payout = game.cap_payout_bonus(_pb, payout)
         self.db.update_round(rnd["id"], opened, mult, status, payout)
 
         balance = self.db.user(user["user_id"])["balance"]
@@ -670,10 +672,12 @@ class Api:
             return self._fail("Откройте хотя бы одну клетку")
         mult = game.multiplier(rnd["mines"], len(rnd["opened"]))
         payout = game.payout_for(rnd["bet"], mult)
+        _pb = payout
         payout = self._charm_bonus(user, payout)
         payout = self._apply_relic(user, "mines", payout)
         payout = self._gold_pick(user, payout)
         payout = self._prefix_bonus(user, payout)
+        payout = game.cap_payout_bonus(_pb, payout)
         self.db.update_round(rnd["id"], rnd["opened"], mult, "cashed", payout)
         balance = self.db.add_balance(user["user_id"], payout)
         self._finish(user, rnd["bet"], payout, mult)
@@ -892,9 +896,11 @@ class Api:
         payout = int(math.floor(bet * multiplier)) if win else 0
         refund = 0
         if win:
+            _pb = payout
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "dice", payout)
             payout = self._prefix_bonus(user, payout)
+            payout = game.cap_payout_bonus(_pb, payout)
         else:
             refund = self._insurance_refund(user, bet)
 
@@ -943,9 +949,11 @@ class Api:
         payout = int(math.floor(bet * multiplier)) if win else 0
         refund = 0
         if win:
+            _pb = payout
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "coinflip", payout)
             payout = self._prefix_bonus(user, payout)
+            payout = game.cap_payout_bonus(_pb, payout)
         else:
             refund = self._insurance_refund(user, bet)
 
@@ -1004,7 +1012,9 @@ class Api:
             if extra > 0:
                 payout += extra
                 self.db.add_balance(user["user_id"], extra)
+        _pb = payout
         payout = self._prefix_bonus(user, payout)
+        payout = game.cap_payout_bonus(_pb, payout)
         self.db.add_balance(user["user_id"], payout)
         self.db.update_bj(rnd["id"], player, dealer, status, payout, doubled)
         self.db.add_play(uuid.uuid4().hex[:16], user["user_id"], "blackjack", stake,
@@ -1173,9 +1183,11 @@ class Api:
         payout = int(math.floor(bet * multiplier)) if scored else 0
         refund = 0
         if scored:
+            _pb = payout
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "basket", payout)
             payout = self._prefix_bonus(user, payout)
+            payout = game.cap_payout_bonus(_pb, payout)
         else:
             refund = self._insurance_refund(user, bet)
 
@@ -1222,8 +1234,10 @@ class Api:
         payout = int(math.floor(bet * multiplier)) if win else 0
         refund = 0
         if win:
+            _pb = payout
             payout = self._charm_bonus(user, payout)
             payout = self._prefix_bonus(user, payout)
+            payout = game.cap_payout_bonus(_pb, payout)
         else:
             refund = self._insurance_refund(user, bet)
 
@@ -1512,9 +1526,11 @@ class Api:
         payout = int(math.floor(bet * multiplier)) if multiplier > 0 else 0
         refund = 0
         if multiplier > 0:
+            _pb = payout
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "wheel", payout)
             payout = self._prefix_bonus(user, payout)
+            payout = game.cap_payout_bonus(_pb, payout)
         else:
             refund = self._insurance_refund(user, bet)
 
@@ -2165,9 +2181,11 @@ class Api:
         payout = int(math.floor(bet * multiplier)) if win else 0
         refund = 0
         if win:
+            _pb = payout
             payout = self._charm_bonus(user, payout)
             payout = self._apply_relic(user, "crash", payout)
             payout = self._prefix_bonus(user, payout)
+            payout = game.cap_payout_bonus(_pb, payout)
         else:
             refund = self._insurance_refund(user, bet)
 

@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import math
 import random
 import time
@@ -186,26 +186,20 @@ async def safe_edit(message: Message, text: str,
         await message.answer(text, reply_markup=keyboard)
 
 
-CARD_IMAGES = {
-    "profile": "card-profile.jpg",
-    "car": "card-car.jpg",
-    "yacht": "card-yacht.jpg",
-    "business": "card-business.jpg",
-}
-
-
 async def send_card(message: Message, image: str, text: str,
-                    keyboard: InlineKeyboardMarkup | None = None) -> None:
-    """Карточка с картинкой; если файла нет — обычный текст."""
-    path = CARD_IMAGES.get(image, image)
-    if not path or not Path(path).exists():
-        await message.answer(text, reply_markup=keyboard)
-        return
-    try:
-        await message.answer_photo(FSInputFile(path), caption=text,
-                                   reply_markup=keyboard)
-    except Exception:
-        await message.answer(text, reply_markup=keyboard)
+                    keyboard: InlineKeyboardMarkup | None = None,
+                    fallback: str | None = None) -> None:
+    """Карточка с картинкой: своя под модель, иначе фолбэк, иначе текст."""
+    for path in (image, fallback):
+        if not path or not Path(path).exists():
+            continue
+        try:
+            await message.answer_photo(FSInputFile(path), caption=text,
+                                       reply_markup=keyboard)
+            return
+        except Exception:
+            break
+    await message.answer(text, reply_markup=keyboard)
 
 
 def build_dispatcher(db: Database) -> Dispatcher:
@@ -251,9 +245,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
         name = (user.get("username") or "").lower()
         if name and name in config.admin_usernames:
             return True
-        return (user.get("role") or "user") in ("admin", "moderator")
+        return (user.get("role") or "user") in ("admin", "moderator", "owner")
 
-    ROLE_RANK = {"user": 0, "moderator": 1, "admin": 2}
+    ROLE_RANK = {"user": 0, "moderator": 1, "admin": 2, "owner": 3}
 
     def is_owner(user: dict) -> bool:
         if user["user_id"] in config.admin_ids:
@@ -262,7 +256,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if name and name in config.admin_usernames:
             return True
         # Если ADMIN_IDS не задан, владельцем считается админ из базы.
-        return (user.get("role") or "user") == "admin"
+        return (user.get("role") or "user") in ("admin", "owner")
 
     def has_any_admin() -> bool:
         if config.admin_ids or config.admin_usernames:
@@ -444,10 +438,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
     def cashout_round(user: dict, rnd: dict, round_id: str, opened: list[int],
                       mult: float, auto: bool = False):
         payout = game.payout_for(rnd["bet"], mult)
+        _pb = payout
         payout = charm_bonus(user, payout)
         payout = apply_relic(user, "mines", payout)
         payout = gold_pick_bonus(user, payout)
         payout = prefix_bonus_payout(user, payout)
+        payout = game.cap_payout_bonus(_pb, payout)
         db.update_round(round_id, opened, mult, "cashed", payout)
         db.add_balance(user["user_id"], payout)
         earned, xp_gain, level_before, level_after = finish_game(
@@ -1169,8 +1165,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
         payout = int(math.floor(bet * multiplier)) if win else 0
         refund = 0
         if win:
+            _pb = payout
             payout = charm_bonus(user, payout)
             payout = apply_relic(user, "dice", payout)
+            payout = game.cap_payout_bonus(_pb, payout)
         else:
             refund = insurance_refund(user, bet)
         db.add_balance(user["user_id"], payout - bet)
@@ -1300,8 +1298,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
         payout = int(math.floor(bet * multiplier)) if multiplier > 0 else 0
         refund = 0
         if payout > 0:
+            _pb = payout
             payout = charm_bonus(user, payout)
             payout = apply_relic(user, "roulette", payout)
+            payout = game.cap_payout_bonus(_pb, payout)
         else:
             refund = insurance_refund(user, bet)
         earned, xp_gain, before, after = settle_play(
@@ -1334,7 +1334,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
         payout = int(math.floor(bet * multiplier)) if multiplier > 0 else 0
         refund = 0
         if payout > 0:
+            _pb = payout
             payout = charm_bonus(user, payout)
+            payout = game.cap_payout_bonus(_pb, payout)
         else:
             refund = insurance_refund(user, bet)
         earned, xp_gain, before, after = settle_play(
@@ -1366,8 +1368,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
         payout = int(math.floor(bet * target)) if win else 0
         refund = 0
         if win:
+            _pb = payout
             payout = charm_bonus(user, payout)
             payout = apply_relic(user, "crash", payout)
+            payout = game.cap_payout_bonus(_pb, payout)
         else:
             refund = insurance_refund(user, bet)
         earned, xp_gain, before, after = settle_play(
@@ -1420,8 +1424,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
         payout = int(math.floor(bet * multiplier)) if win else 0
         refund = 0
         if win:
+            _pb = payout
             payout = charm_bonus(user, payout)
             payout = apply_relic(user, "coinflip", payout)
+            payout = game.cap_payout_bonus(_pb, payout)
         else:
             refund = insurance_refund(user, bet)
         earned, xp_gain, before, after = settle_play(
@@ -1479,8 +1485,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
         payout = int(math.floor(bet * multiplier)) if win else 0
         refund = 0
         if win:
+            _pb = payout
             payout = charm_bonus(user, payout)
             payout = apply_relic(user, "basket", payout)
+            payout = game.cap_payout_bonus(_pb, payout)
         else:
             refund = insurance_refund(user, bet)
         earned, xp_gain, level_before, level_after = settle_play(
@@ -1544,7 +1552,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
         payout = int(math.floor(bet * multiplier)) if win else 0
         refund = 0
         if win:
+            _pb = payout
             payout = charm_bonus(user, payout)
+            payout = game.cap_payout_bonus(_pb, payout)
         else:
             refund = insurance_refund(user, bet)
         earned, xp_gain, level_before, level_after = settle_play(
@@ -2126,7 +2136,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
     @dp.message(Command("balance", "profile", "me"))
     async def balance_cmd(message: Message) -> None:
         user = get_user(message)
-        await send_card(message, "profile", profile_text(user),
+        await send_card(message, "card-profile.jpg", profile_text(user),
                         profile_keyboard())
 
     @dp.message(Command("prefix", "prefixes"))
@@ -2414,7 +2424,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer("Машина не найдена", show_alert=True)
             return
         text, keyboard = car_view(car)
-        await send_card(callback.message, "car", text, keyboard)
+        await send_card(callback.message, f"card-car-{car['model']}.jpg",
+                        text, keyboard, fallback="card-car.jpg")
         await callback.answer()
 
     @dp.callback_query(F.data.startswith("car:fuel:"))
@@ -2686,7 +2697,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer("Яхта не найдена", show_alert=True)
             return
         text, keyboard = yacht_view(yacht)
-        await send_card(callback.message, "yacht", text, keyboard)
+        await send_card(callback.message, f"card-yacht-{yacht['model']}.jpg",
+                        text, keyboard, fallback="card-yacht.jpg")
         await callback.answer()
 
     @dp.callback_query(F.data.startswith("yacht:fuel:"))
@@ -2991,7 +3003,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
             return
         rate = game.business_tax(len(db.businesses(user["user_id"])))
         text, keyboard = business_view(biz, rate)
-        await send_card(callback.message, "business", text, keyboard)
+        await send_card(callback.message, f"card-biz-{biz['model']}.jpg",
+                        text, keyboard, fallback="card-business.jpg")
         await callback.answer()
 
     @dp.callback_query(F.data.startswith("biz:collect:"))
@@ -3541,10 +3554,11 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await message.answer("Команда доступна админам.")
             return
         parts = (message.text or "").split()
-        if len(parts) < 3 or parts[2].lower() not in ("user", "moderator", "admin"):
+        if len(parts) < 3 or parts[2].lower() not in ("user", "moderator", "admin",
+                                                      "owner"):
             await message.answer(
                 "Формат: <code>/role 123456789 moderator</code>\n"
-                "Роли: user, moderator, admin.")
+                "Роли: user, moderator, admin, owner.")
             return
         target = resolve_target(actor, parts[1])
         role = parts[2].lower()
@@ -4367,8 +4381,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
     @dp.callback_query(F.data == "menu:balance")
     async def menu_balance(callback) -> None:
         user = get_user(callback)
-        await send_card(callback.message, "profile", profile_text(user),
-                        profile_keyboard())
+        await send_card(callback.message, "card-profile.jpg",
+                        profile_text(user), profile_keyboard())
         await callback.answer()
 
     @dp.callback_query(F.data == "menu:tasks")
@@ -4423,9 +4437,11 @@ def build_dispatcher(db: Database) -> Dispatcher:
         safe = game.CELLS - int(rnd["mines"])
         if len(opened) >= safe:
             payout = game.payout_for(rnd["bet"], mult)
+            _pb = payout
             payout = charm_bonus(user, payout)
             payout = apply_relic(user, "mines", payout)
             payout = gold_pick_bonus(user, payout)
+            payout = game.cap_payout_bonus(_pb, payout)
             db.update_round(round_id, opened, mult, "won", payout)
             db.add_balance(user["user_id"], payout)
             earned, xp_gain, level_before, level_after = finish_game(
