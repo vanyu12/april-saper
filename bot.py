@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     BotCommand,
+    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -181,6 +182,28 @@ async def safe_edit(message: Message, text: str,
         if "not modified" in str(exc).lower():
             return
         await message.answer(text, reply_markup=keyboard)
+    except Exception:
+        await message.answer(text, reply_markup=keyboard)
+
+
+CARD_IMAGES = {
+    "profile": "card-profile.jpg",
+    "car": "card-car.jpg",
+    "yacht": "card-yacht.jpg",
+    "business": "card-business.jpg",
+}
+
+
+async def send_card(message: Message, image: str, text: str,
+                    keyboard: InlineKeyboardMarkup | None = None) -> None:
+    """Карточка с картинкой; если файла нет — обычный текст."""
+    path = CARD_IMAGES.get(image, image)
+    if not path or not Path(path).exists():
+        await message.answer(text, reply_markup=keyboard)
+        return
+    try:
+        await message.answer_photo(FSInputFile(path), caption=text,
+                                   reply_markup=keyboard)
     except Exception:
         await message.answer(text, reply_markup=keyboard)
 
@@ -2103,7 +2126,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
     @dp.message(Command("balance", "profile", "me"))
     async def balance_cmd(message: Message) -> None:
         user = get_user(message)
-        await message.answer(profile_text(user), reply_markup=profile_keyboard())
+        await send_card(message, "profile", profile_text(user),
+                        profile_keyboard())
 
     @dp.message(Command("prefix", "prefixes"))
     async def prefix_cmd(message: Message) -> None:
@@ -2390,7 +2414,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer("Машина не найдена", show_alert=True)
             return
         text, keyboard = car_view(car)
-        await safe_edit(callback.message, text, keyboard)
+        await send_card(callback.message, "car", text, keyboard)
         await callback.answer()
 
     @dp.callback_query(F.data.startswith("car:fuel:"))
@@ -2662,7 +2686,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer("Яхта не найдена", show_alert=True)
             return
         text, keyboard = yacht_view(yacht)
-        await safe_edit(callback.message, text, keyboard)
+        await send_card(callback.message, "yacht", text, keyboard)
         await callback.answer()
 
     @dp.callback_query(F.data.startswith("yacht:fuel:"))
@@ -2967,7 +2991,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             return
         rate = game.business_tax(len(db.businesses(user["user_id"])))
         text, keyboard = business_view(biz, rate)
-        await safe_edit(callback.message, text, keyboard)
+        await send_card(callback.message, "business", text, keyboard)
         await callback.answer()
 
     @dp.callback_query(F.data.startswith("biz:collect:"))
@@ -4343,7 +4367,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
     @dp.callback_query(F.data == "menu:balance")
     async def menu_balance(callback) -> None:
         user = get_user(callback)
-        await callback.message.answer(profile_text(user), reply_markup=profile_keyboard())
+        await send_card(callback.message, "profile", profile_text(user),
+                        profile_keyboard())
         await callback.answer()
 
     @dp.callback_query(F.data == "menu:tasks")
