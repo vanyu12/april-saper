@@ -1550,6 +1550,28 @@ BASE_TAX_BUSINESS = TAX_BUSINESS
 TAX_PER_BUSINESS = 0.02
 TAX_BUSINESS_MAX = 0.45
 
+# --- майнинг-ферма -------------------------------------------------------
+MINING_SLOTS_BASE = 50
+MINING_SLOTS_STEP = 10
+MINING_SLOTS_MAX = 2000
+MINING_GPU_PRICE = 120_000      # цена одной видеокарты
+MINING_GPU_INCOME = 2_500       # mCoin в час с одной карты
+MINING_SLOT_PRICE = 300_000     # первая пачка +10 мест
+MINING_SLOT_GROWTH = 1.35       # каждая следующая пачка дороже
+MINING_CAP_SECONDS = 24 * 3600  # больше суток доход не копится
+
+
+def mining_slot_price(slots: int) -> int:
+    """Цена следующей пачки мест: растёт с каждой покупкой."""
+    steps = max(0, (int(slots) - MINING_SLOTS_BASE) // MINING_SLOTS_STEP)
+    return int(MINING_SLOT_PRICE * (MINING_SLOT_GROWTH ** steps))
+
+
+def mining_income(gpus: int, seconds: int) -> int:
+    """Доход фермы за отрезок времени с ограничением накопления."""
+    seconds = min(max(0, int(seconds)), MINING_CAP_SECONDS)
+    return int(int(gpus) * MINING_GPU_INCOME * seconds / 3600)
+
 
 def business_tax(count: int) -> float:
     """Ставка налога для владельца `count` бизнесов."""

@@ -97,6 +97,15 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS mining (
+        user_id      INTEGER PRIMARY KEY,
+        gpus         INTEGER NOT NULL DEFAULT 0,
+        slots        INTEGER NOT NULL DEFAULT 50,
+        last_collect INTEGER NOT NULL DEFAULT 0,
+        bought_at    INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS users (
         user_id          INTEGER PRIMARY KEY,
         username         TEXT,
@@ -3198,6 +3207,58 @@ class Database:
                    (biz_id, user_id))
         self.add_balance(user_id, refund)
         return True
+
+    # --- майнинг-ферма ----------------------------------------------------
+    def mining(self, user_id: int) -> dict | None:
+        return self._row("SELECT * FROM mining WHERE user_id = ?", (user_id,))
+
+    def mining_ensure(self, user_id: int, slots: int, now: int) -> dict:
+        row = self.mining(user_id)
+        if row:
+            return row
+        self._exec(
+            """INSERT OR IGNORE INTO mining
+               (user_id, gpus, slots, last_collect, bought_at)
+               VALUES (?, 0, ?, ?, ?)""",
+            (user_id, slots, now, now))
+        return self.mining(user_id)
+
+    def mining_set_time(self, user_id: int, ts: int) -> None:
+        self._exec("UPDATE mining SET last_collect = ? WHERE user_id = ?",
+                   (ts, user_id))
+
+    def mining_buy_gpu(self, user_id: int, price: int, now: int) -> str:
+        row = self.mining(user_id)
+        if not row:
+            return "no"
+        if int(row["gpus"]) >= int(row["slots"]):
+            return "slots"
+        bal = self._row("SELECT balance FROM users WHERE user_id = ?",
+                        (user_id,))
+        if not bal or int(bal["balance"]) < price:
+            return "money"
+        self.add_balance(user_id, -price)
+        self._exec(
+            "UPDATE mining SET gpus = gpus + 1, last_collect = ? WHERE user_id = ?",
+            (now, user_id))
+        return "ok"
+
+    def mining_buy_slots(self, user_id: int, add: int, price: int, cap: int,
+                         now: int) -> str:
+        row = self.mining(user_id)
+        if not row:
+            return "no"
+        if int(row["slots"]) >= cap:
+            return "max"
+        bal = self._row("SELECT balance FROM users WHERE user_id = ?",
+                        (user_id,))
+        if not bal or int(bal["balance"]) < price:
+            return "money"
+        new_slots = min(int(row["slots"]) + add, cap)
+        self.add_balance(user_id, -price)
+        self._exec("UPDATE mining SET slots = ?, last_collect = ? WHERE user_id = ?",
+                   (new_slots, now, user_id))
+        return "ok"
 
     # --- мини-игра «рыбалка» ---------------------------------------------
     def fish_game_start(self, user_id: int, yacht_id: int, cell: int,
