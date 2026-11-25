@@ -214,6 +214,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         "mines", "saper", "bonus", "daily",
         "auto", "cars", "avto", "yachts", "yacht", "biz", "business",
         "balance", "profile", "me", "deposit", "bank", "mine", "mining",
+        "city", "gorod", "ore", "sh",
         "admin", "owner", "adminboot",
         "setbal", "addbal", "role", "give", "gmp", "setgmp",
         "xp", "energy", "pref", "givecar", "giveyacht", "resetcd",
@@ -3154,12 +3155,358 @@ def build_dispatcher(db: Database) -> Dispatcher:
                         "card-business.jpg")
         await callback.answer()
 
+    # --- город ---------------------------------------------------------
+    def city_view(user: dict) -> tuple[str, InlineKeyboardMarkup]:
+        now = int(time.time())
+        db.city_ensure(user["user_id"], now)
+        row = db.city(user["user_id"])
+        stats = game.city_stats(db.city_buildings(user["user_id"]))
+        left = max(0, int(row["last_tax"]) + game.CITY_TAX_COOLDOWN - now)
+        pop = stats["population"]
+        used = (pop + game.CITY_PEOPLE_PER_POWER - 1) // game.CITY_PEOPLE_PER_POWER
+        tax = game.city_tax(pop, stats["bonus"])
+        lines = [f"🏙 <b>{stats['level']['title']}</b>",
+                 "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
+                 f"👥 Население: <b>{num(pop)}</b> / {num(stats['homes'])} чел",
+                 f"⚡ Электричество: {num(stats['power'])} "
+                 f"(занято {num(used)})",
+                 f"💧 Вода: {num(stats['water'])} (занято {num(used)})",
+                 f"🧾 Налог в час: <b>~{num(tax)}</b> mCoin"]
+        if stats["bonus"]:
+            lines.append(f"🏛 Бонус инфраструктуры: +{stats['bonus']}%")
+        lines.append(f"⏳ Собрать можно через {left_text(left)}" if left > 0
+                     else "✅ Налоги можно собрать")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🧾 Собрать налоги",
+                                  callback_data="city:tax")],
+            [InlineKeyboardButton(text="🏗 Здания", callback_data="city:build")],
+            [InlineKeyboardButton(text="◀️ Меню", callback_data="help:menu")],
+        ])
+        return "\n".join(lines), keyboard
+
+    def city_build_keyboard() -> InlineKeyboardMarkup:
+        rows = [[InlineKeyboardButton(
+            text=f"{conf['icon']} {conf['title']}",
+            callback_data=f"city:cat:{key}")]
+            for key, conf in game.CITY_KINDS.items()]
+        rows.append([InlineKeyboardButton(text="◀️ Назад",
+                                          callback_data="city:menu")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def city_cat_view(user: dict, kind: str) -> tuple[str, InlineKeyboardMarkup]:
+        conf = game.CITY_KINDS[kind]
+        owned = db.city_buildings(user["user_id"])
+        lines = [f"{conf['icon']} <b>{conf['title']}</b>",
+                 "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"]
+        rows = []
+        for item in conf["items"]:
+            qty = int(owned.get(f"{kind}:{item['key']}", 0))
+            if kind == "housing":
+                extra = f" · 👥{num(item['people'])}"
+            elif kind == "infra":
+                extra = f" · +{item['tax']}% к налогам"
+            elif kind == "power":
+                extra = f" · ⚡{num(item['power'])}"
+            else:
+                extra = f" · 💧{num(item['water'])}"
+            lines.append(f"{item['icon']} {item['title']} "
+                         f"[{qty}/{item['max']}] — {num(item['price'])} mCoin"
+                         f"{extra}")
+            if qty < item["max"]:
+                rows.append([InlineKeyboardButton(
+                    text=f"🛒 {item['title']} · {num(item['price'])}",
+                    callback_data=f"city:buy:{kind}:{item['key']}")])
+            else:
+                rows.append([InlineKeyboardButton(
+                    text=f"✅ {item['title']} [макс]",
+                    callback_data="city:noop")])
+        rows.append([InlineKeyboardButton(text="◀️ Назад",
+                                          callback_data="city:build")])
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+    @dp.message(Command("city", "gorod"))
+    async def city_cmd(message: Message) -> None:
+        user = get_user(message)
+        text, keyboard = city_view(user)
+        await send_card(message, "card-city.jpg", text, keyboard,
+                        "card-business.jpg")
+
+    @dp.callback_query(F.data == "city:menu")
+    async def city_menu_cb(callback) -> None:
+        user = get_user(callback)
+        text, keyboard = city_view(user)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data == "city:tax")
+    async def city_tax_cb(callback) -> None:
+        user = get_user(callback)
+        now = int(time.time())
+        db.city_ensure(user["user_id"], now)
+        row = db.city(user["user_id"])
+        left = int(row["last_tax"]) + game.CITY_TAX_COOLDOWN - now
+        if left > 0:
+            await callback.answer(f"Налоги уже собраны, ждать "
+                                  f"{left_text(left)}", show_alert=True)
+            return
+        stats = game.city_stats(db.city_buildings(user["user_id"]))
+        if stats["population"] <= 0:
+            await callback.answer("В городе нет жителей — постройте дома",
+                                  show_alert=True)
+            return
+        base = game.city_tax(stats["population"], stats["bonus"])
+        amount = max(1, int(base * random.uniform(0.9, 1.1)))
+        db.add_balance(user["user_id"], amount)
+        db.add_treasury(max(1, amount // 20))
+        db.city_set_tax(user["user_id"], now)
+        await callback.answer(f"Собрано {num(amount)} mCoin")
+        text, keyboard = city_view(user)
+        await safe_edit(callback.message,
+                        f"🧾 Собрано налогов: <b>+{num(amount)}</b> mCoin\n\n"
+                        + text, keyboard)
+
+    @dp.callback_query(F.data == "city:build")
+    async def city_build_cb(callback) -> None:
+        await safe_edit(callback.message,
+                        "🏗 <b>Здания</b>\nВыберите категорию:",
+                        city_build_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("city:cat:"))
+    async def city_cat_cb(callback) -> None:
+        kind = callback.data.split(":", 2)[-1]
+        if kind not in game.CITY_KINDS:
+            await callback.answer()
+            return
+        user = get_user(callback)
+        text, keyboard = city_cat_view(user, kind)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("city:buy:"))
+    async def city_buy_cb(callback) -> None:
+        parts = callback.data.split(":")
+        if len(parts) < 4:
+            await callback.answer()
+            return
+        kind, key = parts[2], parts[3]
+        conf = game.CITY_KINDS.get(kind)
+        item = next((i for i in (conf or {}).get("items", [])
+                     if i["key"] == key), None)
+        if not item:
+            await callback.answer()
+            return
+        user = get_user(callback)
+        result = db.city_buy(user["user_id"], kind, key, item["price"],
+                             item["max"], int(time.time()))
+        if result == "money":
+            await callback.answer("Не хватает mCoin", show_alert=True)
+            return
+        if result == "max":
+            await callback.answer("Достигнут лимит", show_alert=True)
+            return
+        await callback.answer("Построено")
+        text, keyboard = city_cat_view(user, kind)
+        await safe_edit(callback.message, text, keyboard)
+
+    @dp.callback_query(F.data == "city:noop")
+    async def city_noop_cb(callback) -> None:
+        await callback.answer("Уже максимум")
+
+    # --- шахта ---------------------------------------------------------
+    def mine_ore_view(user: dict) -> tuple[str, InlineKeyboardMarkup]:
+        now = int(time.time())
+        day = game.day_key()
+        state = db.mine_ensure(user["user_id"], now)
+        taps = int(state["taps"])
+        if str(state["day"]) != day:
+            taps = 0
+            db.mine_set(user["user_id"], taps=0, day=day, now=now)
+        pick = game.pickaxe_by_level(int(state["pick"]))
+        total = sum(pick["drops"].values()) or 1
+        lines = ["⛏ <b>Шахта</b>", "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
+                 f"🛠 {pick['title']}", "",
+                 "🪨 Доступная руда и шанс добычи:", ""]
+        for key, weight in pick["drops"].items():
+            ore = game.ORE_BY_KEY[key]
+            lines.append(f"{ore['icon']} {ore['title']} "
+                         f"[{num(ore['price'])}] — "
+                         f"{round(weight * 100 / total)}%")
+        lines += ["", f"⛏ Ударов осталось: "
+                      f"<b>{taps}/{game.MINE_TAPS_PER_DAY}</b>"]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"⛏ Добыть руду ({taps}/{game.MINE_TAPS_PER_DAY})",
+                callback_data="ore:dig")],
+            [InlineKeyboardButton(text="🎒 Инвентарь",
+                                  callback_data="ore:inv")],
+            [InlineKeyboardButton(text="🛠 Кирки", callback_data="ore:picks")],
+            [InlineKeyboardButton(text="◀️ Меню", callback_data="help:menu")],
+        ])
+        return "\n".join(lines), keyboard
+
+    def ore_inv_view(user: dict) -> tuple[str, InlineKeyboardMarkup]:
+        items = db.ore_inventory(user["user_id"])
+        lines = ["🎒 <b>Инвентарь руды</b>", "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"]
+        rows = []
+        total_value = 0
+        if not items:
+            lines.append("Пусто — спуститесь в шахту.")
+        for row in items:
+            ore = game.ORE_BY_KEY.get(row["ore"]) or {}
+            qty = int(row["qty"])
+            value = qty * int(ore.get("price", 0))
+            total_value += value
+            lines.append(f"{ore.get('icon', '')} {ore.get('title', row['ore'])}: "
+                         f"{num(qty)} шт · {num(value)} mCoin")
+            rows.append([InlineKeyboardButton(
+                text=f"💵 Продать {ore.get('title', row['ore'])}",
+                callback_data=f"ore:sell:{row['ore']}")])
+        if items:
+            lines += ["", f"💰 Всё вместе: <b>{num(total_value)}</b> mCoin"]
+            rows.append([InlineKeyboardButton(text="💵 Продать всё",
+                                              callback_data="ore:sellall")])
+        rows.append([InlineKeyboardButton(text="◀️ Назад",
+                                          callback_data="ore:menu")])
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def ore_picks_view(user: dict) -> tuple[str, InlineKeyboardMarkup]:
+        state = db.mine_ensure(user["user_id"], int(time.time()))
+        cur = int(state["pick"])
+        lines = ["🛠 <b>Кирки</b>", "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"]
+        rows = []
+        for i, pick in enumerate(game.PICKAXES, 1):
+            mark = "✅" if i == cur else ("🔒" if i > cur else "•")
+            price = num(pick["price"]) if pick["price"] else "бесплатно"
+            lines.append(f"{mark} {pick['title']} — {price}")
+            if i == cur + 1:
+                rows.append([InlineKeyboardButton(
+                    text=f"🛒 {pick['title']} · {num(pick['price'])}",
+                    callback_data=f"ore:pick:{i}")])
+        rows.append([InlineKeyboardButton(text="◀️ Назад",
+                                          callback_data="ore:menu")])
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+    @dp.message(Command("ore", "sh"))
+    async def mine_ore_cmd(message: Message) -> None:
+        user = get_user(message)
+        text, keyboard = mine_ore_view(user)
+        await send_card(message, "card-mine-ore.jpg", text, keyboard,
+                        "card-mine.jpg")
+
+    @dp.callback_query(F.data == "ore:menu")
+    async def ore_menu_cb(callback) -> None:
+        user = get_user(callback)
+        text, keyboard = mine_ore_view(user)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data == "ore:inv")
+    async def ore_inv_cb(callback) -> None:
+        user = get_user(callback)
+        text, keyboard = ore_inv_view(user)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data == "ore:picks")
+    async def ore_picks_cb(callback) -> None:
+        user = get_user(callback)
+        text, keyboard = ore_picks_view(user)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data == "ore:dig")
+    async def ore_dig_cb(callback) -> None:
+        user = get_user(callback)
+        now = int(time.time())
+        day = game.day_key()
+        state = db.mine_ensure(user["user_id"], now)
+        taps = 0 if str(state["day"]) != day else int(state["taps"])
+        if taps >= game.MINE_TAPS_PER_DAY:
+            await callback.answer("Удары закончились — приходите завтра",
+                                  show_alert=True)
+            return
+        ore_key = game.roll_ore(int(state["pick"]), random.random())
+        qty = random.randint(1, 3)
+        db.ore_add(user["user_id"], ore_key, qty)
+        db.mine_set(user["user_id"], taps=taps + 1, day=day, now=now)
+        ore = game.ORE_BY_KEY[ore_key]
+        await callback.answer(f"{ore['title']} ×{qty}")
+        text, keyboard = mine_ore_view(user)
+        await safe_edit(callback.message,
+                        f"⛏ Вы добыли: <b>{ore['icon']} {ore['title']} ×{qty}</b>"
+                        f" ({num(qty * ore['price'])} mCoin)\n\n" + text,
+                        keyboard)
+
+    @dp.callback_query(F.data.startswith("ore:sell:"))
+    async def ore_sell_cb(callback) -> None:
+        key = callback.data.split(":", 2)[-1]
+        ore = game.ORE_BY_KEY.get(key)
+        if not ore:
+            await callback.answer()
+            return
+        user = get_user(callback)
+        qty = db.ore_take(user["user_id"], key, 10 ** 9)
+        if qty <= 0:
+            await callback.answer("Этой руды нет", show_alert=True)
+            return
+        amount = qty * int(ore["price"])
+        db.add_balance(user["user_id"], amount)
+        await callback.answer(f"+{num(amount)} mCoin")
+        text, keyboard = ore_inv_view(user)
+        await safe_edit(callback.message,
+                        f"💵 Продано: {ore['title']} ×{qty} за "
+                        f"<b>+{num(amount)}</b> mCoin\n\n" + text, keyboard)
+
+    @dp.callback_query(F.data == "ore:sellall")
+    async def ore_sell_all_cb(callback) -> None:
+        user = get_user(callback)
+        total = 0
+        for row in db.ore_inventory(user["user_id"]):
+            ore = game.ORE_BY_KEY.get(row["ore"]) or {}
+            qty = db.ore_take(user["user_id"], row["ore"], 10 ** 9)
+            total += qty * int(ore.get("price", 0))
+        if total <= 0:
+            await callback.answer("Продавать нечего", show_alert=True)
+            return
+        db.add_balance(user["user_id"], total)
+        await callback.answer(f"+{num(total)} mCoin")
+        text, keyboard = ore_inv_view(user)
+        await safe_edit(callback.message,
+                        f"💵 Продано всё за <b>+{num(total)}</b> mCoin\n\n"
+                        + text, keyboard)
+
+    @dp.callback_query(F.data.startswith("ore:pick:"))
+    async def ore_pick_cb(callback) -> None:
+        try:
+            level = int(callback.data.split(":", 2)[-1])
+        except ValueError:
+            await callback.answer()
+            return
+        user = get_user(callback)
+        state = db.mine_ensure(user["user_id"], int(time.time()))
+        if level != int(state["pick"]) + 1:
+            await callback.answer("Сначала купите предыдущую кирку",
+                                  show_alert=True)
+            return
+        pick = game.pickaxe_by_level(level)
+        if int(db.user(user["user_id"])["balance"]) < int(pick["price"]):
+            await callback.answer("Не хватает mCoin", show_alert=True)
+            return
+        db.add_balance(user["user_id"], -int(pick["price"]))
+        db.mine_set(user["user_id"], pick=level)
+        await callback.answer("Кирка куплена")
+        text, keyboard = ore_picks_view(user)
+        await safe_edit(callback.message, text, keyboard)
+
     TEXT_ALIASES = {
         "м": "mine", "майн": "mine", "майнинг": "mine",
         "авто": "auto", "машины": "auto",
         "яхта": "yachts", "яхты": "yachts", "магазин яхт": "yachts",
         "бизнес": "biz", "бизнесы": "biz",
         "магазин бизнесов": "biz",
+        "г": "city", "город": "city",
+        "ш": "mine_ore", "шахта": "mine_ore", "руда": "mine_ore",
     }
 
     @dp.message(F.text.lower().in_(set(TEXT_ALIASES)))
@@ -3167,7 +3514,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
         text = (message.text or "").strip().lower()
         target = TEXT_ALIASES.get(text)
         handlers = {"mine": mine_cmd, "auto": auto_cmd,
-                    "yachts": yachts_cmd, "biz": biz_cmd}
+                    "yachts": yachts_cmd, "biz": biz_cmd,
+                    "city": city_cmd, "mine_ore": mine_ore_cmd}
         if target in handlers:
             await handlers[target](message)
 

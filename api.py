@@ -1,4 +1,4 @@
-import random
+﻿import random
 import base64
 import hashlib
 import hmac
@@ -2688,6 +2688,7 @@ class Api:
             "games": self.db.admin_game_stats(),
             "economy": self.db.admin_economy(),
             "duels": self.db.admin_duels(8),
+            "city": self.db.admin_city_stats(),
             "settings": self._public_settings(),
             "recent": self.db.admin_recent(12),
         })
@@ -6422,6 +6423,45 @@ class Api:
         return self._json({"ok": True, "user_id": user_id,
                            "currency": currency, "balance": new_balance})
 
+    async def admin_ore(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err is not None:
+            return err
+        try:
+            body = await request.json()
+        except Exception:
+            return self._fail("bad_request")
+        try:
+            user_id = int(body.get("user_id", 0))
+            qty = int(body.get("qty", 0))
+        except (TypeError, ValueError):
+            return self._fail("bad_args")
+        ore = str(body.get("ore", ""))
+        if ore not in game.ORE_BY_KEY or user_id <= 0 or qty <= 0:
+            return self._fail("bad_args")
+        self.db.ore_add(user_id, ore, qty)
+        self.db.admin_log(int(admin["user_id"]), user_id,
+                          f"ore {ore} +{qty}")
+        return self._json({"ok": True, "ore": ore, "qty": qty})
+
+    async def admin_city_reset(self, request: web.Request) -> web.Response:
+        admin, err = self._require_admin(request)
+        if err is not None:
+            return err
+        try:
+            body = await request.json()
+        except Exception:
+            return self._fail("bad_request")
+        try:
+            user_id = int(body.get("user_id", 0))
+        except (TypeError, ValueError):
+            return self._fail("bad_args")
+        if user_id <= 0:
+            return self._fail("bad_args")
+        self.db.admin_city_reset(user_id)
+        self.db.admin_log(int(admin["user_id"]), user_id, "city reset")
+        return self._json({"ok": True})
+
     async def admin_set_rate(self, request: web.Request) -> web.Response:
         admin, err = self._require_admin(request)
         if err is not None:
@@ -6802,6 +6842,8 @@ def build_app(db: Database) -> web.Application:
     app.router.add_post("/api/jackpot/draw", api.jackpot_draw)
     app.router.add_post("/api/admin/economy", api.admin_economy_view)
     app.router.add_post("/api/admin/emit", api.admin_emit)
+    app.router.add_post("/api/admin/ore", api.admin_ore)
+    app.router.add_post("/api/admin/city-reset", api.admin_city_reset)
     app.router.add_post("/api/admin/rate", api.admin_set_rate)
     app.router.add_post("/api/admin/commission", api.admin_set_commission)
     app.router.add_post("/api/admin/inflation", api.admin_inflation)

@@ -1588,3 +1588,150 @@ def business_tax(count: int) -> float:
     return min(TAX_BUSINESS_MAX,
                BASE_TAX_BUSINESS + TAX_PER_BUSINESS * max(0, count - 1))
 
+# --- ГОРОД -----------------------------------------------------------------
+CITY_TAX_COOLDOWN = 3600
+CITY_TAX_PER_PERSON = 1_500
+CITY_PEOPLE_PER_POWER = 20   # один юнит энергии держит 20 жителей
+
+CITY_LEVELS = [
+    {"key": "village", "title": "Деревня", "people": 0},
+    {"key": "settle", "title": "Посёлок", "people": 200},
+    {"key": "town", "title": "Посёлок городского типа", "people": 1_000},
+    {"key": "city", "title": "Город", "people": 5_000},
+    {"key": "mega", "title": "Мегаполис", "people": 25_000},
+]
+
+CITY_HOUSING = [
+    {"key": "small", "title": "Маленький домик", "icon": "🏠", "price": 5_000_000,
+     "max": 5, "people": 15},
+    {"key": "big", "title": "Большой дом", "icon": "🏡", "price": 30_000_000,
+     "max": 3, "people": 50},
+    {"key": "apart", "title": "Апартаменты", "icon": "🏢", "price": 125_000_000,
+     "max": 2, "people": 140},
+    {"key": "complex", "title": "Жилой комплекс", "icon": "🏙", "price": 850_000_000,
+     "max": 2, "people": 500},
+]
+
+CITY_INFRA = [
+    {"key": "school", "title": "Школа", "icon": "🏫", "price": 10_000_000,
+     "max": 5, "tax": 2},
+    {"key": "hospital", "title": "Больница", "icon": "🏥", "price": 50_000_000,
+     "max": 3, "tax": 5},
+    {"key": "mall", "title": "Торговый центр", "icon": "🏬", "price": 200_000_000,
+     "max": 2, "tax": 10},
+    {"key": "factory", "title": "Завод", "icon": "🏭", "price": 1_000_000_000,
+     "max": 2, "tax": 20},
+]
+
+CITY_POWER = [
+    {"key": "solar", "title": "Солнечная электростанция", "icon": "☀️",
+     "price": 1_500_000, "max": 2, "power": 3},
+    {"key": "wind", "title": "Ветряная электростанция", "icon": "🌬️",
+     "price": 9_500_000, "max": 3, "power": 15},
+    {"key": "coal", "title": "Угольная электростанция", "icon": "🏭",
+     "price": 25_000_000, "max": 3, "power": 30},
+    {"key": "hydro", "title": "Гидроэлектростанция", "icon": "💧",
+     "price": 95_000_000, "max": 2, "power": 60},
+    {"key": "nuclear", "title": "Атомная электростанция", "icon": "☢️",
+     "price": 400_000_000, "max": 2, "power": 150},
+]
+
+CITY_WATER = [
+    {"key": "well", "title": "Колодец", "icon": "🪣", "price": 1_850_000,
+     "max": 2, "water": 5},
+    {"key": "catch", "title": "Водосборник", "icon": "🚰", "price": 7_500_000,
+     "max": 3, "water": 20},
+    {"key": "spring", "title": "Родник", "icon": "⛲", "price": 26_500_000,
+     "max": 3, "water": 40},
+    {"key": "clean", "title": "Очистка воды", "icon": "♻️", "price": 145_000_000,
+     "max": 4, "water": 160},
+]
+
+CITY_KINDS = {
+    "housing": {"title": "Жилые здания", "icon": "🏠", "items": CITY_HOUSING,
+                "field": "people"},
+    "infra": {"title": "Инфраструктура", "icon": "🏛", "items": CITY_INFRA,
+              "field": "tax"},
+    "power": {"title": "Электричество", "icon": "⚡", "items": CITY_POWER,
+              "field": "power"},
+    "water": {"title": "Вода", "icon": "💧", "items": CITY_WATER,
+              "field": "water"},
+}
+
+
+def city_level(population: int) -> dict:
+    level = CITY_LEVELS[0]
+    for item in CITY_LEVELS:
+        if int(population) >= int(item["people"]):
+            level = item
+    return level
+
+
+def city_stats(owned: dict) -> dict:
+    """owned: {"kind:key": qty}. Возвращает население, ресурсы и бонус налогов."""
+    def total(kind: str, field: str) -> int:
+        value = 0
+        for item in CITY_KINDS[kind]["items"]:
+            qty = int(owned.get(f"{kind}:{item['key']}", 0) or 0)
+            value += qty * int(item[field])
+        return value
+
+    homes = total("housing", "people")
+    power = total("power", "power")
+    water = total("water", "water")
+    bonus = total("infra", "tax")
+    population = min(homes, power * CITY_PEOPLE_PER_POWER,
+                      water * CITY_PEOPLE_PER_POWER)
+    return {"homes": homes, "power": power, "water": water,
+            "bonus": bonus, "population": int(population),
+            "level": city_level(int(population))}
+
+
+def city_tax(population: int, bonus: int) -> int:
+    base = int(population) * CITY_TAX_PER_PERSON
+    return int(base * (1 + int(bonus) / 100.0))
+
+
+# --- ШАХТА ----------------------------------------------------------------
+MINE_TAPS_PER_DAY = 7
+
+ORES = [
+    {"key": "stone", "title": "Камень", "icon": "🪨", "price": 10_000},
+    {"key": "iron", "title": "Железо", "icon": "⛓", "price": 35_000},
+    {"key": "copper", "title": "Медь", "icon": "🟠", "price": 60_000},
+    {"key": "tin", "title": "Олово", "icon": "⚪", "price": 90_000},
+    {"key": "gold", "title": "Золото", "icon": "🥇", "price": 150_000},
+    {"key": "diamond", "title": "Алмазы", "icon": "💎", "price": 220_000},
+    {"key": "emerald", "title": "Изумруды", "icon": "🟩", "price": 100_000},
+    {"key": "matter", "title": "Материя", "icon": "🌀", "price": 200_000},
+    {"key": "plasma", "title": "Плазма", "icon": "✨", "price": 500_000},
+]
+ORE_BY_KEY = {item["key"]: item for item in ORES}
+
+PICKAXES = [
+    {"key": "wood", "title": "Деревянная кирка", "price": 0,
+     "drops": {"stone": 60, "iron": 40}},
+    {"key": "stone", "title": "Каменная кирка", "price": 2_000_000,
+     "drops": {"iron": 40, "copper": 35, "tin": 25}},
+    {"key": "iron", "title": "Железная кирка", "price": 25_000_000,
+     "drops": {"tin": 30, "gold": 40, "diamond": 30}},
+    {"key": "diamond", "title": "Алмазная кирка", "price": 300_000_000,
+     "drops": {"emerald": 50, "matter": 30, "plasma": 20}},
+]
+
+
+def pickaxe_by_level(level: int) -> dict:
+    level = max(1, min(len(PICKAXES), int(level or 1)))
+    return PICKAXES[level - 1]
+
+
+def roll_ore(level: int, value: float) -> str:
+    drops = pickaxe_by_level(level)["drops"]
+    total = sum(drops.values())
+    edge = float(value) * total
+    acc = 0
+    for key, weight in drops.items():
+        acc += weight
+        if edge < acc:
+            return key
+    return list(drops)[-1]

@@ -1311,6 +1311,53 @@ function renderAdminEconomy() {
     .join("");
 }
 
+function renderAdminCity() {
+  const city = state.admin && state.admin.city;
+  if (!city) return;
+  const cards = [
+    ["Городов", fmt(city.players)],
+    ["Зданий", fmt(city.buildings)],
+    ["Руды на руках", fmt(city.ores)],
+    ["Шахтёров", fmt(city.miners)],
+  ];
+  if ($("adminCityStats")) {
+    $("adminCityStats").innerHTML = cards
+      .map(([label, value]) =>
+        `<div class="stat"><span class="stat-value">${value}</span><span class="stat-label">${label}</span></div>`)
+      .join("");
+  }
+  const box = $("adminCityTop");
+  if (box) {
+    const top = city.top || [];
+    box.innerHTML = top.length
+      ? top.map((t) => `<div class="row"><div class="row-main"><div class="row-title">${escapeHtml(t.username ? "@" + t.username : (t.first_name || "id" + t.user_id))}</div><div class="row-sub">${fmt(t.buildings)} зданий</div></div></div>`).join("")
+      : '<div class="empty">Городов пока нет</div>';
+  }
+}
+
+function bindAdminCity() {
+  if ($("adminOreBtn")) $("adminOreBtn").addEventListener("click", async () => {
+    const user_id = Number($("adminOreUser").value || 0);
+    const qty = Number($("adminOreQty").value || 0);
+    const ore = $("adminOreKey").value;
+    try {
+      await api("/api/admin/ore", { user_id, ore, qty });
+      $("adminOreHint").textContent = `Выдано: ${ore} ×${qty}`;
+    } catch (e) {
+      $("adminOreHint").textContent = e.message;
+    }
+  });
+  if ($("adminCityResetBtn")) $("adminCityResetBtn").addEventListener("click", async () => {
+    const user_id = Number($("adminCityResetUser").value || 0);
+    try {
+      await api("/api/admin/city-reset", { user_id });
+      $("adminCityResetHint").textContent = "Город сброшен";
+    } catch (e) {
+      $("adminCityResetHint").textContent = e.message;
+    }
+  });
+}
+
 function renderAdminDuels() {
   const box = $("adminDuels");
   const items = (state.admin && state.admin.duels) || [];
@@ -1455,6 +1502,7 @@ async function loadAdmin() {
     state.admin = data;
     renderAdminStats();
     renderAdminEconomy();
+    renderAdminCity();
     renderAdminDuels();
     renderAdminGames();
     renderAdminRecent();
@@ -4321,6 +4369,7 @@ function bind() {
   });
 
   bindAdminEconomy();
+  bindAdminCity();
 
   if ($("hourlyCard")) $("hourlyCard").addEventListener("click", claimHourly);
   if ($("dailySpinBtn")) $("dailySpinBtn").addEventListener("click", spinDaily);

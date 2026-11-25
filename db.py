@@ -1399,6 +1399,39 @@ SCHEMA_STATEMENTS = [
         created_at INTEGER NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS city (
+        user_id    INTEGER PRIMARY KEY,
+        last_tax   INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS city_buildings (
+        user_id INTEGER NOT NULL,
+        kind    TEXT NOT NULL,
+        key     TEXT NOT NULL,
+        qty     INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, kind, key)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ore_inv (
+        user_id INTEGER NOT NULL,
+        ore     TEXT NOT NULL,
+        qty     INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, ore)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS mine_state (
+        user_id    INTEGER PRIMARY KEY,
+        pick       INTEGER NOT NULL DEFAULT 1,
+        taps       INTEGER NOT NULL DEFAULT 0,
+        day        TEXT NOT NULL DEFAULT '',
+        updated_at INTEGER NOT NULL DEFAULT 0
+    )
+    """,
 ]
 
 DEFAULT_SETTINGS = {
@@ -3287,6 +3320,122 @@ class Database:
         self._exec("UPDATE mining SET slots = ?, last_collect = ? WHERE user_id = ?",
                    (new_slots, now, user_id))
         return "ok"
+
+    # --- город -----------------------------------------------------------
+    def city(self, user_id: int) -> dict | None:
+        return self._row("SELECT * FROM city WHERE user_id = ?", (user_id,))
+
+    def city_ensure(self, user_id: int, now: int) -> dict:
+        self._exec("INSERT OR IGNORE INTO city (user_id, last_tax, created_at) "
+                   "VALUES (?, 0, ?)", (user_id, int(now)))
+        return self.city(user_id)
+
+    def city_buildings(self, user_id: int) -> dict:
+        rows = self._rows("SELECT kind, key, qty FROM city_buildings "
+                          "WHERE user_id = ?", (user_id,))
+        return {f"{r['kind']}:{r['key']}": int(r["qty"]) for r in rows}
+
+    def city_buy(self, user_id: int, kind: str, key: str, price: int,
+                 cap: int, now: int) -> str:
+        row = self._row("SELECT qty FROM city_buildings WHERE user_id = ? "
+                        "AND kind = ? AND key = ?", (user_id, kind, key))
+        qty = int(row["qty"]) if row else 0
+        if qty >= int(cap):
+            return "max"
+        bal = self._row("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        if not bal or int(bal["balance"]) < int(price):
+            return "money"
+        self.add_balance(user_id, -int(price))
+        self._exec(
+            "INSERT INTO city_buildings (user_id, kind, key, qty) "
+            "VALUES (?, ?, ?, 1) "
+            "ON CONFLICT(user_id, kind, key) DO UPDATE SET qty = qty + 1",
+            (user_id, kind, key))
+        self.city_ensure(user_id, now)
+        return "ok"
+
+    def city_set_tax(self, user_id: int, ts: int) -> None:
+        self._exec("UPDATE city SET last_tax = ? WHERE user_id = ?",
+                   (int(ts), user_id))
+
+    # --- шахта -----------------------------------------------------------
+    def ore_add(self, user_id: int, ore: str, qty: int) -> None:
+        self._exec(
+            "INSERT INTO ore_inv (user_id, ore, qty) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, ore) DO UPDATE SET qty = qty + ?",
+            (user_id, ore, int(qty), int(qty)))
+
+    def ore_inventory(self, user_id: int) -> list[dict]:
+        return self._rows(
+            "SELECT ore, qty FROM ore_inv WHERE user_id = ? AND qty > 0 "
+            "ORDER BY qty DESC", (user_id,))
+
+    def ore_take(self, user_id: int, ore: str, qty: int) -> int:
+        row = self._row("SELECT qty FROM ore_inv WHERE user_id = ? AND ore = ?",
+                        (user_id, ore))
+        have = int(row["qty"]) if row else 0
+        take = min(have, int(qty))
+        if take <= 0:
+            return 0
+        self._exec("UPDATE ore_inv SET qty = qty - ? "
+                   "WHERE user_id = ? AND ore = ?", (take, user_id, ore))
+        return take
+
+    def mine_state(self, user_id: int) -> dict | None:
+        return self._row("SELECT * FROM mine_state WHERE user_id = ?", (user_id,))
+
+    def mine_ensure(self, user_id: int, now: int) -> dict:
+        self._exec(
+            "INSERT OR IGNORE INTO mine_state "
+            "(user_id, pick, taps, day, updated_at) VALUES (?, 1, 0, '', ?)",
+            (user_id, int(now)))
+        return self.mine_state(user_id)
+
+    def mine_set(self, user_id: int, pick: int | None = None,
+                 taps: int | None = None, day: str | None = None,
+                 now: int | None = None) -> None:
+        sets, args = [], []
+        if pick is not None:
+            sets.append("pick = ?")
+            args.append(int(pick))
+        if taps is not None:
+            sets.append("taps = ?")
+            args.append(int(taps))
+        if day is not None:
+            sets.append("day = ?")
+            args.append(str(day))
+        if now is not None:
+            sets.append("updated_at = ?")
+            args.append(int(now))
+        if not sets:
+            return
+        args.append(user_id)
+        self._exec(f"UPDATE mine_state SET {', '.join(sets)} WHERE user_id = ?",
+                   tuple(args))
+
+    def admin_city_stats(self) -> dict:
+        def one(sql: str) -> int:
+            row = self._row(sql)
+            return int((row or {}).get("c") or 0)
+
+        top = self._rows(
+            "SELECT u.user_id, u.username, u.first_name, "
+            "COALESCE(SUM(cb.qty), 0) AS buildings "
+            "FROM users u JOIN city_buildings cb ON cb.user_id = u.user_id "
+            "GROUP BY u.user_id ORDER BY buildings DESC LIMIT 5")
+        return {
+            "players": one("SELECT COUNT(*) AS c FROM city"),
+            "buildings": one("SELECT COALESCE(SUM(qty), 0) AS c "
+                             "FROM city_buildings"),
+            "ores": one("SELECT COALESCE(SUM(qty), 0) AS c FROM ore_inv"),
+            "miners": one("SELECT COUNT(*) AS c FROM mine_state "
+                          "WHERE taps > 0"),
+            "top": [dict(r) for r in top],
+        }
+
+    def admin_city_reset(self, user_id: int) -> None:
+        self._exec("DELETE FROM city_buildings WHERE user_id = ?", (user_id,))
+        self._exec("DELETE FROM city WHERE user_id = ?", (user_id,))
 
     # --- мини-игра «рыбалка» ---------------------------------------------
     def fish_game_start(self, user_id: int, yacht_id: int, cell: int,
