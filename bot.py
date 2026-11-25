@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import math
 import random
 import time
@@ -2286,6 +2286,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
             callback_data=f"carshop:{car['key']}")]
             for car in game.CARS]
         rows.append([InlineKeyboardButton(text="🚗 Мои машины", callback_data="cars:list")])
+        rows.append([InlineKeyboardButton(text="◀️ Меню",
+                                          callback_data="help:menu")])
         rows.append([webapp_button()])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -2594,6 +2596,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
             callback_data=f"yachtshop:{y['key']}")]
             for y in game.YACHTS]
         rows.append([InlineKeyboardButton(text="🛥️ Мои яхты", callback_data="yachts:list")])
+        rows.append([InlineKeyboardButton(text="◀️ Меню",
+                                          callback_data="help:menu")])
         rows.append([webapp_button()])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -2899,6 +2903,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
             for b in game.BUSINESSES]
         rows.append([InlineKeyboardButton(text="💼 Мои бизнесы",
                                           callback_data="biz:list")])
+        rows.append([InlineKeyboardButton(text="◀️ Меню",
+                                          callback_data="help:menu")])
         rows.append([webapp_button()])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -3111,6 +3117,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 text=(f"➕ +{game.MINING_SLOTS_STEP} мест · "
                       f"{num(game.mining_slot_price(slots))}"),
                 callback_data="mine:slots")])
+        rows.append([InlineKeyboardButton(text="◀️ Меню",
+                                          callback_data="help:menu")])
         rows.append([webapp_button()])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -3137,6 +3145,34 @@ def build_dispatcher(db: Database) -> Dispatcher:
         mining_settle(user)
         await send_card(message, "card-mine.jpg", mining_text(user),
                         mining_keyboard(user), "card-business.jpg")
+
+    @dp.callback_query(F.data == "mine:open")
+    async def mine_open_cb(callback) -> None:
+        user = get_user(callback)
+        db.mining_ensure(user["user_id"], game.MINING_SLOTS_BASE,
+                         int(time.time()))
+        mining_settle(user)
+        await send_card(callback.message, "card-mine.jpg",
+                        mining_text(user), mining_keyboard(user),
+                        "card-business.jpg")
+        await callback.answer()
+
+    TEXT_ALIASES = {
+        "м": "mine", "майн": "mine", "майнинг": "mine",
+        "авто": "auto", "машины": "auto",
+        "яхта": "yachts", "яхты": "yachts", "магазин яхт": "yachts",
+        "бизнес": "biz", "бизнесы": "biz",
+        "магазин бизнесов": "biz",
+    }
+
+    @dp.message(F.text.lower().in_(set(TEXT_ALIASES)))
+    async def text_alias_cmd(message: Message) -> None:
+        text = (message.text or "").strip().lower()
+        target = TEXT_ALIASES.get(text)
+        handlers = {"mine": mine_cmd, "auto": auto_cmd,
+                    "yachts": yachts_cmd, "biz": biz_cmd}
+        if target in handlers:
+            await handlers[target](message)
 
     @dp.callback_query(F.data == "mine:gpu")
     async def mine_gpu_cb(callback) -> None:
@@ -3313,8 +3349,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
     HELP_SECTIONS = {
         "games": {
             "emoji": "🎮", "title": "Игра",
-            "desc": "Осталась одна игра — сапёр. Рыбалка живёт на яхтах.",
-            "buttons": [("💣 Сапёр", "menu:mines")],
+            "desc": "Сапёр и майнинг-ферма.",
+            "buttons": [("💣 Сапёр", "menu:mines"), ("⛏ Майнинг", "mine:open")],
         },
         "biz": {
             "emoji": "💼", "title": "Бизнес",
@@ -3347,6 +3383,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
              InlineKeyboardButton(text="🛥️ Яхты", callback_data="yachts:menu")],
             [InlineKeyboardButton(text="💼 Бизнес", callback_data="biz:menu"),
              InlineKeyboardButton(text="💰 Казна", callback_data="treasury:menu")],
+            [InlineKeyboardButton(text="⛏ Майнинг", callback_data="mine:open")],
             [InlineKeyboardButton(text="👤 Профиль", callback_data="menu:balance")],
             [webapp_button()],
         ]

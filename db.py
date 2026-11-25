@@ -2697,9 +2697,10 @@ class Database:
 
     def treasury_losers(self, limit: int = 10) -> list[dict]:
         return self._rows(
-            "SELECT user_id, SUM(bet) AS total_lost, COUNT(*) AS plays, "
-            "MAX(username) AS username, MAX(first_name) AS first_name "
-            "FROM plays WHERE win = 0 GROUP BY user_id "
+            "SELECT p.user_id, SUM(p.bet) AS total_lost, COUNT(*) AS plays, "
+            "MAX(u.username) AS username, MAX(u.first_name) AS first_name "
+            "FROM plays p LEFT JOIN users u ON u.user_id = p.user_id "
+            "WHERE p.win = 0 GROUP BY p.user_id "
             "ORDER BY total_lost DESC LIMIT ?", (int(limit),))
 
     def giveaways(self) -> list[dict]:
