@@ -1696,15 +1696,15 @@ def city_tax(population: int, bonus: int) -> int:
 MINE_TAPS_PER_DAY = 7
 
 ORES = [
-    {"key": "stone", "title": "Камень", "icon": "🪨", "price": 10_000},
-    {"key": "iron", "title": "Железо", "icon": "⛓", "price": 35_000},
-    {"key": "copper", "title": "Медь", "icon": "🟠", "price": 60_000},
-    {"key": "tin", "title": "Олово", "icon": "⚪", "price": 90_000},
-    {"key": "gold", "title": "Золото", "icon": "🥇", "price": 150_000},
-    {"key": "diamond", "title": "Алмазы", "icon": "💎", "price": 220_000},
-    {"key": "emerald", "title": "Изумруды", "icon": "🟩", "price": 100_000},
-    {"key": "matter", "title": "Материя", "icon": "🌀", "price": 200_000},
-    {"key": "plasma", "title": "Плазма", "icon": "✨", "price": 500_000},
+    {"key": "stone", "title": "Камень", "icon": "🪨", "price": 100},
+    {"key": "iron", "title": "Железо", "icon": "⛓", "price": 1_000},
+    {"key": "copper", "title": "Медь", "icon": "🟠", "price": 1_500},
+    {"key": "tin", "title": "Олово", "icon": "⚪", "price": 2_000},
+    {"key": "gold", "title": "Золото", "icon": "🥇", "price": 5_000},
+    {"key": "diamond", "title": "Алмазы", "icon": "💎", "price": 20_000},
+    {"key": "emerald", "title": "Изумруды", "icon": "🟩", "price": 10_000},
+    {"key": "matter", "title": "Материя", "icon": "🌀", "price": 100_000},
+    {"key": "plasma", "title": "Плазма", "icon": "✨", "price": 200_000},
 ]
 ORE_BY_KEY = {item["key"]: item for item in ORES}
 
