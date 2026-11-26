@@ -1428,6 +1428,21 @@ CARS = [
     {"key": "super", "title": "Суперкар", "icon": "🛞", "speed": 520,
      "fuel_max": 140, "fuel_price": 600, "price": 2_000_000,
      "rent": {1: 140_000, 4: 420_000, 8: 700_000}},
+    {"key": "niva", "title": "Нива", "icon": "🚙", "speed": 150,
+     "fuel_max": 60, "fuel_price": 70, "price": 120_000,
+     "rent": {1: 9_000, 4: 27_000, 8: 45_000}},
+    {"key": "camry", "title": "Camry", "icon": "🚗", "speed": 210,
+     "fuel_max": 70, "fuel_price": 120, "price": 900_000,
+     "rent": {1: 70_000, 4: 210_000, 8: 350_000}},
+    {"key": "porsche", "title": "Porsche 911", "icon": "🏎️", "speed": 330,
+     "fuel_max": 80, "fuel_price": 300, "price": 12_000_000,
+     "rent": {1: 900_000, 4: 2_700_000, 8: 4_500_000}},
+    {"key": "rolls", "title": "Rolls-Royce", "icon": "🚘", "speed": 250,
+     "fuel_max": 90, "fuel_price": 400, "price": 45_000_000,
+     "rent": {1: 3_000_000, 4: 9_000_000, 8: 15_000_000}},
+    {"key": "hyper", "title": "Гиперкар", "icon": "🏎️", "speed": 400,
+     "fuel_max": 100, "fuel_price": 600, "price": 90_000_000,
+     "rent": {1: 6_000_000, 4: 18_000_000, 8: 30_000_000}},
 ]
 
 CAR_BY_KEY = {car["key"]: car for car in CARS}
@@ -1496,6 +1511,21 @@ YACHTS = [
     {"key": "liner", "title": "Лайнер", "icon": "🚢", "capacity": 120_000,
      "fuel_max": 1_500, "fuel_price": 160, "price": 6_000_000,
      "cruise_hours": 1, "cruise_profit": 380_000},
+    {"key": "motor", "title": "Моторная лодка", "icon": "🚤",
+     "capacity": 150, "fuel_max": 150, "fuel_price": 50,
+     "price": 150_000, "cruise_hours": 1, "cruise_profit": 12_000},
+    {"key": "sailing", "title": "Парусная яхта", "icon": "⛵",
+     "capacity": 500, "fuel_max": 250, "fuel_price": 65,
+     "price": 800_000, "cruise_hours": 1, "cruise_profit": 45_000},
+    {"key": "catamaran", "title": "Катамаран", "icon": "🛳️",
+     "capacity": 2_000, "fuel_max": 400, "fuel_price": 85,
+     "price": 3_500_000, "cruise_hours": 1, "cruise_profit": 180_000},
+    {"key": "megayacht", "title": "Мега-яхта", "icon": "🛥️",
+     "capacity": 40_000, "fuel_max": 800, "fuel_price": 120,
+     "price": 25_000_000, "cruise_hours": 1, "cruise_profit": 900_000},
+    {"key": "oceanliner", "title": "Круизный лайнер", "icon": "🚢",
+     "capacity": 90_000, "fuel_max": 1_200, "fuel_price": 150,
+     "price": 80_000_000, "cruise_hours": 1, "cruise_profit": 2_500_000},
 ]
 
 YACHT_BY_KEY = {yacht["key"]: yacht for yacht in YACHTS}
@@ -1539,6 +1569,16 @@ BUSINESSES = [
      "income": 340_000, "hours": 12},
     {"key": "oil", "title": "Нефтевышка", "icon": "🛢️", "price": 9_000_000,
      "income": 820_000, "hours": 24},
+    {"key": "bakery", "title": "Пекарня", "icon": "🥐", "price": 250_000,
+     "income": 18_000, "hours": 4},
+    {"key": "fitness", "title": "Спортзал", "icon": "🏋️", "price": 1_500_000,
+     "income": 120_000, "hours": 8},
+    {"key": "clinic", "title": "Клиника", "icon": "🏥", "price": 12_000_000,
+     "income": 900_000, "hours": 12},
+    {"key": "resort", "title": "Отель", "icon": "🏨", "price": 35_000_000,
+     "income": 2_600_000, "hours": 24},
+    {"key": "finbank", "title": "Банк", "icon": "🏦", "price": 120_000_000,
+     "income": 9_000_000, "hours": 24},
 ]
 
 BUSINESS_BY_KEY = {biz["key"]: biz for biz in BUSINESSES}

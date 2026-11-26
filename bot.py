@@ -216,7 +216,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         "balance", "profile", "me", "deposit", "bank", "mine", "mining",
         "city", "gorod", "ore", "sh", "job", "work", "rabota",
         "home", "dom", "houses", "donate_shop", "gmp_shop",
-        "clothes", "odezhda",
+        "clothes", "odezhda", "slashtest",
         "admin", "owner", "adminboot",
         "setbal", "addbal", "role", "give", "gmp", "setgmp",
         "xp", "energy", "pref", "givecar", "giveyacht", "resetcd",
@@ -4094,6 +4094,58 @@ def build_dispatcher(db: Database) -> Dispatcher:
         await callback.answer("Надето")
         text, keyboard = clothes_cat_view(user, item["slot"])
         await safe_edit(callback.message, text, keyboard)
+
+    @dp.message(Command("slashtest"))
+    async def slashtest_cmd(message: Message) -> None:
+        user = get_user(message)
+        if not is_admin(user):
+            await message.answer("Команда только для админов.")
+            return
+        problems = []
+        checks = 0
+
+        def check(cond: bool, text: str) -> None:
+            nonlocal checks
+            checks += 1
+            if not cond:
+                problems.append(text)
+
+        for title, items in (("машины", game.CARS), ("яхты", game.YACHTS),
+                             ("бизнесы", game.BUSINESSES)):
+            keys = [item["key"] for item in items]
+            check(len(keys) == len(set(keys)), f"{title}: повторяются ключи")
+            check(all(int(item["price"]) > 0 for item in items),
+                  f"{title}: есть цена 0 или минус")
+        check(len(game.CARS) >= 15, f"машин мало: {len(game.CARS)}")
+        check(len(game.YACHTS) >= 11, f"яхт мало: {len(game.YACHTS)}")
+        check(len(game.BUSINESSES) >= 13,
+              f"бизнесов мало: {len(game.BUSINESSES)}")
+        check(len(game.ORES) == 9, f"руд: {len(game.ORES)}")
+        check(all(int(o["price"]) > 0 for o in game.ORES), "руда с ценой 0")
+        check(len(game.HOUSES) == 10, f"домов: {len(game.HOUSES)}")
+        check(len(game.CLOTHES) == 21, f"одежды: {len(game.CLOTHES)}")
+        check(all(int(job["cooldown"]) == 3600
+                  for job in db.STREET_JOBS.values()),
+              "у работ перерыв не 1 час")
+        check(game.MINING_SLOTS_BASE > 0 and game.MINING_GPU_PRICE > 0,
+              "константы майнинга")
+        try:
+            rows = db._rows("SELECT name FROM sqlite_master "
+                            "WHERE type = 'table'")
+            tables = {row["name"] for row in rows}
+        except Exception:
+            tables = set()
+        for table in ("users", "cars", "yachts", "businesses", "mining",
+                      "ore_inv", "clothes", "house", "weekly_awards",
+                      "job_shift"):
+            check(table in tables, f"нет таблицы {table}")
+        text = f"🧪 <b>Тест завершён</b> · проверок: {checks}\n"
+        if problems:
+            text += "❌ <b>Ошибки:</b>\n" + "\n".join(
+                f"{i}. {p}" for i, p in enumerate(problems, 1))
+        else:
+            text += "✅ Ошибок не найдено."
+        await message.answer(text)
 
     TEXT_ALIASES = {
         "м": "mine", "майн": "mine", "майнинг": "mine",
