@@ -1448,6 +1448,25 @@ SCHEMA_STATEMENTS = [
         bought_at  INTEGER NOT NULL DEFAULT 0
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS clothes (
+        user_id   INTEGER NOT NULL,
+        item_key  TEXT NOT NULL,
+        bought_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, item_key)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS clothes_worn (
+        user_id INTEGER PRIMARY KEY,
+        cap     TEXT NOT NULL DEFAULT '',
+        hat     TEXT NOT NULL DEFAULT '',
+        eyes    TEXT NOT NULL DEFAULT '',
+        top     TEXT NOT NULL DEFAULT '',
+        legs    TEXT NOT NULL DEFAULT '',
+        feet    TEXT NOT NULL DEFAULT ''
+    )
+    """,
 ]
 
 DEFAULT_SETTINGS = {
@@ -6327,6 +6346,38 @@ class Database:
             "house_key = excluded.house_key, bought_at = excluded.bought_at",
             (user_id, key, int(now)))
         return "ok"
+
+    def clothes_owned(self, user_id: int) -> list[str]:
+        rows = self._rows("SELECT item_key FROM clothes WHERE user_id = ?",
+                          (user_id,))
+        return [r["item_key"] for r in rows]
+
+    def clothes_buy(self, user_id: int, key: str, price: int,
+                    now: int) -> str:
+        row = self._row("SELECT 1 AS ok FROM clothes "
+                        "WHERE user_id = ? AND item_key = ?", (user_id, key))
+        if row:
+            return "owned"
+        bal = self._row("SELECT balance FROM users WHERE user_id = ?",
+                        (user_id,))
+        if not bal or int(bal["balance"]) < int(price):
+            return "money"
+        self.add_balance(user_id, -int(price))
+        self._exec("INSERT INTO clothes (user_id, item_key, bought_at) "
+                   "VALUES (?, ?, ?)", (user_id, key, int(now)))
+        return "ok"
+
+    def clothes_worn(self, user_id: int) -> dict:
+        row = self._row("SELECT * FROM clothes_worn WHERE user_id = ?",
+                        (user_id,))
+        return dict(row) if row else {}
+
+    def clothes_wear(self, user_id: int, slot: str, key: str) -> None:
+        self._exec(
+            "INSERT INTO clothes_worn (user_id) VALUES (?) "
+            "ON CONFLICT(user_id) DO NOTHING", (user_id,))
+        self._exec(f"UPDATE clothes_worn SET {slot} = ? WHERE user_id = ?",
+                   (key, user_id))
 
     def job_shift(self, user_id: int) -> dict | None:
         row = self._row("SELECT * FROM job_shift WHERE user_id = ?", (user_id,))

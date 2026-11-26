@@ -1777,3 +1777,67 @@ def house_buffs(key: str | None) -> dict:
 
 def gmp_price(mcoin: int, rate: int = 2_000_000) -> int:
     return max(5, int(round(int(mcoin) / rate)))
+
+# --- ОДЕЖДА ---------------------------------------------------------------
+CLOTHES_SLOTS = {
+    "cap": {"title": "Кепки", "icon": "🧢"},
+    "hat": {"title": "Шляпы", "icon": "👒"},
+    "eyes": {"title": "Очки", "icon": "🕶"},
+    "top": {"title": "Футболки и рубашки", "icon": "👕"},
+    "legs": {"title": "Штаны", "icon": "👖"},
+    "feet": {"title": "Носки и обувь", "icon": "🧦"},
+}
+
+CLOTHES = [
+    {"key": "cap_rag", "slot": "cap", "title": "Кепка с дырой",
+     "icon": "🧢", "price": 50_000},
+    {"key": "cap_basic", "slot": "cap", "title": "Кепка",
+     "icon": "🧢", "price": 500_000},
+    {"key": "cap_brand", "slot": "cap", "title": "Кепка Gucci",
+     "icon": "🧢", "price": 25_000_000},
+    {"key": "hat_panama", "slot": "hat", "title": "Панама",
+     "icon": "👒", "price": 200_000},
+    {"key": "hat_fedora", "slot": "hat", "title": "Федора",
+     "icon": "🎩", "price": 3_000_000},
+    {"key": "hat_gucci", "slot": "hat", "title": "Шляпа Gucci",
+     "icon": "👒", "price": 40_000_000},
+    {"key": "eyes_market", "slot": "eyes", "title": "Очки с рынка",
+     "icon": "🕶", "price": 100_000},
+    {"key": "eyes_sun", "slot": "eyes", "title": "Солнечные очки",
+     "icon": "🕶", "price": 2_000_000},
+    {"key": "eyes_gucci", "slot": "eyes", "title": "Очки Gucci",
+     "icon": "🕶", "price": 60_000_000},
+    {"key": "top_rag", "slot": "top", "title": "Рваная футболка",
+     "icon": "👕", "price": 10_000},
+    {"key": "top_basic", "slot": "top", "title": "Футболка",
+     "icon": "👕", "price": 200_000},
+    {"key": "top_shirt", "slot": "top", "title": "Рубашка",
+     "icon": "🥼", "price": 3_000_000},
+    {"key": "top_gucci", "slot": "top", "title": "Футболка Gucci",
+     "icon": "👕", "price": 80_000_000},
+    {"key": "legs_rag", "slot": "legs", "title": "Дырявые штаны",
+     "icon": "👖", "price": 20_000},
+    {"key": "legs_jeans", "slot": "legs", "title": "Джинсы",
+     "icon": "👖", "price": 500_000},
+    {"key": "legs_suit", "slot": "legs", "title": "Костюм",
+     "icon": "👔", "price": 10_000_000},
+    {"key": "legs_gucci", "slot": "legs", "title": "Штаны Gucci",
+     "icon": "👖", "price": 70_000_000},
+    {"key": "feet_rag", "slot": "feet", "title": "Дырявые носки",
+     "icon": "🧦", "price": 5_000},
+    {"key": "feet_basic", "slot": "feet", "title": "Носки",
+     "icon": "🧦", "price": 100_000},
+    {"key": "feet_sneakers", "slot": "feet", "title": "Кроссовки",
+     "icon": "👟", "price": 5_000_000},
+    {"key": "feet_gucci", "slot": "feet", "title": "Носки Gucci",
+     "icon": "🧦", "price": 40_000_000},
+]
+CLOTHES_BY_KEY = {item["key"]: item for item in CLOTHES}
+
+
+def clothes_of_slot(slot: str) -> list[dict]:
+    return [item for item in CLOTHES if item["slot"] == slot]
+
+
+def clothes_view(key: str | None) -> dict:
+    return CLOTHES_BY_KEY.get(key or "") or {}

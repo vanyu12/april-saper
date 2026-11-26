@@ -216,6 +216,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         "balance", "profile", "me", "deposit", "bank", "mine", "mining",
         "city", "gorod", "ore", "sh", "job", "work", "rabota",
         "home", "dom", "houses", "donate_shop", "gmp_shop",
+        "clothes", "odezhda",
         "admin", "owner", "adminboot",
         "setbal", "addbal", "role", "give", "gmp", "setgmp",
         "xp", "energy", "pref", "givecar", "giveyacht", "resetcd",
@@ -486,6 +487,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             title += f" {avatar['icon']}"
         lines = [
             head("👤", title),
+            f"🆔 ID: <code>{user['user_id']}</code>",
             f"💰 Баланс: <b>{num(user['balance'])} mCoin</b>",
             f"🎁 GMPOINT: <b>{num(user.get('gmpoint') or 0)}</b>",
             (f"🎩 Префикс: <b>{pref['title']}</b>"
@@ -494,6 +496,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             if pref else "🎩 Префикс: нет",
             f"🎨 Фон профиля: {bg['title']}"
             + (f" · аватар: {avatar['title']}" if avatar["icon"] else ""),
+            f"👕 Образ: {worn_line(user)}",
             f"⭐ Уровень {level['level']} — {level['title']}",
             f"🎖 XP: {level['into']} / {level['need']} {level_bar(level['into'], level['need'])}",
             f"🎯 Партий: {user['games_played']} · побед: {user['games_won']}",
@@ -814,6 +817,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
              InlineKeyboardButton(text="🎯 Задания", callback_data="menu:tasks")],
             [InlineKeyboardButton(text="🎩 Префиксы", callback_data="menu:prefixes"),
              InlineKeyboardButton(text="🎨 Аватар и фон", callback_data="menu:cosmetics")],
+            [InlineKeyboardButton(text="👕 Одежда", callback_data="clothes:menu"),
+             InlineKeyboardButton(text="🎒 Гардероб", callback_data="clothes:inv")],
             [InlineKeyboardButton(text="🏆 Топ по балансу", callback_data="top"),
              InlineKeyboardButton(text="⭐ Топ по уровню", callback_data="top:level")],
             [webapp_button()],
@@ -3845,6 +3850,154 @@ def build_dispatcher(db: Database) -> Dispatcher:
         await send_card(callback.message, "card-mine.jpg", mining_text(user),
                         mining_keyboard(user), "card-business.jpg")
 
+    # --- одежда -------------------------------------------------------
+    SLOT_ORDER = ("cap", "hat", "eyes", "top", "legs", "feet")
+
+    def worn_line(user: dict) -> str:
+        worn = db.clothes_worn(user["user_id"])
+        parts = []
+        for slot in SLOT_ORDER:
+            item = game.clothes_view(worn.get(slot))
+            if item:
+                parts.append(f"{item['icon']} {item['title']}")
+        return ", ".join(parts) if parts else "—"
+
+    def clothes_menu_keyboard() -> InlineKeyboardMarkup:
+        rows = []
+        for slot, conf in game.CLOTHES_SLOTS.items():
+            rows.append([InlineKeyboardButton(
+                text=f"{conf['icon']} {conf['title']}",
+                callback_data=f"clothes:cat:{slot}")])
+        rows.append([InlineKeyboardButton(text="🎒 Мой гардероб",
+                                          callback_data="clothes:inv")])
+        rows.append([InlineKeyboardButton(text="◀️ Профиль",
+                                          callback_data="menu:balance")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def clothes_menu_text(user: dict) -> str:
+        return ("👕 <b>Магазин одежды</b>\n"
+                "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                f"Сейчас надето: {worn_line(user)}\n\n"
+                "Выберите категорию:")
+
+    def clothes_cat_view(user: dict,
+                         slot: str) -> tuple[str, InlineKeyboardMarkup]:
+        conf = game.CLOTHES_SLOTS[slot]
+        owned = set(db.clothes_owned(user["user_id"]))
+        worn = db.clothes_worn(user["user_id"]).get(slot)
+        lines = [f"{conf['icon']} <b>{conf['title']}</b>",
+                 "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"]
+        rows = []
+        for item in game.clothes_of_slot(slot):
+            mark = ("✅" if item["key"] == worn
+                    else ("🟢" if item["key"] in owned else "•"))
+            lines.append(f"{mark} {item['icon']} {item['title']} — "
+                         f"{num(item['price'])} mCoin")
+            if item["key"] in owned:
+                if item["key"] != worn:
+                    rows.append([InlineKeyboardButton(
+                        text=f"Надеть {item['title']}",
+                        callback_data=f"clothes:wear:{item['key']}")])
+            else:
+                rows.append([InlineKeyboardButton(
+                    text=f"🛒 {item['title']} · {num(item['price'])}",
+                    callback_data=f"clothes:buy:{item['key']}")])
+        rows.append([InlineKeyboardButton(text="◀️ Назад",
+                                          callback_data="clothes:menu")])
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def wardrobe_view(user: dict) -> tuple[str, InlineKeyboardMarkup]:
+        owned = db.clothes_owned(user["user_id"])
+        worn = db.clothes_worn(user["user_id"])
+        lines = ["🎒 <b>Мой гардероб</b>", "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"]
+        rows = []
+        if not owned:
+            lines.append("Пусто — загляните в магазин одежды.")
+        for key in owned:
+            item = game.clothes_view(key)
+            if not item:
+                continue
+            on = worn.get(item["slot"]) == key
+            lines.append(("✅ " if on else "• ")
+                         + f"{item['icon']} {item['title']}")
+            if not on:
+                rows.append([InlineKeyboardButton(
+                    text=f"Надеть {item['title']}",
+                    callback_data=f"clothes:wear:{key}")])
+        rows.append([InlineKeyboardButton(text="🛍 Магазин",
+                                          callback_data="clothes:menu")])
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+    @dp.message(Command("clothes", "odezhda"))
+    async def clothes_cmd(message: Message) -> None:
+        user = get_user(message)
+        await message.answer(clothes_menu_text(user),
+                             reply_markup=clothes_menu_keyboard())
+
+    @dp.callback_query(F.data == "clothes:menu")
+    async def clothes_menu_cb(callback) -> None:
+        user = get_user(callback)
+        await safe_edit(callback.message, clothes_menu_text(user),
+                        clothes_menu_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("clothes:cat:"))
+    async def clothes_cat_cb(callback) -> None:
+        slot = callback.data.split(":", 2)[-1]
+        if slot not in game.CLOTHES_SLOTS:
+            await callback.answer()
+            return
+        user = get_user(callback)
+        text, keyboard = clothes_cat_view(user, slot)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("clothes:buy:"))
+    async def clothes_buy_cb(callback) -> None:
+        key = callback.data.split(":", 2)[-1]
+        item = game.clothes_view(key)
+        if not item:
+            await callback.answer()
+            return
+        user = get_user(callback)
+        result = db.clothes_buy(user["user_id"], key, item["price"],
+                                int(time.time()))
+        if result == "money":
+            await callback.answer("Не хватает mCoin", show_alert=True)
+            return
+        if result == "owned":
+            await callback.answer("Уже куплено", show_alert=True)
+            return
+        db.clothes_wear(user["user_id"], item["slot"], key)
+        await callback.answer("Куплено и надето")
+        text, keyboard = clothes_cat_view(user, item["slot"])
+        await safe_edit(callback.message,
+                        f"👕 Куплено: <b>{item['title']}</b>\n\n" + text,
+                        keyboard)
+
+    @dp.callback_query(F.data == "clothes:inv")
+    async def clothes_inv_cb(callback) -> None:
+        user = get_user(callback)
+        text, keyboard = wardrobe_view(user)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("clothes:wear:"))
+    async def clothes_wear_cb(callback) -> None:
+        key = callback.data.split(":", 2)[-1]
+        item = game.clothes_view(key)
+        if not item:
+            await callback.answer()
+            return
+        user = get_user(callback)
+        if key not in db.clothes_owned(user["user_id"]):
+            await callback.answer("Сначала купите", show_alert=True)
+            return
+        db.clothes_wear(user["user_id"], item["slot"], key)
+        await callback.answer("Надето")
+        text, keyboard = clothes_cat_view(user, item["slot"])
+        await safe_edit(callback.message, text, keyboard)
+
     TEXT_ALIASES = {
         "м": "mine", "майн": "mine", "майнинг": "mine",
         "авто": "auto", "машины": "auto",
@@ -3856,6 +4009,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         "р": "job", "работа": "job", "работы": "job",
         "дом": "home", "дома": "home", "жильё": "home",
         "донат": "gmp_shop",
+        "одежда": "clothes", "магазин одежды": "clothes", "шмот": "clothes",
     }
 
     @dp.message(F.text.lower().in_(set(TEXT_ALIASES)))
@@ -3866,7 +4020,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
                     "yachts": yachts_cmd, "biz": biz_cmd,
                     "city": city_cmd, "mine_ore": mine_ore_cmd,
                     "job": job_cmd, "home": home_cmd,
-                    "gmp_shop": gmp_shop_cmd}
+                    "gmp_shop": gmp_shop_cmd, "clothes": clothes_cmd}
         if target in handlers:
             await handlers[target](message)
 
@@ -4083,6 +4237,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             [InlineKeyboardButton(text="💼 Работа", callback_data="job:menu")],
             [InlineKeyboardButton(text="🏠 Дома", callback_data="home:menu"),
              InlineKeyboardButton(text="💎 Донат", callback_data="gmp:menu")],
+            [InlineKeyboardButton(text="🛍 Одежда", callback_data="clothes:menu")],
             [InlineKeyboardButton(text="👤 Профиль", callback_data="menu:balance")],
             [webapp_button()],
         ]
