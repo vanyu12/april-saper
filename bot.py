@@ -2277,12 +2277,46 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 "🏬 Магазин — покупай машины и сдавай их в аренду.\n"
                 f"💰 Баланс: <b>{num(user['balance'])}</b>")
 
-    def shop_keyboard() -> InlineKeyboardMarkup:
-        rows = [[InlineKeyboardButton(
-            text=f"{car['icon']} {car['title']} · {num(car['price'])}",
-            callback_data=f"carshop:{car['key']}")]
-            for car in game.CARS]
-        rows.append([InlineKeyboardButton(text="🚗 Мои машины", callback_data="cars:list")])
+    SHOP_CLASSES = {
+        "low": "Низший",
+        "mid": "Средний",
+        "biz": "Бизнес",
+        "premium": "Премиум",
+    }
+
+    def shop_class(price: int) -> str:
+        if int(price) < 1_000_000:
+            return "low"
+        if int(price) < 10_000_000:
+            return "mid"
+        if int(price) < 50_000_000:
+            return "biz"
+        return "premium"
+
+    def class_rows(prefix: str,
+                   cls: str | None) -> list[list[InlineKeyboardButton]]:
+        keys = list(SHOP_CLASSES)
+        first = [InlineKeyboardButton(
+            text=("• " if cls == k else "") + SHOP_CLASSES[k],
+            callback_data=f"{prefix}:cls:{k}") for k in keys[:2]]
+        second = [InlineKeyboardButton(
+            text=("• " if cls == k else "") + SHOP_CLASSES[k],
+            callback_data=f"{prefix}:cls:{k}") for k in keys[2:]]
+        all_row = [InlineKeyboardButton(
+            text=("• Все" if cls is None else "Все"),
+            callback_data=f"{prefix}:cls:all")]
+        return [first, second, all_row]
+
+    def shop_keyboard(cls: str | None = None) -> InlineKeyboardMarkup:
+        rows = class_rows("cars", cls)
+        for car in game.CARS:
+            if cls and shop_class(car["price"]) != cls:
+                continue
+            rows.append([InlineKeyboardButton(
+                text=f"{car['icon']} {car['title']} · {num(car['price'])}",
+                callback_data=f"carshop:{car['key']}")])
+        rows.append([InlineKeyboardButton(text="🚗 Мои машины",
+                                          callback_data="cars:list")])
         rows.append([InlineKeyboardButton(text="◀️ Меню",
                                           callback_data="help:menu")])
         rows.append([webapp_button()])
@@ -2370,6 +2404,14 @@ def build_dispatcher(db: Database) -> Dispatcher:
     async def cars_menu_cb(callback) -> None:
         user = get_user(callback)
         await safe_edit(callback.message, cars_text(user), shop_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("cars:cls:"))
+    async def cars_cls_cb(callback) -> None:
+        key = callback.data.split(":", 2)[-1]
+        cls = None if key == "all" else key
+        user = get_user(callback)
+        await safe_edit(callback.message, cars_text(user), shop_keyboard(cls))
         await callback.answer()
 
     @dp.callback_query(F.data == "cars:list")
@@ -2586,12 +2628,17 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 "🏬 Магазин — покупай яхты, катай круизы и лови рыбу.\n"
                 f"💰 Баланс: <b>{num(user['balance'])}</b>")
 
-    def yacht_shop_keyboard() -> InlineKeyboardMarkup:
-        rows = [[InlineKeyboardButton(
-            text=f"{y['icon']} {y['title']} · {num(y['price'])}",
-            callback_data=f"yachtshop:{y['key']}")]
-            for y in game.YACHTS]
-        rows.append([InlineKeyboardButton(text="🛥️ Мои яхты", callback_data="yachts:list")])
+    def yacht_shop_keyboard(cls: str | None = None) -> InlineKeyboardMarkup:
+        rows = class_rows("yachts", cls)
+        for yacht in game.YACHTS:
+            if cls and shop_class(yacht["price"]) != cls:
+                continue
+            rows.append([InlineKeyboardButton(
+                text=f"{yacht['icon']} {yacht['title']} · "
+                     f"{num(yacht['price'])}",
+                callback_data=f"yachtshop:{yacht['key']}")])
+        rows.append([InlineKeyboardButton(text="🛥️ Мои яхты",
+                                          callback_data="yachts:list")])
         rows.append([InlineKeyboardButton(text="◀️ Меню",
                                           callback_data="help:menu")])
         rows.append([webapp_button()])
@@ -2647,6 +2694,15 @@ def build_dispatcher(db: Database) -> Dispatcher:
     async def yachts_menu_cb(callback) -> None:
         user = get_user(callback)
         await safe_edit(callback.message, yachts_text(user), yacht_shop_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("yachts:cls:"))
+    async def yachts_cls_cb(callback) -> None:
+        key = callback.data.split(":", 2)[-1]
+        cls = None if key == "all" else key
+        user = get_user(callback)
+        await safe_edit(callback.message, yachts_text(user),
+                        yacht_shop_keyboard(cls))
         await callback.answer()
 
     @dp.callback_query(F.data == "yachts:list")
@@ -2893,11 +2949,15 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 f"{int(game.TAX_BUSINESS_MAX * 100)}%).\n"
                 f"💰 Баланс: <b>{num(int(user['balance']))}</b>")
 
-    def business_shop_keyboard() -> InlineKeyboardMarkup:
-        rows = [[InlineKeyboardButton(
-            text=f"{b['icon']} {b['title']} · {num(b['price'])}",
-            callback_data=f"bizshop:{b['key']}")]
-            for b in game.BUSINESSES]
+    def business_shop_keyboard(
+            cls: str | None = None) -> InlineKeyboardMarkup:
+        rows = class_rows("biz", cls)
+        for biz in game.BUSINESSES:
+            if cls and shop_class(biz["price"]) != cls:
+                continue
+            rows.append([InlineKeyboardButton(
+                text=f"{biz['icon']} {biz['title']} · {num(biz['price'])}",
+                callback_data=f"bizshop:{biz['key']}")])
         rows.append([InlineKeyboardButton(text="💼 Мои бизнесы",
                                           callback_data="biz:list")])
         rows.append([InlineKeyboardButton(text="◀️ Меню",
@@ -2953,6 +3013,15 @@ def build_dispatcher(db: Database) -> Dispatcher:
         user = get_user(callback)
         await safe_edit(callback.message, businesses_text(user),
                         business_shop_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("biz:cls:"))
+    async def biz_cls_cb(callback) -> None:
+        key = callback.data.split(":", 2)[-1]
+        cls = None if key == "all" else key
+        user = get_user(callback)
+        await safe_edit(callback.message, businesses_text(user),
+                        business_shop_keyboard(cls))
         await callback.answer()
 
     @dp.callback_query(F.data == "biz:list")

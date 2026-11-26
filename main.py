@@ -1,6 +1,8 @@
 ﻿import asyncio
 import logging
 import sys
+import time
+from datetime import datetime
 
 from aiohttp import web
 from aiogram import Bot
@@ -33,6 +35,26 @@ async def renewal_loop(bot: Bot) -> None:
                 await bot.send_message(admin_id, text, disable_web_page_preview=True)
             except Exception as exc:
                 log.warning("Напоминание не доставлено %s: %s", admin_id, exc)
+
+
+async def weekly_rewards(bot: Bot, db) -> None:
+    log = logging.getLogger("saper.weekly")
+    prizes = (50, 25, 15)
+    while True:
+        try:
+            now = datetime.now()
+            week = f"{now.isocalendar().year}-W{now.isocalendar().week:02d}"
+            if now.weekday() == 0 and not db.weekly_award_paid(week):
+                top = db.leaderboard(3)
+                for index, row in enumerate(top[:3]):
+                    db.add_gmpoint(int(row["user_id"]), prizes[index])
+                if db.weekly_award_mark(week, int(time.time())):
+                    log.info("Награды недели %s: %s", week,
+                             [(int(r["user_id"]), prizes[i])
+                              for i, r in enumerate(top[:3])])
+        except Exception as exc:
+            log.warning("Недельные награды: %s", exc)
+        await asyncio.sleep(1800)
 
 
 async def main() -> None:
@@ -86,11 +108,13 @@ async def main() -> None:
 
     reminder = asyncio.create_task(renewal_loop(bot))
     announcement = asyncio.create_task(announce_update(bot, db))
+    weekly = asyncio.create_task(weekly_rewards(bot, db))
     try:
         await dp.start_polling(bot)
     finally:
         reminder.cancel()
         announcement.cancel()
+        weekly.cancel()
         await bot.session.close()
         await runner.cleanup()
 

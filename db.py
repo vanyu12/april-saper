@@ -1475,6 +1475,12 @@ SCHEMA_STATEMENTS = [
         PRIMARY KEY (user_id, item_key)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS weekly_awards (
+        week    TEXT PRIMARY KEY,
+        paid_at INTEGER NOT NULL
+    )
+    """,
 ]
 
 DEFAULT_SETTINGS = {
@@ -6354,6 +6360,17 @@ class Database:
             "house_key = excluded.house_key, bought_at = excluded.bought_at",
             (user_id, key, int(now)))
         return "ok"
+
+    def weekly_award_paid(self, week: str) -> bool:
+        row = self._row("SELECT 1 AS ok FROM weekly_awards WHERE week = ?",
+                        (week,))
+        return bool(row)
+
+    def weekly_award_mark(self, week: str, now: int) -> bool:
+        changed = self._exec(
+            "INSERT OR IGNORE INTO weekly_awards (week, paid_at) "
+            "VALUES (?, ?)", (week, int(now)))
+        return bool(changed)
 
     def unique_has(self, user_id: int, key: str) -> bool:
         row = self._row("SELECT 1 AS ok FROM unique_items "
