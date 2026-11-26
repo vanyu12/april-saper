@@ -1467,6 +1467,14 @@ SCHEMA_STATEMENTS = [
         feet    TEXT NOT NULL DEFAULT ''
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS unique_items (
+        user_id  INTEGER NOT NULL,
+        item_key TEXT NOT NULL,
+        bought_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, item_key)
+    )
+    """,
 ]
 
 DEFAULT_SETTINGS = {
@@ -6221,18 +6229,18 @@ class Database:
 
     STREET_JOBS = {
         "cleaner": {"name": "Уборщик", "icon": "🧹", "level_req": 5,
-                    "min": 120_000, "max": 150_000, "cooldown": 1200},
+                    "min": 10_000, "max": 13_000, "cooldown": 3600},
         "photo": {"name": "Фотограф", "icon": "📸", "level_req": 15,
-                  "min": 160_000, "max": 190_000, "cooldown": 1200},
+                  "min": 15_000, "max": 20_000, "cooldown": 3600},
         "teacher": {"name": "Преподаватель", "icon": "📚", "level_req": 25,
-                    "min": 200_000, "max": 250_000, "cooldown": 1200},
+                    "min": 22_000, "max": 28_000, "cooldown": 3600},
         "banker": {"name": "Банкир", "icon": "🏦", "level_req": 35,
-                   "min": 270_000, "max": 330_000, "cooldown": 1200},
+                   "min": 30_000, "max": 38_000, "cooldown": 3600},
         "digger": {"name": "Кладоискатель", "icon": "💰", "level_req": 45,
-                   "min": 450_000, "max": 600_000, "cooldown": 1200,
+                   "min": 40_000, "max": 50_000, "cooldown": 3600,
                    "mini": True},
         "pilot": {"name": "Пилот", "icon": "✈️", "level_req": 55,
-                  "min": 650_000, "max": 850_000, "cooldown": 1200},
+                  "min": 250_000, "max": 300_000, "cooldown": 3600},
     }
 
     def street_properties(self, user_id: int) -> list[dict]:
@@ -6346,6 +6354,16 @@ class Database:
             "house_key = excluded.house_key, bought_at = excluded.bought_at",
             (user_id, key, int(now)))
         return "ok"
+
+    def unique_has(self, user_id: int, key: str) -> bool:
+        row = self._row("SELECT 1 AS ok FROM unique_items "
+                        "WHERE user_id = ? AND item_key = ?", (user_id, key))
+        return bool(row)
+
+    def unique_add(self, user_id: int, key: str, now: int) -> None:
+        self._exec("INSERT OR IGNORE INTO unique_items "
+                   "(user_id, item_key, bought_at) VALUES (?, ?, ?)",
+                   (user_id, key, int(now)))
 
     def clothes_owned(self, user_id: int) -> list[str]:
         rows = self._rows("SELECT item_key FROM clothes WHERE user_id = ?",

@@ -1841,3 +1841,9 @@ def clothes_of_slot(slot: str) -> list[dict]:
 
 def clothes_view(key: str | None) -> dict:
     return CLOTHES_BY_KEY.get(key or "") or {}
+
+def btc_rate(ts: int) -> int:
+    """Курс BTC в mCoin: меняется каждый час, 30 000–80 000."""
+    hour = int(ts) // 3600
+    value = (hour * 2654435761) & 0xFFFFFFFF
+    return 30_000 + (value % 501) * 100

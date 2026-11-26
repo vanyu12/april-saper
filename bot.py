@@ -3093,7 +3093,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "ваша майнинг-ферма:",
             "",
             f"💲 Баланс BTC: <b>{btc:.4f} BTC</b>",
-            f"🔄 Курс обмена: 1 BTC → {num(game.MINING_BTC_RATE)} mCoin",
+            f"🔄 Курс обмена: 1 BTC → {num(game.btc_rate(int(time.time())))} mCoin (меняется каждый час)",
             "",
             f"🖥 Количество видеокарт: <b>{gpus}</b> / {slots}",
             f"💵 Прибыль видеокарт: <b>{per_hour:.4f} BTC</b> в час",
@@ -3146,6 +3146,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if gpus > 0 and power > last and span > 0:
             bonus = 1 + db.clan_bonus(user["user_id"]) / 100.0
             bonus *= 1 + home_bonus(user)["mining"] / 100.0
+            if db.unique_has(user["user_id"], "quantum_gpu"):
+                bonus *= 2
             btc += game.mining_btc(gpus, min(span, power - last)) * bonus
         db.mining_set_btc(user["user_id"], btc, now)
         return btc
@@ -3533,10 +3535,10 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 callback_data="job:locked" if locked
                 else f"job:open:{key}")])
         if my:
-            left = int(my["last_collect"] or 0) + 1200 - int(time.time())
+            left = int(my["last_collect"] or 0) + 3600 - int(time.time())
             if left > 0:
                 lines += ["", f"⏳ Перерыв после смены: {left_text(left)}"]
-        lines += ["", "Смена проходит сразу, перерыв — 20 минут."]
+        lines += ["", "Смена проходит сразу, перерыв — 1 час."]
         rows.append([InlineKeyboardButton(text="◀️ Меню",
                                           callback_data="help:menu")])
         return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
@@ -3593,7 +3595,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 return
             my = db.street_my_job(user["user_id"])
             if my and my["job_key"] == "digger":
-                left = int(my["last_collect"] or 0) + 1200 - int(time.time())
+                left = int(my["last_collect"] or 0) + 3600 - int(time.time())
                 if left > 0:
                     await callback.answer(f"Перерыв {left_text(left)}",
                                           show_alert=True)
@@ -3730,6 +3732,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
                                       callback_data="gmp:yachts")],
                 [InlineKeyboardButton(text="🖥 Видеокарта · 5 GMP",
                                       callback_data="gmp:gpu")],
+                [InlineKeyboardButton(
+                    text="⚛️ Квантовая видеокарта · 500 GMP",
+                    callback_data="gmp:unique")],
+                [InlineKeyboardButton(
+                    text="💱 Купить GMPOINT · 1 000 000 mCoin",
+                    callback_data="gmp:buy")],
                 [InlineKeyboardButton(text="◀️ Меню",
                                       callback_data="help:menu")]]
         return text, InlineKeyboardMarkup(inline_keyboard=rows)
@@ -3849,6 +3857,41 @@ def build_dispatcher(db: Database) -> Dispatcher:
         mining_settle(user)
         await send_card(callback.message, "card-mine.jpg", mining_text(user),
                         mining_keyboard(user), "card-business.jpg")
+
+    @dp.callback_query(F.data == "gmp:buy")
+    async def gmp_buy_cb(callback) -> None:
+        user = get_user(callback)
+        price = 1_000_000
+        if int(user["balance"]) < price:
+            await callback.answer("Нужно 1 000 000 mCoin", show_alert=True)
+            return
+        db.add_balance(user["user_id"], -price)
+        db.add_gmpoint(user["user_id"], 1)
+        await callback.answer("+1 GMPOINT")
+        text, keyboard = gmp_shop_view()
+        await safe_edit(callback.message,
+                        f"💎 Куплено 1 GMPOINT за {num(price)} mCoin\n\n"
+                        + text, keyboard)
+
+    @dp.callback_query(F.data == "gmp:unique")
+    async def gmp_unique_cb(callback) -> None:
+        user = get_user(callback)
+        price = 500
+        if db.unique_has(user["user_id"], "quantum_gpu"):
+            await callback.answer("Уже куплена", show_alert=True)
+            return
+        if int(user.get("gmpoint") or 0) < price:
+            await callback.answer(f"Нужно {price} GMPOINT", show_alert=True)
+            return
+        if not db.spend_gmpoint(user["user_id"], price):
+            await callback.answer("Не хватает GMPOINT", show_alert=True)
+            return
+        db.unique_add(user["user_id"], "quantum_gpu", int(time.time()))
+        await callback.answer("Квантовая видеокарта куплена")
+        text, keyboard = gmp_shop_view()
+        await safe_edit(callback.message,
+                        "⚛️ Куплена квантовая видеокарта: майнинг ×2\n\n"
+                        + text, keyboard)
 
     # --- одежда -------------------------------------------------------
     SLOT_ORDER = ("cap", "hat", "eyes", "top", "legs", "feet")
@@ -4068,7 +4111,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if btc <= 0:
             await callback.answer("На ферме пока нет BTC", show_alert=True)
         else:
-            coins = int(btc * game.MINING_BTC_RATE)
+            coins = int(btc * game.btc_rate(int(time.time())))
             db.mining_set_btc(user["user_id"], 0.0, now)
             db.add_balance(user["user_id"], coins)
             await callback.answer(f"Обменяно: +{num(coins)} mCoin")
