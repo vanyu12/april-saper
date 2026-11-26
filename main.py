@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import logging
 import sys
 
@@ -60,8 +60,23 @@ async def main() -> None:
     await site.start()
     log.info("HTTP-сервер: http://%s:%s/", config.host, config.port)
 
-    await setup_bot(bot)
-    me = await bot.get_me()
+    try:
+        await setup_bot(bot)
+    except Exception as exc:
+        log.warning("Не удалось обновить меню и команды: %s", exc)
+
+    me = None
+    for attempt in range(1, 11):
+        try:
+            me = await bot.get_me()
+            break
+        except Exception as exc:
+            log.warning("Telegram недоступен (%s). Попытка %s/10, ждём 30 с.",
+                        exc, attempt)
+            await asyncio.sleep(30)
+    if me is None:
+        log.error("Telegram не отвечает — выходим")
+        sys.exit(1)
     config.bot_username = me.username or ""
     log.info("Бот: @%s", config.bot_username)
     if config.public_url:
