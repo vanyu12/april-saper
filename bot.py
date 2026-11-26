@@ -473,60 +473,45 @@ def build_dispatcher(db: Database) -> Dispatcher:
         return "▰" * filled + "▱" * (width - filled)
 
     def profile_text(user: dict) -> str:
-        now = int(time.time())
-        lost = max(0, int(user["total_wagered"]) - int(user["total_won"]))
-        deposits_total = sum(int(row["amount"]) for row in db.deposits(user["user_id"]))
-        level = game.level_view(user.get("xp") or 0)
-        duels_played = int(user.get("duels_played") or 0)
-        duels_won = int(user.get("duels_won") or 0)
-        pref = game.prefix_view(user.get("prefix"))
-        avatar = game.avatar_view(user.get("avatar_key"))
-        bg = game.background_view(user.get("bg_key"))
-        title = "Профиль"
-        if avatar["icon"]:
-            title += f" {avatar['icon']}"
+        uid = user["user_id"]
+        cars = db.cars(uid)
+        yachts = db.yachts(uid)
+        house_row = db.house(uid) or {}
+        house = game.HOUSE_BY_KEY.get(house_row.get("house_key") or "")
+        balance = int(user["balance"])
+        gmp = int(user.get("gmpoint") or 0)
+        cars_value = sum(int(game.CAR_BY_KEY.get(c["model"], {}).get("price", 0))
+                         for c in cars)
+        yachts_value = sum(
+            int(game.YACHT_BY_KEY.get(y["model"], {}).get("price", 0))
+            for y in yachts)
+        house_value = int(house["price"]) if house else 0
+        total = (balance + gmp * 1_000_000 + cars_value + yachts_value
+                 + house_value)
         lines = [
-            head("👤", title),
-            f"🆔 ID: <code>{user['user_id']}</code>",
-            f"💰 Баланс: <b>{num(user['balance'])} mCoin</b>",
-            f"🎁 GMPOINT: <b>{num(user.get('gmpoint') or 0)}</b>",
-            (f"🎩 Префикс: <b>{pref['title']}</b>"
-             + (f" · +{int(round(pref['bonus'] * 100))}% к выигрышу"
-                if pref["bonus"] else ""))
-            if pref else "🎩 Префикс: нет",
-            f"🎨 Фон профиля: {bg['title']}"
-            + (f" · аватар: {avatar['title']}" if avatar["icon"] else ""),
+            head("👤", "Профиль"),
+            f"🆔 ID: <code>{uid}</code>",
+            f"💰 Баланс: <b>{num(balance)}</b> mCoin",
+            f"💎 Доход: <b>{num(gmp)}</b> GMPOINT",
             f"👕 Образ: {worn_line(user)}",
-            f"⭐ Уровень {level['level']} — {level['title']}",
-            f"🎖 XP: {level['into']} / {level['need']} {level_bar(level['into'], level['need'])}",
-            f"🎯 Партий: {user['games_played']} · побед: {user['games_won']}",
-            f"📉 Проиграно: {num(lost)} mCoin",
-            f"🔥 Лучший множитель: ×{user['best_multiplier']:.2f}",
-            f"🕒 {seen_text(user.get('last_seen'), now)}",
+            (f"{house['icon']} Дом: <b>{house['title']}</b>" if house
+             else "🏠 Дом: нет"),
+            DIV,
+            "<b>Имущество</b>",
         ]
-        boost_win = db.item_qty(user["user_id"], "boost_win")
-        boost_loss = db.item_qty(user["user_id"], "boost_loss")
-        if boost_win or boost_loss:
-            parts = []
-            if boost_win:
-                parts.append(f"+5% к выигрышу ×{boost_win}")
-            if boost_loss:
-                parts.append(f"кэшбэк 5% ×{boost_loss}")
-            lines.append("🚀 Бусты: " + " · ".join(parts))
-        if duels_played:
-            lines.append(f"⚔️ Дуэли: {duels_played} · побед: {duels_won}")
-        place = db.rank(user["user_id"])
-        if place:
-            lines.append(f"🏆 Место в топе: #{place}")
-        if deposits_total:
-            lines.append(f"🏦 В депозитах: {num(deposits_total)} mCoin")
-        hourly_left = game.HOURLY_COOLDOWN - (now - int(user.get("last_hourly") or 0))
-        spin_left = game.SPIN_COOLDOWN - (now - int(user.get("last_spin") or 0))
-        lines.append(DIV)
-        lines.append("🎁 Часовой бонус: " + ("готов" if hourly_left <= 0
-                                            else f"через {left_text(hourly_left)}"))
-        lines.append("🎡 Колесо дня: " + ("готово" if spin_left <= 0
-                                         else f"через {left_text(spin_left)}"))
+        if cars:
+            for car in cars:
+                model = game.CAR_BY_KEY.get(car["model"]) or {}
+                lines.append(f"🚗 {model.get('title', car['model'])}")
+        else:
+            lines.append("🚗 Машин нет")
+        if yachts:
+            for yacht in yachts:
+                model = game.YACHT_BY_KEY.get(yacht["model"]) or {}
+                lines.append(f"🛥 {model.get('title', yacht['model'])}")
+        else:
+            lines.append("🛥 Яхт нет")
+        lines += [DIV, f"📦 Общее состояние: <b>{num(total)}</b> mCoin"]
         return "\n".join(lines)
 
     def progress_bar(value: int, total: int, width: int = 8) -> str:
