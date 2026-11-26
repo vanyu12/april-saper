@@ -1735,3 +1735,45 @@ def roll_ore(level: int, value: float) -> str:
         if edge < acc:
             return key
     return list(drops)[-1]
+
+# --- ДОМА -----------------------------------------------------------------
+HOUSES = [
+    {"key": "basement", "title": "Подвал", "icon": "🚪", "price": 100_000,
+     "mining": 0, "work": 1, "rent": 0, "fish": 0, "fuel": 0, "daily": 0},
+    {"key": "hostel", "title": "Комната в общежитии", "icon": "🛏",
+     "price": 500_000,
+     "mining": 1, "work": 2, "rent": 0, "fish": 0, "fuel": 1, "daily": 2},
+    {"key": "studio", "title": "Съёмная студия", "icon": "🏠",
+     "price": 2_000_000,
+     "mining": 2, "work": 3, "rent": 1, "fish": 1, "fuel": 2, "daily": 4},
+    {"key": "flat", "title": "Квартира", "icon": "🏢", "price": 8_000_000,
+     "mining": 3, "work": 5, "rent": 2, "fish": 3, "fuel": 4, "daily": 6},
+    {"key": "house", "title": "Свой дом", "icon": "🏡", "price": 30_000_000,
+     "mining": 5, "work": 8, "rent": 4, "fish": 5, "fuel": 6, "daily": 8},
+    {"key": "cottage", "title": "Коттедж", "icon": "🏘", "price": 90_000_000,
+     "mining": 7, "work": 11, "rent": 6, "fish": 8, "fuel": 9, "daily": 11},
+    {"key": "townhouse", "title": "Таунхаус", "icon": "🏙",
+     "price": 250_000_000,
+     "mining": 10, "work": 15, "rent": 9, "fish": 11, "fuel": 12, "daily": 15},
+    {"key": "villa", "title": "Вилла", "icon": "🌴", "price": 600_000_000,
+     "mining": 14, "work": 20, "rent": 12, "fish": 15, "fuel": 18, "daily": 20},
+    {"key": "mansion", "title": "Особняк", "icon": "🏰",
+     "price": 1_500_000_000,
+     "mining": 18, "work": 25, "rent": 16, "fish": 20, "fuel": 25, "daily": 30},
+    {"key": "estate", "title": "Родовое поместье", "icon": "👑",
+     "price": 4_000_000_000,
+     "mining": 25, "work": 30, "rent": 20, "fish": 25, "fuel": 40, "daily": 50},
+]
+HOUSE_BY_KEY = {h["key"]: h for h in HOUSES}
+HOUSE_BUFF_KEYS = ("mining", "work", "rent", "fish", "fuel", "daily")
+
+
+def house_buffs(key: str | None) -> dict:
+    house = HOUSE_BY_KEY.get(key or "")
+    if not house:
+        return {name: 0 for name in HOUSE_BUFF_KEYS}
+    return {name: int(house.get(name, 0)) for name in HOUSE_BUFF_KEYS}
+
+
+def gmp_price(mcoin: int, rate: int = 2_000_000) -> int:
+    return max(5, int(round(int(mcoin) / rate)))

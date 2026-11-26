@@ -215,6 +215,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         "auto", "cars", "avto", "yachts", "yacht", "biz", "business",
         "balance", "profile", "me", "deposit", "bank", "mine", "mining",
         "city", "gorod", "ore", "sh", "job", "work", "rabota",
+        "home", "dom", "houses", "donate_shop", "gmp_shop",
         "admin", "owner", "adminboot",
         "setbal", "addbal", "role", "give", "gmp", "setgmp",
         "xp", "energy", "pref", "givecar", "giveyacht", "resetcd",
@@ -1705,6 +1706,11 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 lines.append("⏳ Ежедневный: ещё не готов")
             else:
                 amount = int(result["amount"])
+                daily_pct = home_bonus(user)["daily"]
+                if daily_pct:
+                    extra = int(amount * daily_pct / 100)
+                    db.add_balance(user["user_id"], extra)
+                    amount += extra
                 if doubled:
                     db.add_balance(user["user_id"], amount)
                     amount *= 2
@@ -2443,6 +2449,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         fuel_max = int(car["fuel_max"]) or int(game.CAR_BY_KEY[model]["fuel_max"])
         need = fuel_max - int(car["fuel"])
         price = need * game.car_fuel_price(model)
+        price = int(price * (1 - home_bonus(user)["fuel"] / 100))
         if int(car["fuel"]) >= fuel_max:
             await callback.answer("Бак уже полный", show_alert=True)
             return
@@ -2537,6 +2544,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer("Такого тарифа нет", show_alert=True)
             return
         net, tax = game.after_tax(price, game.TAX_CAR_RENT)
+        net = int(net * (1 + home_bonus(user)["rent"] / 100))
         if tax:
             db.add_treasury(tax)
             db.treasury_log("tax", user["user_id"], tax)
@@ -2815,6 +2823,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             return
         gross = game.fish_reward(yacht["model"])
         net, tax = game.after_tax(gross, game.TAX_YACHT_FISH)
+        net = int(net * (1 + home_bonus(user)["fish"] / 100))
         if tax:
             db.add_treasury(tax)
             db.treasury_log("tax", user["user_id"], tax)
@@ -3131,6 +3140,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         span = max(0, now - last)
         if gpus > 0 and power > last and span > 0:
             bonus = 1 + db.clan_bonus(user["user_id"]) / 100.0
+            bonus *= 1 + home_bonus(user)["mining"] / 100.0
             btc += game.mining_btc(gpus, min(span, power - last)) * bonus
         db.mining_set_btc(user["user_id"], btc, now)
         return btc
@@ -3589,7 +3599,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await job_show_dig(callback, user, 5, "")
             return
         db.street_apply_job(user["user_id"], key, level)
-        result = db.street_collect_job(user["user_id"])
+        result = db.street_collect_job(user["user_id"],
+                                       home_bonus(user)["work"])
         if result.get("error") == "cooldown":
             await callback.answer(f"Перерыв {left_text(result['wait'])}",
                                   show_alert=True)
@@ -3636,6 +3647,204 @@ def build_dispatcher(db: Database) -> Dispatcher:
             return
         await job_show_dig(callback, user, attempts, note)
 
+    # --- дома ---------------------------------------------------------
+    def home_bonus(user: dict) -> dict:
+        row = db.house(user["user_id"]) or {}
+        return game.house_buffs(row.get("house_key"))
+
+    def homes_view(user: dict) -> tuple[str, InlineKeyboardMarkup]:
+        owned = db.house(user["user_id"]) or {}
+        key = owned.get("house_key")
+        current = game.HOUSE_BY_KEY.get(key or "")
+        lines = ["🏠 <b>Дома</b>", "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"]
+        if current:
+            b = game.house_buffs(key)
+            lines.append(f"Сейчас: {current['icon']} <b>{current['title']}</b>")
+            lines.append(f"⛏ майнинг +{b['mining']}% · 💼 работа +{b['work']}% · "
+                         f"🚗 аренда +{b['rent']}%")
+            lines.append(f"🎣 рыбалка +{b['fish']}% · ⛽ топливо −{b['fuel']}% · "
+                         f"🎁 бонус +{b['daily']}%")
+        else:
+            lines.append("Жилья нет — купите первое.")
+        lines.append("")
+        rows = []
+        for house in game.HOUSES:
+            price = num(house["price"])
+            if house["key"] == key:
+                lines.append(f"✅ {house['title']} — ваш дом")
+                continue
+            lines.append(f"{house['icon']} {house['title']} — {price} mCoin")
+            rows.append([InlineKeyboardButton(
+                text=f"{house['icon']} {house['title']} · {price}",
+                callback_data=f"home:buy:{house['key']}")])
+        rows.append([InlineKeyboardButton(text="◀️ Меню",
+                                          callback_data="help:menu")])
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+    @dp.message(Command("home", "dom"))
+    async def home_cmd(message: Message) -> None:
+        user = get_user(message)
+        text, keyboard = homes_view(user)
+        await send_card(message, "card-home.jpg", text, keyboard,
+                        "card-city.jpg")
+
+    @dp.callback_query(F.data == "home:menu")
+    async def home_menu_cb(callback) -> None:
+        user = get_user(callback)
+        text, keyboard = homes_view(user)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("home:buy:"))
+    async def home_buy_cb(callback) -> None:
+        key = callback.data.split(":", 2)[-1]
+        house = game.HOUSE_BY_KEY.get(key)
+        if not house:
+            await callback.answer()
+            return
+        user = get_user(callback)
+        result = db.house_buy(user["user_id"], key, house["price"],
+                              int(time.time()))
+        if result == "money":
+            await callback.answer("Не хватает mCoin", show_alert=True)
+            return
+        await callback.answer("Новоселье!")
+        text, keyboard = homes_view(user)
+        await safe_edit(callback.message,
+                        f"🏠 Новый дом: <b>{house['icon']} "
+                        f"{house['title']}</b>\n\n" + text, keyboard)
+
+    # --- донат-магазин ------------------------------------------------
+    def gmp_shop_view() -> tuple[str, InlineKeyboardMarkup]:
+        text = ("💎 <b>Донат-магазин</b>\n┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+                "Покупка за GMPOINT: машины, яхты и видеокарты.\n"
+                "Цена считается от обычной стоимости.")
+        rows = [[InlineKeyboardButton(text="🚗 Машины",
+                                      callback_data="gmp:cars")],
+                [InlineKeyboardButton(text="🛥 Яхты",
+                                      callback_data="gmp:yachts")],
+                [InlineKeyboardButton(text="🖥 Видеокарта · 5 GMP",
+                                      callback_data="gmp:gpu")],
+                [InlineKeyboardButton(text="◀️ Меню",
+                                      callback_data="help:menu")]]
+        return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+    @dp.message(Command("donate_shop", "gmp_shop"))
+    async def gmp_shop_cmd(message: Message) -> None:
+        text, keyboard = gmp_shop_view()
+        await message.answer(text, reply_markup=keyboard)
+
+    @dp.callback_query(F.data == "gmp:menu")
+    async def gmp_menu_cb(callback) -> None:
+        text, keyboard = gmp_shop_view()
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data == "gmp:cars")
+    async def gmp_cars_cb(callback) -> None:
+        lines = ["🚗 <b>Машины за GMPOINT</b>", "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"]
+        rows = []
+        for car in game.CARS:
+            price = game.gmp_price(car["price"])
+            lines.append(f"{car['icon']} {car['title']} — {price} GMP")
+            rows.append([InlineKeyboardButton(
+                text=f"{car['icon']} {car['title']} · {price} GMP",
+                callback_data=f"gmpcar:{car['key']}")])
+        rows.append([InlineKeyboardButton(text="◀️ Назад",
+                                          callback_data="gmp:menu")])
+        await safe_edit(callback.message, "\n".join(lines),
+                        InlineKeyboardMarkup(inline_keyboard=rows))
+        await callback.answer()
+
+    @dp.callback_query(F.data == "gmp:yachts")
+    async def gmp_yachts_cb(callback) -> None:
+        lines = ["🛥 <b>Яхты за GMPOINT</b>", "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"]
+        rows = []
+        for yacht in game.YACHTS:
+            price = game.gmp_price(yacht["price"])
+            lines.append(f"{yacht['icon']} {yacht['title']} — {price} GMP")
+            rows.append([InlineKeyboardButton(
+                text=f"{yacht['icon']} {yacht['title']} · {price} GMP",
+                callback_data=f"gmpyacht:{yacht['key']}")])
+        rows.append([InlineKeyboardButton(text="◀️ Назад",
+                                          callback_data="gmp:menu")])
+        await safe_edit(callback.message, "\n".join(lines),
+                        InlineKeyboardMarkup(inline_keyboard=rows))
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("gmpcar:"))
+    async def gmp_car_buy_cb(callback) -> None:
+        key = callback.data.split(":", 1)[-1]
+        car = game.CAR_BY_KEY.get(key)
+        if not car:
+            await callback.answer()
+            return
+        user = get_user(callback)
+        price = game.gmp_price(car["price"])
+        if int(user.get("gmpoint") or 0) < price:
+            await callback.answer(f"Нужно {price} GMPOINT", show_alert=True)
+            return
+        if not db.spend_gmpoint(user["user_id"], price):
+            await callback.answer("Не хватает GMPOINT", show_alert=True)
+            return
+        db.car_add(user["user_id"], key, 0, int(car["fuel_max"]))
+        await callback.answer(f"Куплено за {price} GMP")
+        await safe_edit(callback.message,
+                        f"🚗 Куплено: <b>{car['title']}</b> "
+                        f"за {price} GMPOINT",
+                        InlineKeyboardMarkup(inline_keyboard=[[
+                            InlineKeyboardButton(text="◀️ Назад",
+                                                 callback_data="gmp:cars")]]))
+
+    @dp.callback_query(F.data.startswith("gmpyacht:"))
+    async def gmp_yacht_buy_cb(callback) -> None:
+        key = callback.data.split(":", 1)[-1]
+        yacht = game.YACHT_BY_KEY.get(key)
+        if not yacht:
+            await callback.answer()
+            return
+        user = get_user(callback)
+        price = game.gmp_price(yacht["price"])
+        if int(user.get("gmpoint") or 0) < price:
+            await callback.answer(f"Нужно {price} GMPOINT", show_alert=True)
+            return
+        if not db.spend_gmpoint(user["user_id"], price):
+            await callback.answer("Не хватает GMPOINT", show_alert=True)
+            return
+        db.yacht_add(user["user_id"], key, 0, int(yacht["fuel_max"]))
+        await callback.answer(f"Куплено за {price} GMP")
+        await safe_edit(callback.message,
+                        f"🛥 Куплена: <b>{yacht['title']}</b> "
+                        f"за {price} GMPOINT",
+                        InlineKeyboardMarkup(inline_keyboard=[[
+                            InlineKeyboardButton(text="◀️ Назад",
+                                                 callback_data="gmp:yachts")]]))
+
+    @dp.callback_query(F.data == "gmp:gpu")
+    async def gmp_gpu_cb(callback) -> None:
+        user = get_user(callback)
+        price = game.gmp_price(game.MINING_GPU_PRICE)
+        if int(user.get("gmpoint") or 0) < price:
+            await callback.answer(f"Нужно {price} GMPOINT", show_alert=True)
+            return
+        now = int(time.time())
+        db.mining_ensure(user["user_id"], game.MINING_SLOTS_BASE, now)
+        result = db.mining_buy_gpu(user["user_id"], 0, now)
+        if result == "slots":
+            await callback.answer("Нет свободных мест — расширьте ферму",
+                                  show_alert=True)
+            return
+        if result != "ok":
+            await callback.answer("Не удалось", show_alert=True)
+            return
+        if not db.spend_gmpoint(user["user_id"], price):
+            await callback.answer("Не хватает GMPOINT", show_alert=True)
+            return
+        await callback.answer(f"Видеокарта куплена за {price} GMP")
+        mining_settle(user)
+        await send_card(callback.message, "card-mine.jpg", mining_text(user),
+                        mining_keyboard(user), "card-business.jpg")
+
     TEXT_ALIASES = {
         "м": "mine", "майн": "mine", "майнинг": "mine",
         "авто": "auto", "машины": "auto",
@@ -3645,6 +3854,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
         "г": "city", "город": "city",
         "ш": "mine_ore", "шахта": "mine_ore", "руда": "mine_ore",
         "р": "job", "работа": "job", "работы": "job",
+        "дом": "home", "дома": "home", "жильё": "home",
+        "донат": "gmp_shop",
     }
 
     @dp.message(F.text.lower().in_(set(TEXT_ALIASES)))
@@ -3654,7 +3865,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
         handlers = {"mine": mine_cmd, "auto": auto_cmd,
                     "yachts": yachts_cmd, "biz": biz_cmd,
                     "city": city_cmd, "mine_ore": mine_ore_cmd,
-                    "job": job_cmd}
+                    "job": job_cmd, "home": home_cmd,
+                    "gmp_shop": gmp_shop_cmd}
         if target in handlers:
             await handlers[target](message)
 
@@ -3869,6 +4081,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
              InlineKeyboardButton(text="💰 Казна", callback_data="treasury:menu")],
             [InlineKeyboardButton(text="⛏ Майнинг", callback_data="mine:open")],
             [InlineKeyboardButton(text="💼 Работа", callback_data="job:menu")],
+            [InlineKeyboardButton(text="🏠 Дома", callback_data="home:menu"),
+             InlineKeyboardButton(text="💎 Донат", callback_data="gmp:menu")],
             [InlineKeyboardButton(text="👤 Профиль", callback_data="menu:balance")],
             [webapp_button()],
         ]

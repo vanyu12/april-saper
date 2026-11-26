@@ -1441,6 +1441,13 @@ SCHEMA_STATEMENTS = [
         created_at INTEGER NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS house (
+        user_id    INTEGER PRIMARY KEY,
+        house_key  TEXT NOT NULL DEFAULT '',
+        bought_at  INTEGER NOT NULL DEFAULT 0
+    )
+    """,
 ]
 
 DEFAULT_SETTINGS = {
@@ -6276,7 +6283,7 @@ class Database:
                 (user_id, job_key, int(time.time()), last))
         return {"ok": True, "job": job_key}
 
-    def street_collect_job(self, user_id: int) -> dict:
+    def street_collect_job(self, user_id: int, bonus: float = 0.0) -> dict:
         job = self.street_my_job(user_id)
         if not job:
             return {"error": "no_job"}
@@ -6289,6 +6296,8 @@ class Database:
         if now - last < cd:
             return {"error": "cooldown", "wait": cd - (now - last)}
         reward = random.randint(int(spec["min"]), int(spec["max"]))
+        if bonus:
+            reward = int(reward * (1 + float(bonus) / 100))
         self._exec(
             "UPDATE street_jobs SET last_collect = ? WHERE user_id = ?",
             (now, user_id))
@@ -6301,6 +6310,23 @@ class Database:
     def street_set_last(self, user_id: int, ts: int) -> None:
         self._exec("UPDATE street_jobs SET last_collect = ? WHERE user_id = ?",
                    (int(ts), user_id))
+
+    def house(self, user_id: int) -> dict | None:
+        row = self._row("SELECT * FROM house WHERE user_id = ?", (user_id,))
+        return dict(row) if row else None
+
+    def house_buy(self, user_id: int, key: str, price: int, now: int) -> str:
+        bal = self._row("SELECT balance FROM users WHERE user_id = ?",
+                        (user_id,))
+        if not bal or int(bal["balance"]) < int(price):
+            return "money"
+        self.add_balance(user_id, -int(price))
+        self._exec(
+            "INSERT INTO house (user_id, house_key, bought_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "house_key = excluded.house_key, bought_at = excluded.bought_at",
+            (user_id, key, int(now)))
+        return "ok"
 
     def job_shift(self, user_id: int) -> dict | None:
         row = self._row("SELECT * FROM job_shift WHERE user_id = ?", (user_id,))
