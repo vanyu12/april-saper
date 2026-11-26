@@ -6164,7 +6164,11 @@ class Api:
         job_key = str(body.get("job_key", ""))
         stats = self.db.user(user["user_id"])
         exp = int(stats["xp"]) if stats else 0
-        result = self.db.street_apply_job(user["user_id"], job_key, exp)
+        level = game.level_from_xp(exp)
+        result = self.db.street_apply_job(user["user_id"], job_key, level)
+        if result.get("error") == "low_level":
+            return self._json({"ok": False, "error": "low_level",
+                               "need": result.get("need", 0), "level": level})
         if "error" in result:
             return self._fail(result["error"])
         return self._json({"ok": True, "job": job_key})

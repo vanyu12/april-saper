@@ -1,5 +1,6 @@
 ﻿import json
 import os
+import random
 import sqlite3
 import threading
 import time
@@ -1430,6 +1431,14 @@ SCHEMA_STATEMENTS = [
         taps       INTEGER NOT NULL DEFAULT 0,
         day        TEXT NOT NULL DEFAULT '',
         updated_at INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS job_shift (
+        user_id    INTEGER PRIMARY KEY,
+        job_key    TEXT NOT NULL,
+        attempts   INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
     )
     """,
 ]
@@ -6185,16 +6194,19 @@ class Database:
     }
 
     STREET_JOBS = {
-        "courier": {"name": "Курьер", "exp_req": 0, "reward": 100,
-                    "cooldown": 600, "desc": "Развозит заказы. Опыт: 0+"},
-        "guard": {"name": "Охранник", "exp_req": 200, "reward": 220,
-                  "cooldown": 900, "desc": "Охраняет район. Опыт: 200+"},
-        "miner": {"name": "Шахтёр", "exp_req": 500, "reward": 400,
-                  "cooldown": 1200, "desc": "Добывает руду. Опыт: 500+"},
-        "banker": {"name": "Банковский клерк", "exp_req": 1200, "reward": 700,
-                   "cooldown": 1500, "desc": "Работает в банке. Опыт: 1200+"},
-        "ceo": {"name": "Директор", "exp_req": 3000, "reward": 1500,
-                "cooldown": 1800, "desc": "Руководит компанией. Опыт: 3000+"},
+        "cleaner": {"name": "Уборщик", "icon": "🧹", "level_req": 5,
+                    "min": 120_000, "max": 150_000, "cooldown": 1200},
+        "photo": {"name": "Фотограф", "icon": "📸", "level_req": 15,
+                  "min": 160_000, "max": 190_000, "cooldown": 1200},
+        "teacher": {"name": "Преподаватель", "icon": "📚", "level_req": 25,
+                    "min": 200_000, "max": 250_000, "cooldown": 1200},
+        "banker": {"name": "Банкир", "icon": "🏦", "level_req": 35,
+                   "min": 270_000, "max": 330_000, "cooldown": 1200},
+        "digger": {"name": "Кладоискатель", "icon": "💰", "level_req": 45,
+                   "min": 450_000, "max": 600_000, "cooldown": 1200,
+                   "mini": True},
+        "pilot": {"name": "Пилот", "icon": "✈️", "level_req": 55,
+                  "min": 650_000, "max": 850_000, "cooldown": 1200},
     }
 
     def street_properties(self, user_id: int) -> list[dict]:
@@ -6248,16 +6260,20 @@ class Database:
                         (user_id,))
         return dict(row) if row else None
 
-    def street_apply_job(self, user_id: int, job_key: str, exp: int) -> dict:
+    def street_apply_job(self, user_id: int, job_key: str, level: int) -> dict:
         spec = self.STREET_JOBS.get(job_key)
         if not spec:
             return {"error": "bad_job"}
-        if exp < int(spec["exp_req"]):
-            return {"error": "low_exp"}
-        self._exec(
-            "INSERT OR REPLACE INTO street_jobs (user_id, job_key, started_at, "
-            "last_collect) VALUES (?, ?, ?, 0)",
-            (user_id, job_key, int(time.time())))
+        if int(level) < int(spec["level_req"]):
+            return {"error": "low_level", "need": int(spec["level_req"])}
+        row = self._row("SELECT job_key, last_collect FROM street_jobs "
+                        "WHERE user_id = ?", (user_id,))
+        last = int(row["last_collect"] or 0) if row else 0
+        if not row or row["job_key"] != job_key:
+            self._exec(
+                "INSERT OR REPLACE INTO street_jobs (user_id, job_key, "
+                "started_at, last_collect) VALUES (?, ?, ?, ?)",
+                (user_id, job_key, int(time.time()), last))
         return {"ok": True, "job": job_key}
 
     def street_collect_job(self, user_id: int) -> dict:
@@ -6272,7 +6288,7 @@ class Database:
         cd = int(spec["cooldown"])
         if now - last < cd:
             return {"error": "cooldown", "wait": cd - (now - last)}
-        reward = int(spec["reward"]) + int(job["started_at"]) % 10
+        reward = random.randint(int(spec["min"]), int(spec["max"]))
         self._exec(
             "UPDATE street_jobs SET last_collect = ? WHERE user_id = ?",
             (now, user_id))
@@ -6281,6 +6297,28 @@ class Database:
             "INSERT INTO street_work_log (user_id, job_key, reward, created_at) "
             "VALUES (?, ?, ?, ?)", (user_id, job["job_key"], reward, now))
         return {"ok": True, "reward": reward, "job": job["job_key"]}
+
+    def street_set_last(self, user_id: int, ts: int) -> None:
+        self._exec("UPDATE street_jobs SET last_collect = ? WHERE user_id = ?",
+                   (int(ts), user_id))
+
+    def job_shift(self, user_id: int) -> dict | None:
+        row = self._row("SELECT * FROM job_shift WHERE user_id = ?", (user_id,))
+        return dict(row) if row else None
+
+    def job_shift_start(self, user_id: int, job_key: str, attempts: int,
+                        now: int) -> None:
+        self._exec(
+            "INSERT OR REPLACE INTO job_shift (user_id, job_key, attempts, "
+            "created_at) VALUES (?, ?, ?, ?)",
+            (user_id, job_key, int(attempts), int(now)))
+
+    def job_shift_set(self, user_id: int, attempts: int) -> None:
+        self._exec("UPDATE job_shift SET attempts = ? WHERE user_id = ?",
+                   (int(attempts), user_id))
+
+    def job_shift_clear(self, user_id: int) -> None:
+        self._exec("DELETE FROM job_shift WHERE user_id = ?", (user_id,))
 
     # --- джекпот-розыгрыш (Mirage-style) --------------------------------
     def jackpot(self) -> dict:

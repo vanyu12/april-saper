@@ -214,7 +214,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         "mines", "saper", "bonus", "daily",
         "auto", "cars", "avto", "yachts", "yacht", "biz", "business",
         "balance", "profile", "me", "deposit", "bank", "mine", "mining",
-        "city", "gorod", "ore", "sh",
+        "city", "gorod", "ore", "sh", "job", "work", "rabota",
         "admin", "owner", "adminboot",
         "setbal", "addbal", "role", "give", "gmp", "setgmp",
         "xp", "energy", "pref", "givecar", "giveyacht", "resetcd",
@@ -3499,6 +3499,143 @@ def build_dispatcher(db: Database) -> Dispatcher:
         text, keyboard = ore_picks_view(user)
         await safe_edit(callback.message, text, keyboard)
 
+    # --- работа --------------------------------------------------------
+    def jobs_view(user: dict) -> tuple[str, InlineKeyboardMarkup]:
+        level = game.level_from_xp(int(db.user(user["user_id"])["xp"]))
+        my = db.street_my_job(user["user_id"])
+        lines = ["💼 <b>Работа</b>", "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
+                 f"⭐ Ваш уровень: <b>{level}</b>", ""]
+        rows = []
+        for key, spec in db.STREET_JOBS.items():
+            locked = level < int(spec["level_req"])
+            mark = "🔒" if locked else "•"
+            need = f" · с {spec['level_req']} ур." if locked else ""
+            lines.append(f"{mark} {spec['icon']} {spec['name']} — "
+                         f"{num(spec['min'])}–{num(spec['max'])} за смену"
+                         f"{need}")
+            rows.append([InlineKeyboardButton(
+                text=f"{'🔒' if locked else spec['icon']} {spec['name']}",
+                callback_data="job:locked" if locked
+                else f"job:open:{key}")])
+        if my:
+            left = int(my["last_collect"] or 0) + 1200 - int(time.time())
+            if left > 0:
+                lines += ["", f"⏳ Перерыв после смены: {left_text(left)}"]
+        lines += ["", "Смена проходит сразу, перерыв — 20 минут."]
+        rows.append([InlineKeyboardButton(text="◀️ Меню",
+                                          callback_data="help:menu")])
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def job_show_dig(callback, user: dict, attempts: int,
+                           note: str) -> None:
+        text = ("💰 <b>Кладоискатель</b>\n"
+                + (note + "\n\n" if note else "")
+                + f"📦 Осталось попыток: <b>{attempts}</b>\n"
+                "⛏ Выберите место для раскопок")
+        rows = [[InlineKeyboardButton(text="❓", callback_data=f"job:dig:{i}")
+                 for i in range(3)],
+                [InlineKeyboardButton(text="◀️ Назад",
+                                      callback_data="job:menu")]]
+        await safe_edit(callback.message, text,
+                        InlineKeyboardMarkup(inline_keyboard=rows))
+
+    @dp.message(Command("job", "work"))
+    async def job_cmd(message: Message) -> None:
+        user = get_user(message)
+        text, keyboard = jobs_view(user)
+        await send_card(message, "card-business.jpg", text, keyboard,
+                        "card-city.jpg")
+
+    @dp.callback_query(F.data == "job:menu")
+    async def job_menu_cb(callback) -> None:
+        user = get_user(callback)
+        text, keyboard = jobs_view(user)
+        await safe_edit(callback.message, text, keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data == "job:locked")
+    async def job_locked_cb(callback) -> None:
+        await callback.answer("Работа ещё не открыта — не хватает уровня",
+                              show_alert=True)
+
+    @dp.callback_query(F.data.startswith("job:open:"))
+    async def job_open_cb(callback) -> None:
+        key = callback.data.split(":", 2)[-1]
+        spec = db.STREET_JOBS.get(key)
+        if not spec:
+            await callback.answer()
+            return
+        user = get_user(callback)
+        level = game.level_from_xp(int(db.user(user["user_id"])["xp"]))
+        if level < int(spec["level_req"]):
+            await callback.answer(f"Нужен {spec['level_req']} уровень",
+                                  show_alert=True)
+            return
+        if spec.get("mini"):
+            shift = db.job_shift(user["user_id"])
+            if shift and int(shift["attempts"]) > 0:
+                await job_show_dig(callback, user, int(shift["attempts"]), "")
+                return
+            my = db.street_my_job(user["user_id"])
+            if my and my["job_key"] == "digger":
+                left = int(my["last_collect"] or 0) + 1200 - int(time.time())
+                if left > 0:
+                    await callback.answer(f"Перерыв {left_text(left)}",
+                                          show_alert=True)
+                    return
+            db.street_apply_job(user["user_id"], "digger", level)
+            db.job_shift_start(user["user_id"], "digger", 5, int(time.time()))
+            await callback.answer("Смена началась")
+            await job_show_dig(callback, user, 5, "")
+            return
+        db.street_apply_job(user["user_id"], key, level)
+        result = db.street_collect_job(user["user_id"])
+        if result.get("error") == "cooldown":
+            await callback.answer(f"Перерыв {left_text(result['wait'])}",
+                                  show_alert=True)
+            return
+        if result.get("error"):
+            await callback.answer("Не получилось", show_alert=True)
+            return
+        await callback.answer(f"+{num(result['reward'])} mCoin")
+        text, keyboard = jobs_view(user)
+        await safe_edit(callback.message,
+                        f"💼 Смена: {spec['icon']} {spec['name']}\n"
+                        f"💰 Заработано: <b>+{num(result['reward'])}</b> mCoin"
+                        f"\n\n" + text, keyboard)
+
+    @dp.callback_query(F.data.startswith("job:dig:"))
+    async def job_dig_cb(callback) -> None:
+        user = get_user(callback)
+        shift = db.job_shift(user["user_id"])
+        if not shift or int(shift["attempts"]) <= 0:
+            await callback.answer("Смена не начата", show_alert=True)
+            return
+        attempts = int(shift["attempts"]) - 1
+        spec = db.STREET_JOBS["digger"]
+        found = random.random() < 0.45
+        reward = (random.randint(int(spec["min"]) // 8, int(spec["max"]) // 5)
+                  if found else 0)
+        if reward:
+            db.add_balance(user["user_id"], reward)
+        if attempts <= 0:
+            db.job_shift_clear(user["user_id"])
+            db.street_set_last(user["user_id"], int(time.time()))
+        else:
+            db.job_shift_set(user["user_id"], attempts)
+        await callback.answer()
+        note = (f"💎 Нашли клад: <b>+{num(reward)}</b> mCoin"
+                if reward else "🕳 Пусто")
+        if attempts <= 0:
+            text = ("💰 <b>Кладоискатель</b>\n" + note + "\n\n"
+                    "🏁 Смена окончена. Перерыв — 20 минут.")
+            await safe_edit(callback.message, text,
+                            InlineKeyboardMarkup(inline_keyboard=[[
+                                InlineKeyboardButton(text="◀️ Назад",
+                                                     callback_data="job:menu")]]))
+            return
+        await job_show_dig(callback, user, attempts, note)
+
     TEXT_ALIASES = {
         "м": "mine", "майн": "mine", "майнинг": "mine",
         "авто": "auto", "машины": "auto",
@@ -3507,6 +3644,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         "магазин бизнесов": "biz",
         "г": "city", "город": "city",
         "ш": "mine_ore", "шахта": "mine_ore", "руда": "mine_ore",
+        "р": "job", "работа": "job", "работы": "job",
     }
 
     @dp.message(F.text.lower().in_(set(TEXT_ALIASES)))
@@ -3515,7 +3653,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
         target = TEXT_ALIASES.get(text)
         handlers = {"mine": mine_cmd, "auto": auto_cmd,
                     "yachts": yachts_cmd, "biz": biz_cmd,
-                    "city": city_cmd, "mine_ore": mine_ore_cmd}
+                    "city": city_cmd, "mine_ore": mine_ore_cmd,
+                    "job": job_cmd}
         if target in handlers:
             await handlers[target](message)
 
@@ -3729,6 +3868,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             [InlineKeyboardButton(text="💼 Бизнес", callback_data="biz:menu"),
              InlineKeyboardButton(text="💰 Казна", callback_data="treasury:menu")],
             [InlineKeyboardButton(text="⛏ Майнинг", callback_data="mine:open")],
+            [InlineKeyboardButton(text="💼 Работа", callback_data="job:menu")],
             [InlineKeyboardButton(text="👤 Профиль", callback_data="menu:balance")],
             [webapp_button()],
         ]
