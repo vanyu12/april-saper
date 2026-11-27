@@ -11,7 +11,7 @@ MIN_BET = 10
 MAX_BET = 100_000
 MAX_WIN = 1_000_000
 # Потолок множителя в «Сапёре»: выше — авто-вывод, чтобы числа не улетали в миллионы.
-MINES_MAX_MULT = 100.0
+MINES_MAX_MULT = 1_000_000.0
 START_BALANCE = 1000
 REGISTER_BONUS = 800
 DAILY_BONUS = 1000
@@ -1466,7 +1466,7 @@ RENT_HOURS = (1, 4, 8)
 
 # Сдача в аренду приносит деньги сразу, но машина уходит надолго:
 # 1ч -> перерыв 10ч, 4ч -> 40ч, 8ч -> 80ч. За время сдачи тратится бензин.
-RENT_COOLDOWN_MULT = 0    # перерывов нет: сдавать можно сразу снова
+RENT_COOLDOWN_MULT = 1    # перерыв равен сроку аренды
 RENT_FUEL_SHARE = 0.10    # доля бака, сжигаемая за час аренды
 
 
@@ -1584,6 +1584,16 @@ BUSINESSES = [
 BUSINESS_BY_KEY = {biz["key"]: biz for biz in BUSINESSES}
 
 BUSINESS_COOLDOWN = {biz["key"]: int(biz["hours"]) * 3600 for biz in BUSINESSES}
+
+BUSINESS_ACCUM_CAP = 1_000_000_000  # максимум накопленного дохода на бизнес
+
+
+def business_accrued(income: int, cycle: int, elapsed: int) -> int:
+    if cycle <= 0 or elapsed <= 0:
+        return 0
+    return min(BUSINESS_ACCUM_CAP,
+               int(int(income) * int(elapsed) / int(cycle)))
+
 
 # Прогрессивный налог: 30% за первый бизнес, +2% за каждый следующий, максимум 45%.
 BASE_TAX_BUSINESS = TAX_BUSINESS

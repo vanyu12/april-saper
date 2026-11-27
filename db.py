@@ -1481,6 +1481,14 @@ SCHEMA_STATEMENTS = [
         paid_at INTEGER NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS cooldowns (
+        user_id INTEGER NOT NULL,
+        action  TEXT NOT NULL,
+        until   INTEGER NOT NULL,
+        PRIMARY KEY (user_id, action)
+    )
+    """,
 ]
 
 DEFAULT_SETTINGS = {
@@ -6360,6 +6368,20 @@ class Database:
             "house_key = excluded.house_key, bought_at = excluded.bought_at",
             (user_id, key, int(now)))
         return "ok"
+
+    def cd_left(self, user_id: int, action: str) -> int:
+        row = self._row("SELECT until FROM cooldowns "
+                        "WHERE user_id = ? AND action = ?", (user_id, action))
+        if not row:
+            return 0
+        return max(0, int(row["until"]) - int(time.time()))
+
+    def cd_set(self, user_id: int, action: str, seconds: int,
+               now: int) -> None:
+        self._exec(
+            "INSERT INTO cooldowns (user_id, action, until) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, action) DO UPDATE SET until = excluded.until",
+            (user_id, action, int(now) + int(seconds)))
 
     def weekly_award_paid(self, week: str) -> bool:
         row = self._row("SELECT 1 AS ok FROM weekly_awards WHERE week = ?",

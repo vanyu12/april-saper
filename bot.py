@@ -2496,6 +2496,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     @dp.callback_query(F.data.startswith("car:race:"))
     async def car_race_cb(callback) -> None:
+        _u = get_user(callback)
+        _left = db.cd_left(_u["user_id"], "race")
+        if _left > 0:
+            await callback.answer(f"Отдых {left_text(_left)}", show_alert=True)
+            return
+        db.cd_set(_u["user_id"], "race", 600, int(time.time()))
         car_id = int(callback.data.split(":", 2)[-1])
         user = get_user(callback)
         car = db.car(user["user_id"], car_id)
@@ -2519,6 +2525,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     @dp.callback_query(F.data.startswith("car:taxi:"))
     async def car_taxi_cb(callback) -> None:
+        _u = get_user(callback)
+        _left = db.cd_left(_u["user_id"], "taxi")
+        if _left > 0:
+            await callback.answer(f"Отдых {left_text(_left)}", show_alert=True)
+            return
+        db.cd_set(_u["user_id"], "taxi", 600, int(time.time()))
         car_id = int(callback.data.split(":", 2)[-1])
         user = get_user(callback)
         car = db.car(user["user_id"], car_id)
@@ -2884,6 +2896,12 @@ def build_dispatcher(db: Database) -> Dispatcher:
 
     @dp.callback_query(F.data.startswith("yacht:cruise:"))
     async def yacht_cruise_cb(callback) -> None:
+        _u = get_user(callback)
+        _left = db.cd_left(_u["user_id"], "cruise")
+        if _left > 0:
+            await callback.answer(f"Отдых {left_text(_left)}", show_alert=True)
+            return
+        db.cd_set(_u["user_id"], "cruise", 3600, int(time.time()))
         yacht_id = int(callback.data.split(":", 2)[-1])
         user = get_user(callback)
         yacht = db.yacht(user["user_id"], yacht_id)
@@ -2983,16 +3001,18 @@ def build_dispatcher(db: Database) -> Dispatcher:
         b = game.BUSINESS_BY_KEY.get(biz["model"]) or {}
         title = b.get("title", biz["model"])
         icon = b.get("icon", "💼")
-        net, tax = game.after_tax(int(b.get("income", 0)), rate)
-        cd = game.BUSINESS_COOLDOWN.get(biz["model"], 0)
+        income = int(b.get("income", 0))
+        cd = max(1, game.BUSINESS_COOLDOWN.get(biz["model"], 0))
         now = int(time.time())
-        left = max(0, int(biz["last_collect"]) + cd - now)
+        accrued = game.business_accrued(income, cd,
+                                        now - int(biz["last_collect"] or 0))
+        net, tax = game.after_tax(accrued, rate)
         lines = [f"{icon} <b>{title}</b>",
                  "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
-                 f"💰 Доход: <b>+{num(net)}</b> за {cd // 3600}ч "
-                 f"(налог {num(tax)})"]
-        lines.append(f"⏳ Доход через {left_text(left)}" if left > 0
-                     else "✅ Доход можно забрать")
+                 f"📈 Доход: <b>+{num(income)}</b> за {cd // 3600}ч "
+                 f"(налог {num(tax)})",
+                 f"📦 Накоплено: <b>{num(net)}</b> mCoin",
+                 f"🏦 Лимит: {num(game.BUSINESS_ACCUM_CAP)} mCoin"]
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💰 Собрать · +{num(net)}",
                                   callback_data=f"biz:collect:{biz['id']}")],
@@ -3091,16 +3111,15 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await callback.answer("Бизнес не найден", show_alert=True)
             return
         now = int(time.time())
-        cd = game.BUSINESS_COOLDOWN.get(biz["model"], 0)
-        left = int(biz["last_collect"]) + cd - now
-        if left > 0:
-            await callback.answer(f"Доход через {left_text(left)}",
-                                  show_alert=True)
-            return
+        cd = max(1, game.BUSINESS_COOLDOWN.get(biz["model"], 0))
         b = game.BUSINESS_BY_KEY.get(biz["model"]) or {}
+        elapsed = now - int(biz["last_collect"] or 0)
+        accrued = game.business_accrued(int(b.get("income", 0)), cd, elapsed)
+        if accrued <= 0:
+            await callback.answer("Пока пусто — доход копится", show_alert=True)
+            return
         count = len(db.businesses(user["user_id"]))
-        net, tax = game.after_tax(int(b.get("income", 0)),
-                                  game.business_tax(count))
+        net, tax = game.after_tax(accrued, game.business_tax(count))
         if tax:
             db.add_treasury(tax)
             db.treasury_log("tax", user["user_id"], tax)
