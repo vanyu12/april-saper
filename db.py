@@ -2982,13 +2982,13 @@ class Database:
 
     # --- переводы --------------------------------------------------------
     def make_transfer(self, transfer_id: str, from_id: int, to_id: int,
-                      amount: int) -> None:
+                      amount: int, tax: int = 0) -> None:
         self._exec(
             """INSERT INTO transfers (id, from_id, to_id, amount, created_at)
                VALUES (?, ?, ?, ?, ?)""",
             (transfer_id, from_id, to_id, amount, int(time.time())))
         self.add_balance(from_id, -amount)
-        self.add_balance(to_id, amount)
+        self.add_balance(to_id, amount - tax)
 
     def transfers(self, user_id: int, limit: int = 10) -> list[dict]:
         return self._rows(

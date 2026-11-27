@@ -1979,15 +1979,70 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await message.answer(
                 "💸 <b>Перевод игроку</b>\n\n"
                 "Напиши: <code>/pay 100 @ник</code> или <code>/pay 100 123456789</code>\n"
-                "Свой ID видно в /balance.")
+                "Комиссия казне: <b>5%</b>. Свой ID видно в /balance.")
             return
         raw_amount = parts[1].replace(" ", "")
         if not raw_amount.isdigit():
             await message.answer("Сумма должна быть числом. Пример: "
                                  "<code>/pay 100 @ник</code>")
             return
+        amount = int(raw_amount)
+        if amount < 1:
+            await message.answer("⚠️ Сумма должна быть больше нуля")
+            return
         user = get_user(message)
-        await message.answer(transfer_text(user, parts[2], int(raw_amount)))
+        if amount > int(user["balance"]):
+            await message.answer("⚠️ Недостаточно средств")
+            return
+        target = parts[2].strip()
+        if target.startswith("@"):
+            recipient = db.user_by_username(target)
+        elif target.isdigit():
+            recipient = db.user(int(target))
+        else:
+            recipient = db.user_by_username(target)
+        if not recipient:
+            await message.answer("⚠️ Игрок не найден. Укажи ID или @username")
+            return
+        if int(recipient["user_id"]) == int(user["user_id"]):
+            await message.answer("⚠️ Нельзя перевести самому себе")
+            return
+        if recipient.get("is_banned"):
+            await message.answer("⚠️ Получатель заблокирован")
+            return
+        tax = amount * 5 // 100
+        if amount - tax < 1:
+            await message.answer("⚠️ Сумма слишком мала: комиссия съест всё")
+            return
+        db.make_transfer(uuid.uuid4().hex[:16], user["user_id"],
+                         int(recipient["user_id"]), amount, tax)
+        if tax:
+            db.add_treasury(tax)
+            db.treasury_log("transfer_tax", user["user_id"], tax)
+        balance = db.user(user["user_id"])["balance"]
+        name = (recipient.get("username") or recipient.get("first_name")
+                or str(recipient["user_id"]))
+        await message.answer(
+            head("💸", "Перевод отправлен") + "\n"
+            f"👤 Кому: <b>{name}</b> · ID {recipient['user_id']}\n"
+            f"💵 Сумма: <b>{num(amount)}</b> mCoin\n"
+            f"🏛 Комиссия: {num(tax)} mCoin\n"
+            f"{DIV}\n"
+            f"💰 Баланс: {num(balance)} mCoin")
+        try:
+            fresh = db.user(int(recipient["user_id"])) or recipient
+            author = (user.get("username") or user.get("first_name")
+                      or str(user["user_id"]))
+            await message.bot.send_message(
+                int(recipient["user_id"]),
+                head("💰", "Тебе перевели деньги") + "\n"
+                f"👤 От: <b>{author}</b> · ID {user['user_id']}\n"
+                f"💵 Получено: <b>{num(amount - tax)}</b> mCoin\n"
+                f"🏛 Комиссия казне: {num(tax)} mCoin\n"
+                f"{DIV}\n"
+                f"💰 Твой баланс: {num(fresh['balance'])} mCoin")
+        except Exception:
+            pass
 
     @dp.message(Command("promo"))
     async def promo_cmd(message: Message) -> None:
@@ -4216,7 +4271,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         try:
             await message.bot.send_poll(target, question=options[0],
                                         options=options[1:11],
-                                        is_anonymous=False)
+                                        is_anonymous=True)
             await message.answer("Опрос опубликован.")
         except Exception as exc:
             await message.answer(f"Не удалось опубликовать: {exc}")
