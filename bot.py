@@ -216,7 +216,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
         "balance", "profile", "me", "deposit", "bank", "mine", "mining",
         "city", "gorod", "ore", "sh", "job", "work", "rabota",
         "home", "dom", "houses", "donate_shop", "gmp_shop",
-        "clothes", "odezhda", "slashtest",
+        "clothes", "odezhda", "slashtest", "post", "poll",
         "admin", "owner", "adminboot",
         "setbal", "addbal", "role", "give", "gmp", "setgmp",
         "xp", "energy", "pref", "givecar", "giveyacht", "resetcd",
@@ -4165,6 +4165,61 @@ def build_dispatcher(db: Database) -> Dispatcher:
         else:
             text += "✅ Ошибок не найдено."
         await message.answer(text)
+
+    def channel_target() -> str:
+        channel = (config.update_channel or config.giveaway_channel
+                   or "").strip()
+        if not channel:
+            return ""
+        return channel if channel.startswith("@") else "@" + channel
+
+    @dp.message(Command("post"))
+    async def post_cmd(message: Message) -> None:
+        user = get_user(message)
+        if not is_admin(user):
+            await message.answer("Команда только для админов.")
+            return
+        target = channel_target()
+        if not target:
+            await message.answer("Канал не настроен: добавьте "
+                                 "UPDATE_CHANNEL=@username в окружение.")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        body = parts[1].strip() if len(parts) > 1 else ""
+        if not body:
+            await message.answer("Формат: <code>/post текст поста</code>")
+            return
+        try:
+            await message.bot.send_message(target, body)
+            await message.answer("Опубликовано в канале.")
+        except Exception as exc:
+            await message.answer(f"Не удалось опубликовать: {exc}")
+
+    @dp.message(Command("poll"))
+    async def poll_cmd(message: Message) -> None:
+        user = get_user(message)
+        if not is_admin(user):
+            await message.answer("Команда только для админов.")
+            return
+        target = channel_target()
+        if not target:
+            await message.answer("Канал не настроен: добавьте "
+                                 "UPDATE_CHANNEL=@username в окружение.")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        body = parts[1] if len(parts) > 1 else ""
+        options = [chunk.strip() for chunk in body.split("|") if chunk.strip()]
+        if len(options) < 3 or len(options) > 11:
+            await message.answer("Формат: <code>/poll Вопрос | Вариант 1 | "
+                                 "Вариант 2</code>")
+            return
+        try:
+            await message.bot.send_poll(target, question=options[0],
+                                        options=options[1:11],
+                                        is_anonymous=False)
+            await message.answer("Опрос опубликован.")
+        except Exception as exc:
+            await message.answer(f"Не удалось опубликовать: {exc}")
 
     TEXT_ALIASES = {
         "м": "mine", "майн": "mine", "майнинг": "mine",
