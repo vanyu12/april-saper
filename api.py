@@ -6875,7 +6875,9 @@ def build_app(db: Database) -> web.Application:
         web_dir = here
 
     async def index(request: web.Request) -> web.StreamResponse:
-        return web.FileResponse(__import__("os").path.join(web_dir, "index.html"))
+        return web.Response(
+            text="Мини-приложение отключено. Играй в боте: /play",
+            content_type="text/plain")
 
     app.router.add_get("/", index)
     app.router.add_static("/static/", web_dir, show_index=False)

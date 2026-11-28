@@ -118,8 +118,8 @@ def seen_text(timestamp: int | None, now: int | None = None) -> str:
     return "заходил(а) " + date_text(timestamp)
 
 
-def webapp_button(text: str = "🎮 Открыть игру") -> InlineKeyboardButton:
-    return InlineKeyboardButton(text=text, web_app=WebAppInfo(url=app_url()))
+def webapp_button(text: str = "🎮 Играть") -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=text, callback_data="menu:games")
 
 
 def chat_button() -> InlineKeyboardButton | None:
@@ -1223,6 +1223,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
              InlineKeyboardButton(text="🪙 Орёл и решка", callback_data="menu:coin")],
             [InlineKeyboardButton(text="🏀 Баскет", callback_data="menu:basket"),
              InlineKeyboardButton(text="🎯 Дартс", callback_data="menu:darts")],
+            [InlineKeyboardButton(text="⚽ Футбол", callback_data="menu:football")],
             [webapp_button()],
         ])
 
@@ -1444,6 +1445,28 @@ def build_dispatcher(db: Database) -> Dispatcher:
         lines.append(f"💰 Баланс: {num(db.user(user['user_id'])['balance'])} mCoin")
         return "\n".join(lines)
 
+    def basket_frame(step: int) -> str:
+        rows = ["⬜"] * 5
+        rows[0] = "🟧"
+        rows[max(0, 5 - step)] = "🏀"
+        return "\n".join(rows)
+
+    async def basket_animate(target, scored: bool) -> None:
+        msg = await target.answer("🏀 Бросок...\n" + basket_frame(1))
+        for step in range(2, 5):
+            await asyncio.sleep(0.32)
+            try:
+                await msg.edit_text("🏀 Бросок...\n" + basket_frame(step))
+            except TelegramBadRequest:
+                break
+        await asyncio.sleep(0.32)
+        final = ("🟧🏀\n✅ В кольцо!" if scored
+                 else "🏀 ➡️ ⬜\n❌ Мимо!")
+        try:
+            await msg.edit_text(final)
+        except TelegramBadRequest:
+            pass
+
     def basket_hint_text() -> str:
         settings = db.settings()
         return (head("🏀", "Баскет") + "\n"
@@ -1493,6 +1516,89 @@ def build_dispatcher(db: Database) -> Dispatcher:
         lines = ["🏀 <b>Баскет</b>", "",
                  f"Бросок: <b>{dice_value}</b> из 5 — "
                  f"{'попал' if scored else 'мимо'}",
+                 f"Ставка: {num(bet)} mCoin на {pick_title}"]
+        if win:
+            lines.append(f"✅ Угадал! Выигрыш: <b>+{num(payout)}</b> mCoin")
+        else:
+            lines.append("❌ Не угадал — ставка сгорела")
+        if refund:
+            lines.append(f"🛡 Страховка вернула {num(refund)} mCoin")
+        lines.append(xp_line(xp_gain, level_before, level_after))
+        lines.extend(awards_lines(earned))
+        lines.append(f"💰 Баланс: {num(db.user(user['user_id'])['balance'])} mCoin")
+        return "\n".join(lines)
+
+    FOOTBALL_CHANCE = 0.45
+    FOOTBALL_GOAL_MULT = 2.1
+    FOOTBALL_MISS_MULT = 1.6
+
+    def football_frame(step: int) -> str:
+        rows = ["⬜"] * 5
+        rows[0] = "🥅"
+        rows[max(0, 5 - step)] = "⚽"
+        return "\n".join(rows)
+
+    async def football_animate(target, scored: bool) -> None:
+        msg = await target.answer("⚽ Удар...\n" + football_frame(1))
+        for step in range(2, 5):
+            await asyncio.sleep(0.32)
+            try:
+                await msg.edit_text("⚽ Удар...\n" + football_frame(step))
+            except TelegramBadRequest:
+                break
+        await asyncio.sleep(0.32)
+        final = ("🥅⚽\n✅ Гол!" if scored else "⚽ ➡️ ⬜\n❌ Мимо!")
+        try:
+            await msg.edit_text(final)
+        except TelegramBadRequest:
+            pass
+
+    def football_hint_text() -> str:
+        settings = db.settings()
+        return (head("⚽", "Футбол") + "\n"
+                "💬 <code>/football [ставка] гол|мимо</code>\n"
+                "Пример: <code>/football 100 гол</code>\n"
+                f"{DIV}\n"
+                "💰 Гол платит ×2,1 · мимо ×1,6\n"
+                f"💰 Ставка: {num(settings.get('min_bet', game.MIN_BET))} — "
+                f"{num(settings.get('max_bet', game.MAX_BET))} mCoin\n"
+                f"{DIV}\n"
+                "Или просто жми кнопку 👇")
+
+    def football_hint_keyboard() -> InlineKeyboardMarkup:
+        rows = []
+        for bet in (100, 500):
+            rows.append([
+                InlineKeyboardButton(text=f"{num(bet)} · гол",
+                                     callback_data=f"fb:{bet}:goal"),
+                InlineKeyboardButton(text=f"{num(bet)} · мимо",
+                                     callback_data=f"fb:{bet}:miss"),
+            ])
+        rows.append([InlineKeyboardButton(text="⬅️ Игры", callback_data="menu:games")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def play_football(user: dict, bet: int, scored: bool, pick: str = "goal") -> str:
+        error = bet_error(user, bet, "basket")
+        if error:
+            return "⚠️ " + error
+        win = (scored and pick == "goal") or (not scored and pick == "miss")
+        multiplier = (FOOTBALL_GOAL_MULT if scored
+                      else FOOTBALL_MISS_MULT) if win else 0.0
+        payout = int(math.floor(bet * multiplier)) if win else 0
+        refund = 0
+        if win:
+            _pb = payout
+            payout = charm_bonus(user, payout)
+            payout = apply_relic(user, "basket", payout)
+            payout = game.cap_payout_bonus(_pb, payout)
+        else:
+            refund = insurance_refund(user, bet)
+        earned, xp_gain, level_before, level_after = settle_play(
+            user, "football", bet, payout, multiplier or 1.0,
+            {"scored": scored, "pick": pick, "chat": True})
+        pick_title = "гол" if pick == "goal" else "мимо"
+        lines = ["⚽ <b>Футбол</b>", "",
+                 f"Удар: {'в створ' if scored else 'выше ворот'}",
                  f"Ставка: {num(bet)} mCoin на {pick_title}"]
         if win:
             lines.append(f"✅ Угадал! Выигрыш: <b>+{num(payout)}</b> mCoin")
@@ -1932,10 +2038,44 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if error:
             await message.answer("⚠️ " + error)
             return
-        shot = await message.answer_dice(emoji="🏀")
-        await asyncio.sleep(DICE_ANIMATION_DELAY)
-        await message.answer(play_basket(user, bet, shot.dice.value, pick),
+        scored = random.random() < game.BASKET_CHANCE
+        await basket_animate(message, scored)
+        await message.answer(play_basket(user, bet, 5 if scored else 3, pick),
                              reply_markup=basket_hint_keyboard())
+
+    @dp.message(Command("football", "soccer"))
+    async def football_cmd(message: Message) -> None:
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.answer(football_hint_text(),
+                                 reply_markup=football_hint_keyboard())
+            return
+        raw_bet = parts[1].replace(" ", "")
+        if not raw_bet.isdigit():
+            await message.answer("Ставка должна быть числом. Пример: "
+                                 "<code>/football 100 гол</code>")
+            return
+        pick = "goal"
+        if len(parts) >= 3:
+            word = parts[2].lower()
+            if word in ("мимо", "промах", "miss", "нет"):
+                pick = "miss"
+            elif word in ("гол", "goal", "да"):
+                pick = "goal"
+            else:
+                await message.answer("Выбери: гол или мимо. Пример: "
+                                     "<code>/football 100 мимо</code>")
+                return
+        user = get_user(message)
+        bet = int(raw_bet)
+        error = bet_error(user, bet, "basket")
+        if error:
+            await message.answer("⚠️ " + error)
+            return
+        scored = random.random() < FOOTBALL_CHANCE
+        await football_animate(message, scored)
+        await message.answer(play_football(user, bet, scored, pick),
+                             reply_markup=football_hint_keyboard())
 
     @dp.message(Command("darts", "dart"))
     async def darts_cmd(message: Message) -> None:
@@ -2188,10 +2328,19 @@ def build_dispatcher(db: Database) -> Dispatcher:
         user = get_user(message)
         await message.answer(claim_bonuses(user), reply_markup=main_keyboard())
 
+    def profile_image(user: dict) -> str | None:
+        try:
+            import profile_card
+            return profile_card.render(db.clothes_worn(user["user_id"]),
+                                       user["user_id"])
+        except Exception:
+            return None
+
     @dp.message(Command("balance", "profile", "me"))
     async def balance_cmd(message: Message) -> None:
         user = get_user(message)
-        await send_card(message, "card-profile.jpg", profile_text(user),
+        card = profile_image(user)
+        await send_card(message, card or "card-profile.jpg", profile_text(user),
                         profile_keyboard())
 
     @dp.message(Command("prefix", "prefixes"))
@@ -4245,7 +4394,8 @@ def build_dispatcher(db: Database) -> Dispatcher:
             await message.answer("Формат: <code>/post текст поста</code>")
             return
         try:
-            await message.bot.send_message(target, body)
+            await message.bot.send_message(target, body, parse_mode="HTML",
+                                           disable_web_page_preview=True)
             await message.answer("Опубликовано в канале.")
         except Exception as exc:
             await message.answer(f"Не удалось опубликовать: {exc}")
@@ -4594,8 +4744,11 @@ def build_dispatcher(db: Database) -> Dispatcher:
                 "/logs — действия · /player ID — карточка\n"
                 f"{DIV}\n"
                 "<b>Промокоды и режим</b>\n"
-                "/promo_new СУММА АКТИВАЦИИ ЧАСЫ ВАЛЮТА [КОД]\n"
-                "/promo_list · /promo_off КОД · /promo_post КОД\n"
+                "/promo_new 50000 100 72ч монеты — пример\n"
+                "сумма · активации · срок · валюта · [код]\n"
+                "срок: 72ч или 3д или 0 · валюта: монеты или донат\n"
+                "/promo_list — список · /promo_off КОД — выключить\n"
+                "/promo_post КОД — опубликовать в канале\n"
                 "/maint on|off — техработы\n"
                 "/game mines on|off — игра вкл/выкл\n"
                 "/broadcast текст — рассылка\n"
@@ -5216,7 +5369,7 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "crash": "crash", "краш": "crash",
             "coinflip": "coinflip", "орёл": "coinflip", "орел": "coinflip",
             "blackjack": "blackjack", "21": "blackjack",
-            "basket": "basket", "баскет": "basket",
+            "basket": "basket", "баскет": "basket", "football": "football", "футбол": "football",
             "darts": "darts", "дартс": "darts",
             "roulette": "roulette", "рулетка": "roulette",
             "slots": "slots", "слоты": "slots",
@@ -5485,7 +5638,14 @@ def build_dispatcher(db: Database) -> Dispatcher:
             "/givecar ID модель · /giveyacht ID модель\n"
             "/resetcd ID — сбросить бонусы и колесо\n"
             f"{DIV}\n"
-            "/promo_new · /promo_list · /promo_post · /promo_off\n"
+            "<b>Промокоды</b>\n"
+            "/promo_new 50000 100 72ч монеты — создать\n"
+            "сумма · активации (0 — без лимита) · срок · валюта\n"
+            "срок: 72ч или 3д или 0 · валюта: монеты или донат\n"
+            "/promo_list — все коды · /promo_off КОД — выключить\n"
+            "/promo_post КОД — пост в канале\n"
+            f"{DIV}\n"
+            "<b>Режим</b>\n"
             "/maint on|off · /game имя on|off · /broadcast текст\n"
             "/chatid — ID группы или канала\n"
             f"{DIV}\n"
@@ -5499,37 +5659,57 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if not is_admin(user):
             await message.answer("Команда доступна только администратору.")
             return
-        parts = (message.text or "").split()
+        parts = (message.text or "").replace(",", ".").split()
         if len(parts) < 5:
             await message.answer(
-                "Формат: <code>/promo_new СУММА АКТИВАЦИИ СРОК ВАЛЮТА [КОД]</code>\n"
-                "СУММА — на игрока, АКТИВАЦИИ — сколько раз (0 — без лимита),\n"
-                "СРОК — часы, например 24 (часы) или 0.5 (30 минут). "
-                "Можно с буквой h: 4h. Срок без лимита — 0.\n"
-                "ВАЛЮТА — mcoin или gmpoint (донат). Код можно не указывать.")
+                "🎁 <b>Создание промокода</b>\n\n"
+                "<code>/promo_new СУММА АКТИВАЦИИ СРОК ВАЛЮТА [КОД]</code>\n\n"
+                "• <b>СУММА</b> — сколько получит один игрок\n"
+                "• <b>АКТИВАЦИИ</b> — сколько всего активаций (0 — без лимита)\n"
+                "• <b>СРОК</b> — <code>72ч</code> (часы) или <code>3д</code> (дни), "
+                "<code>0</code> — бессрочно\n"
+                "• <b>ВАЛЮТА</b> — <code>монеты</code> или <code>донат</code>\n"
+                "• <b>КОД</b> — по желанию, иначе сгенерирую сам\n\n"
+                "<b>Примеры</b>\n"
+                "<code>/promo_new 50000 100 72ч монеты</code>\n"
+                "<code>/promo_new 50 20 3д донат ГЕРОЙ</code>\n"
+                "<code>/promo_new 1000 50 0 монеты</code> — бессрочный")
             return
+
+        def _term_days(word: str) -> float:
+            text = word.strip().lower()
+            for suffix in ("часов", "часа", "час", "ч", "h"):
+                if text.endswith(suffix) and len(text) > len(suffix):
+                    return float(text[:-len(suffix)]) / 24.0
+            for suffix in ("дней", "дня", "день", "д", "d"):
+                if text.endswith(suffix) and len(text) > len(suffix):
+                    return float(text[:-len(suffix)])
+            return float(text)
+
         try:
-            amount = int(parts[1])
-            uses = int(parts[2])
+            amount = int(float(parts[1]))
+            uses = int(float(parts[2]))
         except ValueError:
             await message.answer("Сумма и активации должны быть числами.")
             return
-        raw_days = parts[3].strip().lower()
         try:
-            if raw_days.endswith("h"):
-                hours = float(raw_days[:-1])
-                days = hours / 24.0
-            else:
-                days = float(raw_days)
+            days = _term_days(parts[3])
         except ValueError:
-            await message.answer("Срок задаётся числом (часы) или числом с h.")
+            await message.answer("Срок: например <code>72ч</code> или "
+                                 "<code>3д</code> (0 — бессрочно).")
             return
         if days < 0 or days > 365:
             await message.answer("Срок от 0 до 365 дней.")
             return
-        currency = str(parts[4]).strip().lower()
-        if currency not in ("mcoin", "gmpoint"):
-            await message.answer("Валюта: mcoin или gmpoint (донат).")
+        currency_raw = str(parts[4]).strip().lower()
+        if currency_raw in ("mcoin", "мкоин", "монеты", "монета", "m"):
+            currency = "mcoin"
+        elif currency_raw in ("gmpoint", "gmp", "донат", "гмп", "гмпоинт",
+                              "очки"):
+            currency = "gmpoint"
+        else:
+            await message.answer("Валюта: <code>монеты</code> или "
+                                 "<code>донат</code>.")
             return
         limit_flag = 50_000_000 if currency == "gmpoint" else 100_000_000
         if amount < 1 or max(amount * max(uses, 1), amount) > limit_flag:
@@ -6003,11 +6183,33 @@ def build_dispatcher(db: Database) -> Dispatcher:
         if error:
             await callback.answer(error[:60], show_alert=True)
             return
-        shot = await callback.message.answer_dice(emoji="🏀")
-        await asyncio.sleep(DICE_ANIMATION_DELAY)
-        await callback.message.answer(play_basket(user, bet, shot.dice.value, pick),
+        scored = random.random() < game.BASKET_CHANCE
+        await basket_animate(callback.message, scored)
+        await callback.message.answer(play_basket(user, bet, 5 if scored else 3, pick),
                                       reply_markup=basket_hint_keyboard())
         await callback.answer("Бросок!")
+
+    @dp.callback_query(F.data == "menu:football")
+    async def menu_football(callback) -> None:
+        await callback.message.answer(football_hint_text(),
+                                      reply_markup=football_hint_keyboard())
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("fb:"))
+    async def football_quick(callback) -> None:
+        parts_cb = callback.data.split(":")
+        bet = int(parts_cb[1])
+        pick = parts_cb[2] if len(parts_cb) > 2 else "goal"
+        user = get_user(callback)
+        error = bet_error(user, bet, "basket")
+        if error:
+            await callback.answer(error[:60], show_alert=True)
+            return
+        scored = random.random() < FOOTBALL_CHANCE
+        await football_animate(callback.message, scored)
+        await callback.message.answer(play_football(user, bet, scored, pick),
+                                      reply_markup=football_hint_keyboard())
+        await callback.answer("Удар!")
 
     @dp.callback_query(F.data == "menu:darts")
     async def menu_darts(callback) -> None:
